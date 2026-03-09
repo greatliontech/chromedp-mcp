@@ -1454,20 +1454,14 @@ func TestNavigateWaitUntilInvalid(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	// Invalid wait_until value should fall through to "load" (default).
-	// The implementation only special-cases "domcontentloaded" and "networkidle".
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	// Invalid wait_until value should return an error.
+	errText := callToolExpectErr(t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        fixtureURL("index.html"),
 		"wait_until": "invalid_event",
 	})
-	if out.Status != 200 {
-		t.Errorf("status = %d, want 200", out.Status)
-	}
-	// Note: Go's http.FileServer 301-redirects /index.html to /, so the
-	// final URL may be the root path. Verify the title instead.
-	if out.Title != "Test Page" {
-		t.Errorf("title = %q, want 'Test Page'", out.Title)
+	if !strings.Contains(errText, "invalid wait_until") {
+		t.Errorf("error = %q, want it to contain 'invalid wait_until'", errText)
 	}
 }
 

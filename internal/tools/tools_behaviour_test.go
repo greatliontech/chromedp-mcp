@@ -1374,7 +1374,6 @@ func TestConcurrentToolCallsOnDifferentTabs(t *testing.T) {
 	type result struct {
 		tab   string
 		title string
-		err   error
 	}
 	ch := make(chan result, 2)
 
