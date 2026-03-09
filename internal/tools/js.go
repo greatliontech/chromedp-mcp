@@ -21,8 +21,8 @@ func evalAwaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 // EvaluateInput is the input for evaluate.
 type EvaluateInput struct {
 	SelectorInput
-	Expression   string `json:"expression" jsonschema:"JavaScript expression to evaluate"`
-	Selector     string `json:"selector,omitempty" jsonschema:"CSS selector. If provided, the first matched element is passed as the first argument to the expression."`
+	Expression   string `json:"expression" jsonschema:"JavaScript expression to evaluate. When a selector is provided, the matched element is available as 'el'. Use 'return' to produce a value (e.g. 'return el.textContent')."`
+	Selector     string `json:"selector,omitempty" jsonschema:"CSS selector. If provided, the first matched element is available as 'el' in the expression."`
 	AwaitPromise *bool  `json:"await_promise,omitempty" jsonschema:"Wait for Promise to resolve (default true)"`
 }
 
@@ -34,7 +34,7 @@ type EvaluateOutput struct {
 func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "evaluate",
-		Description: "Execute JavaScript in the page context and return the result. If a selector is provided, the first matching element is passed as the first argument.",
+		Description: "Execute JavaScript in the page context and return the result. If a selector is provided, the first matched element is available as 'el'. Use 'return' to produce a value (e.g. 'return el.textContent').",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EvaluateInput) (*mcp.CallToolResult, any, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

@@ -363,13 +363,13 @@ Returns: the response body as text, or base64 for binary responses.
 
 #### `evaluate`
 
-Execute JavaScript in the page context. When a selector is provided, the first matching element is passed as the first argument to the expression.
+Execute JavaScript in the page context. When a selector is provided, the first matched element is available as `el`. Use `return` to produce a value (e.g. `return el.textContent`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `expression` | string | yes | JavaScript expression to evaluate |
-| `selector` | string | no | CSS selector. If provided, the first matched element is passed as the first argument. |
+| `expression` | string | yes | JavaScript expression to evaluate. When selector is set, the element is available as `el`. Use `return` to produce a value. |
+| `selector` | string | no | CSS selector. If provided, the first matched element is available as `el` in the expression. |
 | `timeout` | int | no | Max time in milliseconds to wait for selector (default 5000). Only used when `selector` is set. |
 | `await_promise` | bool | no | If the expression returns a Promise, wait for it to resolve (default `true`) |
 
@@ -855,7 +855,7 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Network (drain mode) | false | false | false |
 | Network (peek mode) | true | false | true |
 | Network (`get_response_body`) | true | false | true |
-| JS Execution (`evaluate`, `evaluate_on_selector`) | false | false | false |
+| JS Execution (`evaluate`) | false | false | false |
 | Interaction (`click`, `type`, etc.) | false | false | false |
 | Cookies (`get_cookies`) | true | false | true |
 | Cookies (`set_cookie`) | false | false | true |
