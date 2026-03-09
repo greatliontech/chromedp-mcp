@@ -1,12 +1,9 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,7 +12,6 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"golang.org/x/image/draw"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
 )
@@ -69,46 +65,62 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		var buf []byte
 		tctx := t.Context()
 
+		// Compute the CDP screenshot format/quality parameters once.
+		format := page.CaptureScreenshotFormatPng
+		jpegQuality := int64(0)
+		if input.Format == "jpeg" {
+			format = page.CaptureScreenshotFormatJpeg
+			jpegQuality = int64(input.Quality)
+			if jpegQuality <= 0 {
+				jpegQuality = 80
+			}
+		}
+
 		if input.Selector != "" {
-			// Screenshot a specific element.
-			err = chromedp.Run(tctx, chromedp.Screenshot(input.Selector, &buf, chromedp.NodeVisible))
-		} else if input.FullPage {
-			quality := 100 // PNG
-			if input.Format == "jpeg" {
-				quality = input.Quality
-				if quality <= 0 {
-					quality = 80
+			// Element screenshot. Use chromedp.ScreenshotScale which
+			// sets clip.Scale on the CDP command — Chrome renders the
+			// element at the target resolution directly (GPU-accelerated).
+			scale := 1.0
+			if input.MaxDimension > 0 {
+				scale, err = elementScale(tctx, input.Selector, input.MaxDimension)
+				if err != nil {
+					return nil, struct{}{}, err
 				}
 			}
-			err = chromedp.Run(tctx, chromedp.FullScreenshot(&buf, quality))
+			err = chromedp.Run(tctx, chromedp.ScreenshotScale(input.Selector, scale, &buf, chromedp.NodeVisible))
 		} else {
-			// Viewport screenshot. Use CDP directly so we can specify
-			// the image format (chromedp.CaptureScreenshot is always PNG).
+			// Viewport or full-page screenshot. Build the CDP command
+			// directly so we can set format, quality, and clip.Scale.
 			err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				params := page.CaptureScreenshot()
-				if input.Format == "jpeg" {
-					params = params.WithFormat(page.CaptureScreenshotFormatJpeg)
-					quality := input.Quality
-					if quality <= 0 {
-						quality = 80
-					}
-					params = params.WithQuality(int64(quality))
+				params := page.CaptureScreenshot().
+					WithFormat(format).
+					WithFromSurface(true)
+				if jpegQuality > 0 {
+					params = params.WithQuality(jpegQuality)
 				}
-				var captureErr error
-				buf, captureErr = params.Do(ctx)
-				return captureErr
+				if input.FullPage {
+					params = params.WithCaptureBeyondViewport(true)
+				}
+
+				// When max_dimension is set, use a clip with
+				// Scale < 1 so Chrome downscales during capture.
+				if input.MaxDimension > 0 {
+					clip, captureScale, err := captureClip(ctx, input.FullPage, input.MaxDimension)
+					if err != nil {
+						return err
+					}
+					if captureScale < 1.0 {
+						clip.Scale = captureScale
+						params = params.WithClip(clip).WithCaptureBeyondViewport(true)
+					}
+				}
+
+				buf, err = params.Do(ctx)
+				return err
 			}))
 		}
 		if err != nil {
 			return nil, struct{}{}, err
-		}
-
-		// Downscale if the image exceeds max_dimension.
-		if input.MaxDimension > 0 {
-			buf, err = constrainImageSize(buf, input.MaxDimension, input.Format, input.Quality)
-			if err != nil {
-				return nil, struct{}{}, fmt.Errorf("constraining image size: %w", err)
-			}
 		}
 
 		mimeType := "image/png"
@@ -267,52 +279,67 @@ func saveToDownloadDir(dir, filename, defaultExt string, data []byte) (string, e
 	return path, nil
 }
 
-// constrainImageSize decodes the encoded image (PNG or JPEG), checks whether
-// either dimension exceeds maxDim, and if so downscales proportionally using
-// high-quality CatmullRom interpolation. The result is re-encoded in the
-// original format. If the image already fits, the original bytes are returned
-// unchanged.
-func constrainImageSize(data []byte, maxDim int, format string, quality int) ([]byte, error) {
-	img, _, err := image.Decode(bytes.NewReader(data))
+// captureClip returns a page.Viewport clip and a scale factor for
+// Page.captureScreenshot. When the capture area exceeds maxDim in either
+// dimension the returned scale is < 1, telling Chrome to downscale during
+// capture (GPU-accelerated). If fullPage is true the clip covers the entire
+// document; otherwise it covers the CSS viewport.
+func captureClip(ctx context.Context, fullPage bool, maxDim int) (*page.Viewport, float64, error) {
+	_, _, _, cssLayout, _, cssContent, err := page.GetLayoutMetrics().Do(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("decoding image: %w", err)
+		return nil, 0, fmt.Errorf("getting layout metrics: %w", err)
 	}
 
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	// Already within limits.
-	if w <= maxDim && h <= maxDim {
-		return data, nil
+	var w, h float64
+	if fullPage {
+		w = math.Ceil(cssContent.Width)
+		h = math.Ceil(cssContent.Height)
+	} else {
+		w = float64(cssLayout.ClientWidth)
+		h = float64(cssLayout.ClientHeight)
 	}
 
-	// Compute new dimensions preserving aspect ratio.
-	scale := float64(maxDim) / float64(max(w, h))
-	newW := int(float64(w) * scale)
-	newH := int(float64(h) * scale)
-	if newW < 1 {
-		newW = 1
-	}
-	if newH < 1 {
-		newH = 1
+	scale := 1.0
+	largest := math.Max(w, h)
+	if largest > float64(maxDim) {
+		scale = float64(maxDim) / largest
 	}
 
-	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+	return &page.Viewport{
+		X:      0,
+		Y:      0,
+		Width:  w,
+		Height: h,
+		Scale:  scale,
+	}, scale, nil
+}
 
-	var buf bytes.Buffer
-	switch format {
-	case "jpeg":
-		q := quality
-		if q <= 0 {
-			q = 80
-		}
-		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: q})
-	default:
-		err = png.Encode(&buf, dst)
+// elementScale returns the scale factor needed to fit an element within
+// maxDim pixels. It evaluates the element's bounding rect in the browser.
+func elementScale(ctx context.Context, selector string, maxDim int) (float64, error) {
+	var w, h float64
+	js := fmt.Sprintf(`(() => {
+		const el = document.querySelector(%q);
+		if (!el) return null;
+		const r = el.getBoundingClientRect();
+		return {w: r.width, h: r.height};
+	})()`, selector)
+
+	var result struct {
+		W float64 `json:"w"`
+		H float64 `json:"h"`
 	}
-	if err != nil {
-		return nil, fmt.Errorf("encoding resized image: %w", err)
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &result)); err != nil {
+		return 1.0, nil // Fall back to scale 1 on error.
 	}
-	return buf.Bytes(), nil
+	w, h = result.W, result.H
+	if w == 0 && h == 0 {
+		return 1.0, nil
+	}
+
+	largest := math.Max(w, h)
+	if largest <= float64(maxDim) {
+		return 1.0, nil
+	}
+	return float64(maxDim) / largest, nil
 }

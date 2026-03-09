@@ -3,7 +3,7 @@ package tools
 import (
 	"bytes"
 	"image"
-	"image/png"
+	_ "image/png" // register PNG decoder for image.Decode
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,117 +115,8 @@ func TestSaveToDownloadDir(t *testing.T) {
 	})
 }
 
-// makePNG creates a solid-colored PNG image of the given dimensions and returns
-// the encoded bytes. It fills the pixel buffer directly for performance — the
-// pixel-by-pixel Set() approach is orders of magnitude slower for large images.
-func makePNG(t *testing.T, w, h int) []byte {
-	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	// Fill pixel buffer directly: each pixel is 4 bytes (R, G, B, A).
-	pix := img.Pix
-	for i := 0; i < len(pix); i += 4 {
-		pix[i+0] = 100 // R
-		pix[i+1] = 150 // G
-		pix[i+2] = 200 // B
-		pix[i+3] = 255 // A
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatalf("encoding test PNG: %v", err)
-	}
-	return buf.Bytes()
-}
-
-func TestConstrainImageSize(t *testing.T) {
-	// These tests verify dimension math, not image quality. Use small images
-	// that still exceed the maxDim threshold to keep the test fast — PNG
-	// encode/decode and CatmullRom scaling are O(pixels), so 10000x10000
-	// images take minutes while 1000x1000 takes milliseconds.
-
-	t.Run("no-op when within limits", func(t *testing.T) {
-		data := makePNG(t, 800, 600)
-		out, err := constrainImageSize(data, 8000, "png", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Should return the original bytes unchanged.
-		if !bytes.Equal(out, data) {
-			t.Error("expected original bytes to be returned unchanged")
-		}
-	})
-
-	t.Run("downscales when width exceeds", func(t *testing.T) {
-		// 2000x1000 → maxDim 1600 → 1600x800
-		data := makePNG(t, 2000, 1000)
-		out, err := constrainImageSize(data, 1600, "png", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		img, _, err := image.Decode(bytes.NewReader(out))
-		if err != nil {
-			t.Fatal(err)
-		}
-		bounds := img.Bounds()
-		if bounds.Dx() != 1600 {
-			t.Errorf("width = %d, want 1600", bounds.Dx())
-		}
-		if bounds.Dy() != 800 {
-			t.Errorf("height = %d, want 800", bounds.Dy())
-		}
-	})
-
-	t.Run("downscales when height exceeds", func(t *testing.T) {
-		// 750x2000 → maxDim 1000 → 375x1000
-		data := makePNG(t, 750, 2000)
-		out, err := constrainImageSize(data, 1000, "png", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		img, _, err := image.Decode(bytes.NewReader(out))
-		if err != nil {
-			t.Fatal(err)
-		}
-		bounds := img.Bounds()
-		if bounds.Dy() != 1000 {
-			t.Errorf("height = %d, want 1000", bounds.Dy())
-		}
-		// 750 * (1000/2000) = 375
-		if bounds.Dx() != 375 {
-			t.Errorf("width = %d, want 375", bounds.Dx())
-		}
-	})
-
-	t.Run("downscales jpeg format", func(t *testing.T) {
-		// 2000x2000 → maxDim 1000 → 1000x1000
-		data := makePNG(t, 2000, 2000)
-		out, err := constrainImageSize(data, 1000, "jpeg", 80)
-		if err != nil {
-			t.Fatal(err)
-		}
-		img, _, err := image.Decode(bytes.NewReader(out))
-		if err != nil {
-			t.Fatal(err)
-		}
-		bounds := img.Bounds()
-		if bounds.Dx() != 1000 || bounds.Dy() != 1000 {
-			t.Errorf("dimensions = %dx%d, want 1000x1000", bounds.Dx(), bounds.Dy())
-		}
-	})
-
-	t.Run("exact limit is not downscaled", func(t *testing.T) {
-		data := makePNG(t, 1000, 1000)
-		out, err := constrainImageSize(data, 1000, "png", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(out, data) {
-			t.Error("image at exact limit should not be re-encoded")
-		}
-	})
-}
-
 // TestScreenshotMaxDimension verifies that the screenshot tool respects
-// max_dimension by downscaling oversized captures.
+// max_dimension by downscaling captures via Chrome's clip.Scale parameter.
 func TestScreenshotMaxDimension(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -237,16 +128,72 @@ func TestScreenshotMaxDimension(t *testing.T) {
 		"height": 1080,
 	})
 
-	// Take a full-page screenshot with a restrictive max_dimension.
-	result := callToolRaw(t, "screenshot", map[string]any{
-		"tab":           tabID,
-		"full_page":     true,
-		"max_dimension": 500,
+	t.Run("full page", func(t *testing.T) {
+		result := callToolRaw(t, "screenshot", map[string]any{
+			"tab":           tabID,
+			"full_page":     true,
+			"max_dimension": 500,
+		})
+		if result.IsError {
+			t.Fatalf("screenshot error: %s", contentText(result))
+		}
+		assertImageWithinLimit(t, result, 500)
 	})
-	if result.IsError {
-		t.Fatalf("screenshot error: %s", contentText(result))
-	}
 
+	t.Run("viewport", func(t *testing.T) {
+		result := callToolRaw(t, "screenshot", map[string]any{
+			"tab":           tabID,
+			"max_dimension": 500,
+		})
+		if result.IsError {
+			t.Fatalf("screenshot error: %s", contentText(result))
+		}
+		assertImageWithinLimit(t, result, 500)
+	})
+
+	t.Run("element", func(t *testing.T) {
+		result := callToolRaw(t, "screenshot", map[string]any{
+			"tab":           tabID,
+			"selector":      "#title",
+			"max_dimension": 100,
+		})
+		if result.IsError {
+			t.Fatalf("screenshot error: %s", contentText(result))
+		}
+		assertImageWithinLimit(t, result, 100)
+	})
+
+	t.Run("no-op when within limits", func(t *testing.T) {
+		// max_dimension larger than the viewport — should not scale.
+		result := callToolRaw(t, "screenshot", map[string]any{
+			"tab":           tabID,
+			"max_dimension": 5000,
+		})
+		if result.IsError {
+			t.Fatalf("screenshot error: %s", contentText(result))
+		}
+		for _, c := range result.Content {
+			if img, ok := c.(*mcp.ImageContent); ok {
+				decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+				if err != nil {
+					t.Fatalf("decoding image: %v", err)
+				}
+				bounds := decoded.Bounds()
+				// Viewport is 1920x1080 — image should not be downscaled.
+				if bounds.Dx() < 1000 {
+					t.Errorf("width = %d, expected >= 1000 (no downscale)", bounds.Dx())
+				}
+				return
+			}
+		}
+		t.Fatal("screenshot did not return ImageContent")
+	})
+}
+
+// assertImageWithinLimit checks that all image content in the result
+// has both dimensions within maxDim.
+func assertImageWithinLimit(t *testing.T, result *mcp.CallToolResult, maxDim int) {
+	t.Helper()
 	for _, c := range result.Content {
 		if img, ok := c.(*mcp.ImageContent); ok {
 			decoded, _, err := image.Decode(bytes.NewReader(img.Data))
@@ -254,8 +201,8 @@ func TestScreenshotMaxDimension(t *testing.T) {
 				t.Fatalf("decoding result image: %v", err)
 			}
 			bounds := decoded.Bounds()
-			if bounds.Dx() > 500 || bounds.Dy() > 500 {
-				t.Errorf("dimensions %dx%d exceed max_dimension 500", bounds.Dx(), bounds.Dy())
+			if bounds.Dx() > maxDim || bounds.Dy() > maxDim {
+				t.Errorf("dimensions %dx%d exceed max_dimension %d", bounds.Dx(), bounds.Dy(), maxDim)
 			}
 			return
 		}
