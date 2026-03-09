@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Config Test</title>
+  <style>
+    body { background: white; color: black; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1a1a1a; color: white; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .animated { animation: none !important; }
+    }
+    @media print {
+      .no-print { display: none; }
+    }
+    .animated {
+      animation: spin 1s infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <h1 id="title">Config Test Page</h1>
+  <p id="injected-marker"></p>
+  <p id="color-scheme"></p>
+  <p id="reduced-motion"></p>
+  <div class="animated" id="spinner">Spinning</div>
+  <div class="no-print" id="no-print">Not for print</div>
+
+  <script>
+    // Report current media query state.
+    function reportMedia() {
+      const cs = window.matchMedia('(prefers-color-scheme: dark)');
+      document.getElementById('color-scheme').textContent = cs.matches ? 'dark' : 'light';
+
+      const rm = window.matchMedia('(prefers-reduced-motion: reduce)');
+      document.getElementById('reduced-motion').textContent = rm.matches ? 'reduce' : 'no-preference';
+    }
+    reportMedia();
+  </script>
+</body>
+</html>

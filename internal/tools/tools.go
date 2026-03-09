@@ -37,6 +37,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerCookieTools(s, mgr)
 	registerPerformanceTools(s, mgr)
 	registerDownloadTools(s, mgr)
+	registerConfigTools(s, mgr)
 }
 
 // ptrBool returns a pointer to a bool value.

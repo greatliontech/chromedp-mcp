@@ -592,6 +592,69 @@ Get tracked file downloads with their status, progress, and file paths. Shows bo
 
 Returns: `downloads` (completed/canceled entries) and `in_progress` (currently downloading).
 
+### Configuration & Emulation
+
+#### `add_script`
+
+Inject JavaScript to run on every new document before any page scripts. Useful for test fixtures, polyfills, disabling animations, or intercepting APIs.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `source` | string | yes | JavaScript source code to evaluate on every new document |
+
+Returns: `identifier` (string) for use with `remove_script`.
+
+#### `remove_script`
+
+Remove an injected script by its identifier.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `identifier` | string | yes | Script identifier returned by `add_script` |
+
+#### `set_extra_headers`
+
+Inject custom HTTP headers into all requests from a tab. Useful for auth tokens, feature flags, API keys.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `headers` | object | yes | Map of header name to value. Pass `{}` to clear. |
+
+#### `set_permission`
+
+Grant, deny, or reset a browser permission.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `name` | string | yes | Permission name: `geolocation`, `notifications`, `camera`, `microphone`, `clipboard-read`, `clipboard-write`, etc. |
+| `setting` | string | yes | `"granted"`, `"denied"`, or `"prompt"` |
+| `origin` | string | no | Scope to a specific origin. If omitted applies to all origins. |
+
+#### `set_emulated_media`
+
+Override CSS media type and features. Use to test dark mode, reduced motion, or print styles.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `media` | string | no | Media type: `"screen"`, `"print"`. Empty to reset. |
+| `features` | array | no | Media features to override. Each entry has `name` and `value`. |
+
+Common features: `prefers-color-scheme` (`dark`/`light`), `prefers-reduced-motion` (`reduce`/`no-preference`).
+
+#### `set_ignore_certificate_errors`
+
+Ignore or enforce TLS certificate errors. Enable to test against local dev servers with self-signed certificates.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `ignore` | bool | yes | If true, all certificate errors will be ignored. |
+
 ## Internal Architecture
 
 ### Package Structure
@@ -765,7 +828,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 - **Request Interception** — Intercept, modify, mock, or fail network requests via `fetch` domain. Enables testing error states, simulating API responses, and injecting faults.
 - **Network Throttling** — Simulate slow connections (3G, offline) via `network.EmulateNetworkConditions`. Useful for testing loading states and offline behavior.
 - **Block URLs** — Block specific URL patterns via `network.SetBlockedURLs`. Useful for testing graceful degradation when resources fail to load.
-- **Extra Headers** — Inject custom HTTP headers into all requests via `network.SetExtraHTTPHeaders`. Useful for testing auth flows, feature flags, A/B testing.
 - **Certificate Inspection** — Get site certificate details via `network.GetCertificate`.
 
 ### Emulation
@@ -774,8 +836,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 - **Device Emulation** — Emulate specific devices (iPhone, Pixel, etc.) with appropriate viewport, user agent, touch, and device scale factor.
 - **Timezone** — Override timezone via `emulation.SetTimezoneOverride`. Useful for testing date/time display.
 - **Locale** — Override locale via `emulation.SetLocaleOverride`. Useful for testing i18n.
-- **Color Scheme** — Override `prefers-color-scheme` via `emulation.SetEmulatedMedia`. Useful for testing dark mode.
-- **Reduced Motion** — Override `prefers-reduced-motion` via `emulation.SetEmulatedMedia`. Useful for accessibility testing.
 - **Vision Deficiency** — Simulate color blindness and blurred vision via `emulation.SetEmulatedVisionDeficiency`. Useful for accessibility testing.
 - **CPU Throttling** — Slow down JavaScript execution via `emulation.SetCPUThrottlingRate`. Useful for testing performance on low-end devices.
 - **User Agent** — Override the browser user agent string via `emulation.SetUserAgentOverride`.
@@ -783,8 +843,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 ### Security & Auth
 
 - **WebAuthn** — Create virtual authenticators, add/manage credentials, simulate user verification via `webauthn` domain. Enables testing passkey and FIDO2 flows without physical hardware.
-- **Permissions** — Grant or deny browser permissions (geolocation, camera, microphone, notifications, etc.) via `browser.SetPermission`.
-- **Certificate Errors** — Ignore or handle certificate errors via `security.SetIgnoreCertificateErrors`.
 
 ### Media
 
@@ -793,7 +851,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 
 ### Debugging
 
-- **Script Injection** — Inject JavaScript to run on every new document via `page.AddScriptToEvaluateOnNewDocument`. Useful for setting up test fixtures, polyfills, or instrumentation.
 - **CSS Manipulation** — Add CSS rules, modify styles, force pseudo-states (`:hover`, `:focus`, `:active`) via `css` domain. Useful for visually inspecting and debugging styles.
 - **DOM Manipulation** — Modify the DOM tree directly (set attributes, set outer HTML, remove nodes) via `dom` domain.
 - **DOM Snapshots** — Capture full DOM snapshots including styles and layout via `domsnapshot` domain. Useful for visual regression testing.

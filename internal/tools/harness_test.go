@@ -57,6 +57,21 @@ func TestMain(m *testing.M) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		fmt.Fprintf(w, `{"message":"héllo wörld 🌍","emoji":"🚀✨"}`)
 	})
+	// Echo request headers as JSON.
+	mux.HandleFunc("/api/headers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "{")
+		first := true
+		for k, v := range r.Header {
+			if !first {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, "%q:%q", k, v[0])
+			first = false
+		}
+		fmt.Fprint(w, "}")
+	})
+
 	// Serve downloadable files.
 	mux.HandleFunc("/download/test-file.txt", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", `attachment; filename="test-file.txt"`)
