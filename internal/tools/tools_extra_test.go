@@ -649,19 +649,6 @@ func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 // Error paths
 // ---------------------------------------------------------------------------
 
-func TestClickInvalidSelector(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "click", map[string]any{
-		"tab":      tabID,
-		"selector": "#does-not-exist-at-all",
-	})
-	if errText == "" {
-		t.Error("click on nonexistent selector should return an error")
-	}
-}
-
 func TestEvaluateJSError(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
@@ -686,6 +673,294 @@ func TestEvaluateOnSelectorNoMatch(t *testing.T) {
 	})
 	if !strings.Contains(errText, "matched no elements") {
 		t.Errorf("evaluate_on_selector error = %q, want 'matched no elements'", errText)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Selector fail-fast: invalid selectors must fail immediately with a clear
+// "not found" error, not burn the full context timeout.
+// Each test also verifies the corresponding valid-selector path still works
+// to guard against false negatives.
+// ---------------------------------------------------------------------------
+
+// selectorFailFast is a helper that verifies a tool call with a missing
+// selector fails fast (< 2s) with a "not found" error message, and that
+// the same tool succeeds with a valid selector.
+func selectorFailFast(t *testing.T, tabID, tool string, extraInvalid, extraValid map[string]any) {
+	t.Helper()
+
+	// --- invalid selector: must fail fast with "not found" ---
+	args := map[string]any{
+		"tab":      tabID,
+		"selector": "#selector-that-does-not-exist-xyz",
+	}
+	for k, v := range extraInvalid {
+		args[k] = v
+	}
+
+	start := time.Now()
+	errText := callToolExpectErr(t, tool, args)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("%s with invalid selector took %v, want < 2s (fail-fast)", tool, elapsed)
+	}
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("%s invalid selector error = %q, want to contain 'not found'", tool, errText)
+	}
+	// Must NOT be a context deadline error — that would mean the pre-check didn't work.
+	if strings.Contains(errText, "context deadline") {
+		t.Errorf("%s invalid selector error is a timeout, not a fast pre-check failure: %s", tool, errText)
+	}
+
+	// --- valid selector: must succeed ---
+	validArgs := map[string]any{
+		"tab": tabID,
+	}
+	for k, v := range extraValid {
+		validArgs[k] = v
+	}
+	result := callToolRaw(t, tool, validArgs)
+	if result.IsError {
+		t.Errorf("%s with valid selector failed: %s", tool, contentText(result))
+	}
+}
+
+func TestClickInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "click",
+		nil, // no extra args for invalid
+		map[string]any{"selector": "#click-target"}, // valid
+	)
+
+	// Verify the valid click actually worked.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-count').textContent",
+	})
+	if string(out.Result) != `"1"` {
+		t.Errorf("after valid click, click count = %s, want \"1\"", out.Result)
+	}
+}
+
+func TestDoubleClickInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "click",
+		map[string]any{"click_count": 2},                              // invalid
+		map[string]any{"selector": "#click-target", "click_count": 2}, // valid
+	)
+}
+
+func TestTypeInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "type",
+		map[string]any{"text": "hello"},                               // invalid
+		map[string]any{"selector": "#type-target", "text": "test123"}, // valid
+	)
+
+	// Verify the valid type actually worked.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if !strings.Contains(string(out.Result), "test123") {
+		t.Errorf("after valid type, value = %s, want to contain 'test123'", out.Result)
+	}
+}
+
+func TestTypeWithClearInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "type",
+		map[string]any{"text": "hello", "clear": true},                               // invalid
+		map[string]any{"selector": "#type-target", "text": "cleared", "clear": true}, // valid
+	)
+}
+
+func TestFocusInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "focus",
+		nil, // invalid
+		map[string]any{"selector": "#type-target"}, // valid
+	)
+
+	// Verify focus actually moved.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.activeElement.id",
+	})
+	if !strings.Contains(string(out.Result), "type-target") {
+		t.Errorf("after valid focus, activeElement = %s, want 'type-target'", out.Result)
+	}
+}
+
+func TestScrollIntoViewInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "scroll",
+		nil, // invalid
+		map[string]any{"selector": "#scroll-marker"}, // valid
+	)
+}
+
+func TestQueryInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "query",
+		nil,                                 // invalid
+		map[string]any{"selector": ".item"}, // valid
+	)
+}
+
+func TestGetHTMLInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "get_html",
+		nil,                                  // invalid
+		map[string]any{"selector": "#title"}, // valid
+	)
+}
+
+func TestGetTextInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	selectorFailFast(t, tabID, "get_text",
+		nil,                                  // invalid
+		map[string]any{"selector": "#title"}, // valid
+	)
+
+	// Verify text content returned for valid selector.
+	out := callTool[GetTextOutput](t, "get_text", map[string]any{
+		"tab":      tabID,
+		"selector": "#title",
+	})
+	if strings.TrimSpace(out.Text) != "Hello World" {
+		t.Errorf("get_text valid selector = %q, want 'Hello World'", out.Text)
+	}
+}
+
+func TestGetAccessibilityTreeInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Invalid selector — should fail fast.
+	args := map[string]any{
+		"tab":      tabID,
+		"selector": "#selector-that-does-not-exist-xyz",
+	}
+	start := time.Now()
+	errText := callToolExpectErr(t, "get_accessibility_tree", args)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("get_accessibility_tree with invalid selector took %v, want < 2s", elapsed)
+	}
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error = %q, want to contain 'not found'", errText)
+	}
+	if strings.Contains(errText, "context deadline") {
+		t.Errorf("error is a timeout, not a fast pre-check failure: %s", errText)
+	}
+}
+
+func TestUploadFilesInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// Invalid selector — should fail fast.
+	args := map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-file-input",
+		"paths":    []string{"/dev/null"},
+	}
+	start := time.Now()
+	errText := callToolExpectErr(t, "upload_files", args)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("upload_files with invalid selector took %v, want < 2s", elapsed)
+	}
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error = %q, want to contain 'not found'", errText)
+	}
+}
+
+// TestSubmitFormInvalidSelector tests that submit_form (which uses JS
+// querySelector directly) also fails fast with a clear error for missing
+// selectors. This tool was already JS-based, so it should always be fast.
+func TestSubmitFormInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	start := time.Now()
+	errText := callToolExpectErr(t, "submit_form", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-form",
+	})
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("submit_form with invalid selector took %v, want < 2s", elapsed)
+	}
+	if !strings.Contains(errText, "element not found") {
+		t.Errorf("error = %q, want to contain 'element not found'", errText)
+	}
+}
+
+// TestHoverInvalidSelector tests that hover (which uses JS querySelector
+// directly) fails fast for missing selectors.
+func TestHoverInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	start := time.Now()
+	errText := callToolExpectErr(t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-hover",
+	})
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("hover with invalid selector took %v, want < 2s", elapsed)
+	}
+	if !strings.Contains(errText, "element not found") {
+		t.Errorf("error = %q, want to contain 'element not found'", errText)
+	}
+}
+
+// TestSelectOptionInvalidSelector tests that select_option (which uses JS
+// querySelector directly) fails with an appropriate error for missing selectors.
+func TestSelectOptionInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	start := time.Now()
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-select",
+		"value":    "red",
+	})
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("select_option with invalid selector took %v, want < 2s", elapsed)
+	}
+	// JS querySelector(...).value = ... will throw a TypeError on null.
+	if errText == "" {
+		t.Error("select_option with invalid selector should return an error")
 	}
 }
 
