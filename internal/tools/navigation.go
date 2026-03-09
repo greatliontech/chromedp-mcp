@@ -217,9 +217,21 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 }
 
 // navigateHistory navigates the browser history by the given delta (-1 for
-// back, +1 for forward). It uses page.NavigateToHistoryEntry and waits for
-// the EventFrameNavigated event to confirm the navigation completed, which
-// works reliably even when Chrome restores pages from bfcache.
+// back, +1 for forward). It uses page.NavigateToHistoryEntry, waits for
+// EventFrameNavigated, then reloads the page.
+//
+// The reload is necessary because Chrome's back-forward cache (bfcache)
+// restores pages without emitting dom.EventDocumentUpdated, which leaves
+// chromedp's internal DOM node cache stale. All selector-based operations
+// (click, query, get_text, etc.) fail because chromedp looks up new node
+// IDs in its stale cache and never finds them.
+//
+// chromedp's built-in NavigateBack/NavigateForward also have this problem —
+// they hang waiting for lifecycle events that bfcache restores don't
+// produce (see https://github.com/chromedp/chromedp/issues/1346).
+//
+// The reload forces a fresh page load that properly triggers all CDP
+// events, giving chromedp a consistent DOM tree.
 func navigateHistory(delta int) chromedp.ActionFunc {
 	return func(ctx context.Context) error {
 		cur, entries, err := page.GetNavigationHistory().Do(ctx)
@@ -234,14 +246,13 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 			return fmt.Errorf("no forward history entry")
 		}
 
-		// Listen for the frame navigation event before triggering the
-		// history entry change so we don't miss it.
+		// Listen for the root frame navigation event before triggering
+		// the history entry change so we don't miss it.
 		ch := make(chan struct{}, 1)
 		lctx, lcancel := context.WithCancel(ctx)
 		defer lcancel()
 		chromedp.ListenTarget(lctx, func(ev interface{}) {
 			if fn, ok := ev.(*page.EventFrameNavigated); ok {
-				// Only match the root frame (no parent).
 				if fn.Frame.ParentID == "" {
 					select {
 					case ch <- struct{}{}:
@@ -257,9 +268,14 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 
 		select {
 		case <-ch:
-			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+
+		// Reload the page to force a fresh document load. This triggers
+		// dom.EventDocumentUpdated, which resyncs chromedp's DOM cache.
+		// Without this, bfcache restores leave the cache stale and all
+		// selector-based queries time out.
+		return chromedp.Reload().Do(ctx)
 	}
 }

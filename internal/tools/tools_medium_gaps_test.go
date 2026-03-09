@@ -633,3 +633,171 @@ func TestPressEnterAfterFocus(t *testing.T) {
 		t.Errorf("form submit after focus+type = %s, want 'submitted:hello'", out.Result)
 	}
 }
+
+// TestGoBackDOMWorks verifies that after go_back, all selector-based DOM
+// operations work correctly. This is the key bfcache regression test.
+func TestGoBackDOMWorks(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Navigate to a second page.
+	callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("interaction.html"),
+	})
+
+	// Verify we're on the second page.
+	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if !strings.Contains(text.Text, "Interaction") {
+		t.Fatalf("expected interaction page heading, got %q", text.Text)
+	}
+
+	// Go back via MCP tool.
+	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
+
+	// get_text must work after go_back.
+	text = callTool[GetTextOutput](t, "get_text", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if text.Text == "" {
+		t.Fatal("get_text returned empty after go_back")
+	}
+	t.Logf("get_text after go_back: %q", text.Text)
+
+	// query must work after go_back.
+	qout := callTool[QueryOutput](t, "query", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if len(qout.Elements) == 0 {
+		t.Fatal("query returned no elements after go_back")
+	}
+
+	// click must work after go_back.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+
+	// get_html must work after go_back.
+	html := callTool[GetHTMLOutput](t, "get_html", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if html.HTML == "" {
+		t.Fatal("get_html returned empty after go_back")
+	}
+}
+
+// TestGoForwardDOMWorks verifies go_forward also resyncs the DOM.
+func TestGoForwardDOMWorks(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Navigate to second page.
+	callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("interaction.html"),
+	})
+
+	// Go back.
+	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
+
+	// Go forward.
+	callTool[struct{}](t, "go_forward", map[string]any{"tab": tabID})
+
+	// Selector-based queries must work after go_forward.
+	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if !strings.Contains(text.Text, "Interaction") {
+		t.Fatalf("expected interaction page after go_forward, got %q", text.Text)
+	}
+}
+
+// TestGoBackMultipleHops verifies go_back works across 3+ pages.
+func TestGoBackMultipleHops(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Build a 3-page history: index -> interaction -> forms.
+	callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("interaction.html"),
+	})
+	callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("forms.html"),
+	})
+
+	// Go back to interaction.
+	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
+	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if !strings.Contains(text.Text, "Interaction") {
+		t.Fatalf("first go_back: expected interaction, got %q", text.Text)
+	}
+
+	// Go back to index.
+	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
+	text = callTool[GetTextOutput](t, "get_text", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+	})
+	if text.Text == "" {
+		t.Fatal("second go_back: get_text returned empty")
+	}
+	t.Logf("second go_back h1: %q", text.Text)
+}
+
+// TestGoBackThenInteract verifies you can interact with the page after
+// go_back — type into inputs, click buttons, read results.
+func TestGoBackThenInteract(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Navigate away.
+	callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("index.html"),
+	})
+
+	// Go back to interaction page.
+	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
+
+	// Type into an input.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "after-goback",
+	})
+
+	// Read the value back.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if !strings.Contains(string(out.Result), "after-goback") {
+		t.Errorf("type after go_back: value = %s, want 'after-goback'", out.Result)
+	}
+
+	// Click a button.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#click-target",
+	})
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-count').textContent",
+	})
+	if !strings.Contains(string(out.Result), "1") {
+		t.Errorf("click after go_back: count = %s, want '1'", out.Result)
+	}
+}
