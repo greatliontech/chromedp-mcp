@@ -1,8 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +15,7 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/image/draw"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
 )
@@ -18,11 +23,12 @@ import (
 // ScreenshotInput is the input for screenshot.
 type ScreenshotInput struct {
 	TabInput
-	Selector string `json:"selector,omitempty" jsonschema:"CSS selector to screenshot a specific element. If omitted captures the viewport."`
-	FullPage bool   `json:"full_page,omitempty" jsonschema:"Capture the full scrollable page (default false). Ignored if selector is set."`
-	Format   string `json:"format,omitempty" jsonschema:"Image format: png (default) or jpeg"`
-	Quality  int    `json:"quality,omitempty" jsonschema:"JPEG quality 1-100 (default 80). Ignored for PNG."`
-	Filename string `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Timestamp-based name used if empty. The image is still returned inline."`
+	Selector     string `json:"selector,omitempty" jsonschema:"CSS selector to screenshot a specific element. If omitted captures the viewport."`
+	FullPage     bool   `json:"full_page,omitempty" jsonschema:"Capture the full scrollable page (default false). Ignored if selector is set."`
+	Format       string `json:"format,omitempty" jsonschema:"Image format: png (default) or jpeg"`
+	Quality      int    `json:"quality,omitempty" jsonschema:"JPEG quality 1-100 (default 80). Ignored for PNG."`
+	Filename     string `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Timestamp-based name used if empty. The image is still returned inline."`
+	MaxDimension int    `json:"max_dimension,omitempty" jsonschema:"Maximum allowed width or height in pixels. If the screenshot exceeds this in either dimension it is downscaled proportionally. Useful to stay within API image-size limits (e.g. 8000 for Anthropic)."`
 }
 
 // PDFInput is the input for pdf.
@@ -95,6 +101,14 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		}
 		if err != nil {
 			return nil, struct{}{}, err
+		}
+
+		// Downscale if the image exceeds max_dimension.
+		if input.MaxDimension > 0 {
+			buf, err = constrainImageSize(buf, input.MaxDimension, input.Format, input.Quality)
+			if err != nil {
+				return nil, struct{}{}, fmt.Errorf("constraining image size: %w", err)
+			}
 		}
 
 		mimeType := "image/png"
@@ -251,4 +265,54 @@ func saveToDownloadDir(dir, filename, defaultExt string, data []byte) (string, e
 		return "", fmt.Errorf("writing file: %w", err)
 	}
 	return path, nil
+}
+
+// constrainImageSize decodes the encoded image (PNG or JPEG), checks whether
+// either dimension exceeds maxDim, and if so downscales proportionally using
+// high-quality CatmullRom interpolation. The result is re-encoded in the
+// original format. If the image already fits, the original bytes are returned
+// unchanged.
+func constrainImageSize(data []byte, maxDim int, format string, quality int) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decoding image: %w", err)
+	}
+
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	// Already within limits.
+	if w <= maxDim && h <= maxDim {
+		return data, nil
+	}
+
+	// Compute new dimensions preserving aspect ratio.
+	scale := float64(maxDim) / float64(max(w, h))
+	newW := int(float64(w) * scale)
+	newH := int(float64(h) * scale)
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+
+	var buf bytes.Buffer
+	switch format {
+	case "jpeg":
+		q := quality
+		if q <= 0 {
+			q = 80
+		}
+		err = jpeg.Encode(&buf, dst, &jpeg.Options{Quality: q})
+	default:
+		err = png.Encode(&buf, dst)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("encoding resized image: %w", err)
+	}
+	return buf.Bytes(), nil
 }
