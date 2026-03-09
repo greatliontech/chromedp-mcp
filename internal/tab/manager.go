@@ -143,7 +143,7 @@ type TabInfo struct {
 }
 
 // Resolve returns the tab for the given ID, or the active tab if id is empty.
-// If no tabs exist, it creates one automatically.
+// Returns an error if no tabs exist.
 func (m *Manager) Resolve(id string) (*Tab, error) {
 	if id != "" {
 		return m.Get(id)
@@ -152,8 +152,7 @@ func (m *Manager) Resolve(id string) (*Tab, error) {
 	if t != nil {
 		return t, nil
 	}
-	// Auto-create a tab if none exist.
-	return m.NewTab()
+	return nil, fmt.Errorf("no open tabs — use tab_new to create one")
 }
 
 // touchLocked moves an ID to the end of the MRU order. Must be called with mu held.

@@ -68,6 +68,7 @@ type GetHTMLOutput struct {
 type GetTextInput struct {
 	TabInput
 	Selector string `json:"selector,omitempty" jsonschema:"CSS selector. If omitted returns text of the entire page body."`
+	Hidden   bool   `json:"hidden,omitempty" jsonschema:"Include text from hidden elements (default false). When false uses innerText (visible text only). When true uses textContent (all DOM text)."`
 }
 
 // GetTextOutput is the output for get_text.
@@ -243,7 +244,13 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		var text string
 		sctx, scancel := selectorContext(t.Context(), input.Timeout)
 		defer scancel()
-		if err := chromedp.Run(sctx, chromedp.Text(selector, &text, chromedp.NodeVisible, chromedp.ByQuery)); err != nil {
+		var action chromedp.QueryAction
+		if input.Hidden {
+			action = chromedp.TextContent(selector, &text, chromedp.ByQuery)
+		} else {
+			action = chromedp.Text(selector, &text, chromedp.ByQuery)
+		}
+		if err := chromedp.Run(sctx, action); err != nil {
 			return nil, GetTextOutput{}, err
 		}
 		return nil, GetTextOutput{Text: text}, nil

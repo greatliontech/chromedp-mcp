@@ -112,6 +112,12 @@ func (b *Browser) Context() context.Context {
 	return b.browserCtx
 }
 
+// Alive returns true if the browser's context is still active (Chrome
+// process hasn't been killed or disconnected).
+func (b *Browser) Alive() bool {
+	return b.browserCtx.Err() == nil
+}
+
 // Close shuts down the browser. In launch mode, this kills the Chrome
 // process. In connect mode, it disconnects.
 func (b *Browser) Close() {

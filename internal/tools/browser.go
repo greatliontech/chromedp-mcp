@@ -93,9 +93,9 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserCloseInput) (*mcp.CallToolResult, BrowserCloseOutput, error) {
 		id := input.Browser
 		if id == "" {
-			b := mgr.Active()
-			if b == nil {
-				return nil, BrowserCloseOutput{}, errNoBrowser
+			b, err := mgr.Active()
+			if err != nil {
+				return nil, BrowserCloseOutput{}, err
 			}
 			id = b.ID
 		}

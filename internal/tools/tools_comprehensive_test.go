@@ -205,23 +205,104 @@ func TestQueryAllOptionalFields(t *testing.T) {
 }
 
 // ===========================================================================
-// DOM: get_text on a hidden element
+// DOM: get_text — all permutations of existing/non-existing, hidden/visible,
+// hidden flag true/false.
 // ===========================================================================
 
-func TestGetTextHiddenElement(t *testing.T) {
+func TestGetTextPermutations(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	// #hidden-el has display:none. get_text uses chromedp.NodeVisible which
-	// polls until the element is visible or the timeout expires. Since it's
-	// permanently hidden, this should error with a timeout.
-	errText := callToolExpectErr(t, "get_text", map[string]any{
-		"tab":      tabID,
-		"selector": "#hidden-el",
-		"timeout":  500,
-	})
-	if errText == "" {
-		t.Error("get_text on hidden element should error (element never visible)")
+	tests := []struct {
+		name      string
+		selector  string
+		hidden    bool
+		wantErr   bool
+		wantEmpty bool
+		wantText  string // substring match
+	}{
+		// Visible element
+		{
+			name:     "visible/hidden=false",
+			selector: "#title",
+			hidden:   false,
+			wantText: "Hello World",
+		},
+		{
+			name:     "visible/hidden=true",
+			selector: "#title",
+			hidden:   true,
+			wantText: "Hello World",
+		},
+		// Hidden element (display:none)
+		{
+			name:      "hidden-element/hidden=false",
+			selector:  "#hidden-el",
+			hidden:    false,
+			wantEmpty: true,
+		},
+		{
+			name:     "hidden-element/hidden=true",
+			selector: "#hidden-el",
+			hidden:   true,
+			wantText: "Hidden content",
+		},
+		// First match is hidden, second is visible (Wikipedia scenario)
+		{
+			name:      "first-match-hidden/hidden=false",
+			selector:  ".mv-item",
+			hidden:    false,
+			wantEmpty: true,
+		},
+		{
+			name:     "first-match-hidden/hidden=true",
+			selector: ".mv-item",
+			hidden:   true,
+			wantText: "Hidden paragraph",
+		},
+		// Non-existing element — both hidden modes should timeout
+		{
+			name:     "non-existing/hidden=false",
+			selector: "#does-not-exist",
+			hidden:   false,
+			wantErr:  true,
+		},
+		{
+			name:     "non-existing/hidden=true",
+			selector: "#does-not-exist",
+			hidden:   true,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := map[string]any{
+				"tab":      tabID,
+				"selector": tt.selector,
+			}
+			if tt.hidden {
+				args["hidden"] = true
+			}
+			if tt.wantErr {
+				args["timeout"] = 500
+				errText := callToolExpectErr(t, "get_text", args)
+				if errText == "" {
+					t.Error("expected error for non-existing element, got none")
+				}
+				return
+			}
+			out := callTool[GetTextOutput](t, "get_text", args)
+			if tt.wantEmpty {
+				if out.Text != "" {
+					t.Errorf("got %q, want empty string", out.Text)
+				}
+				return
+			}
+			if !strings.Contains(out.Text, tt.wantText) {
+				t.Errorf("got %q, want substring %q", out.Text, tt.wantText)
+			}
+		})
 	}
 }
 

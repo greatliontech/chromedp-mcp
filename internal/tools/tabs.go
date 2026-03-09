@@ -87,12 +87,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabActivateInput) (*mcp.CallToolResult, struct{}, error) {
-		// We need to find which browser owns this tab. Try active browser first.
-		b := mgr.Active()
-		if b == nil {
-			return nil, struct{}{}, errNoBrowser
-		}
-		if err := b.Tabs.Activate(input.Tab); err != nil {
+		if err := mgr.ActivateTab(input.Tab); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -105,11 +100,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 			DestructiveHint: ptrBool(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabCloseInput) (*mcp.CallToolResult, struct{}, error) {
-		b := mgr.Active()
-		if b == nil {
-			return nil, struct{}{}, errNoBrowser
-		}
-		if err := b.Tabs.Close(input.Tab); err != nil {
+		if err := mgr.CloseTab(input.Tab); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -117,10 +108,10 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 }
 
 // resolveBrowser returns the browser for the given ID, or the active browser
-// (auto-launching if needed) when id is empty.
+// when id is empty. Returns an error if no browser is running.
 func resolveBrowser(mgr *browser.Manager, id string) (*browser.Browser, error) {
 	if id != "" {
 		return mgr.Get(id)
 	}
-	return mgr.EnsureBrowser()
+	return mgr.Active()
 }

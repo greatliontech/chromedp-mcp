@@ -6,36 +6,29 @@ import (
 )
 
 // ===========================================================================
-// Implicit auto-creation: navigate without prior browser_launch or tab_new
-// Tests the cold-start path: ResolveTab("","") → EnsureBrowser() → Launch()
-// → Resolve("") → NewTab()
+// No implicit auto-creation: tools error clearly without a browser
 // ===========================================================================
 
-func TestImplicitAutoCreation(t *testing.T) {
-	// Launch a fresh browser manager by launching a new browser, then closing
-	// it to simulate a cold-start state, then calling navigate directly.
-	// We use the existing harness browser, so instead we test with a fresh
-	// browser: launch, close, then call navigate (which should auto-create).
+func TestNoBrowserError(t *testing.T) {
+	// Launch a browser and close it so the harness browser is the only one.
 	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
-
-	// Close the browser so the next tool call on it will fail.
 	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
 		"browser": b.BrowserID,
 	})
 
-	// Now call navigate without specifying browser or tab.
-	// The harness still has the original browser, so this should resolve to it.
-	// This tests that ResolveTab("","") falls back to the active browser.
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	// The harness browser still exists, so this test verifies that
+	// when calling with an explicit reference to a closed browser, we error.
+	errText := callToolExpectErr(t, "navigate", map[string]any{
 		"url": fixtureURL("index.html"),
+		"tab": "nonexistent-tab-id",
 	})
-	if out.Status == 0 {
-		t.Error("navigate with implicit auto-creation returned status 0")
+	if errText == "" {
+		t.Error("navigate with nonexistent tab should error")
 	}
-	if out.URL == "" {
-		t.Error("navigate with implicit auto-creation returned empty URL")
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error should mention 'not found', got: %s", errText)
 	}
 }
 

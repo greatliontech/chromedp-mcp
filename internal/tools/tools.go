@@ -3,17 +3,11 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
-)
-
-var (
-	errNoBrowser = errors.New("no browser is active; use browser_launch or browser_connect first")
-	errNoTab     = errors.New("no tab is active; use tab_new first")
 )
 
 // Register registers all tools on the given MCP server.

@@ -58,25 +58,32 @@ func (m *Manager) Connect(url string) (*Browser, error) {
 	return b, nil
 }
 
-// Get returns a browser by ID.
+// Get returns a browser by ID. If the browser's Chrome process has
+// been killed or disconnected, it is removed and an error is returned.
 func (m *Manager) Get(id string) (*Browser, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	b, ok := m.browsers[id]
 	if !ok {
 		return nil, fmt.Errorf("browser %q not found", id)
 	}
+	if !b.Alive() {
+		m.removeLocked(id)
+		return nil, fmt.Errorf("browser %q is no longer running (Chrome process was killed or disconnected)", id)
+	}
 	return b, nil
 }
 
-// Active returns the active browser. Returns nil if none exist.
-func (m *Manager) Active() *Browser {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+// Active returns the active browser. Dead browsers are pruned automatically.
+// Returns an error if no browser is running.
+func (m *Manager) Active() (*Browser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneDeadLocked()
 	if m.activeID == "" {
-		return nil
+		return nil, fmt.Errorf("no browser running — use browser_launch or browser_connect first")
 	}
-	return m.browsers[m.activeID]
+	return m.browsers[m.activeID], nil
 }
 
 // Close closes a browser by ID. If the closed browser was active, the
@@ -89,20 +96,16 @@ func (m *Manager) Close(id string) error {
 		return fmt.Errorf("browser %q not found", id)
 	}
 	b.Close()
-	delete(m.browsers, id)
-	m.removeFromOrder(id)
-	if m.activeID == id {
-		if len(m.order) > 0 {
-			m.activeID = m.order[len(m.order)-1]
-		} else {
-			m.activeID = ""
-		}
-	}
+	m.removeLocked(id)
 	return nil
 }
 
-// List returns info about all managed browsers.
+// List returns info about all managed browsers. Dead browsers are pruned.
 func (m *Manager) List() []BrowserInfo {
+	m.mu.Lock()
+	m.pruneDeadLocked()
+	m.mu.Unlock()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	infos := make([]BrowserInfo, 0, len(m.browsers))
@@ -133,31 +136,71 @@ func (m *Manager) CloseAll() {
 	m.order = nil
 }
 
-// EnsureBrowser returns the active browser, launching one with defaults
-// if none exist.
-func (m *Manager) EnsureBrowser() (*Browser, error) {
-	b := m.Active()
-	if b != nil {
-		return b, nil
-	}
-	return m.Launch(DefaultLaunchOptions())
-}
-
-// ResolveTab resolves a tab from the given browser and tab IDs. If
-// browserID is empty, uses the active browser (auto-launching if needed).
-// If tabID is empty, uses the active tab (auto-creating if needed).
+// ResolveTab resolves a tab from the given browser and tab IDs.
+// If browserID is empty, uses the active browser.
+// If tabID is empty, uses the active tab.
+// Returns an error if no browser is running or no tabs are open.
 func (m *Manager) ResolveTab(browserID, tabID string) (*tab.Tab, error) {
 	var b *Browser
 	var err error
 	if browserID != "" {
 		b, err = m.Get(browserID)
 	} else {
-		b, err = m.EnsureBrowser()
+		b, err = m.Active()
 	}
 	if err != nil {
 		return nil, err
 	}
 	return b.Tabs.Resolve(tabID)
+}
+
+// FindTab searches all browsers for a tab by ID. Returns the tab and its
+// owning browser. Prunes dead browsers during the search.
+func (m *Manager) FindTab(tabID string) (*tab.Tab, *Browser, error) {
+	m.mu.Lock()
+	m.pruneDeadLocked()
+	m.mu.Unlock()
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, b := range m.browsers {
+		if t, err := b.Tabs.Get(tabID); err == nil {
+			return t, b, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("tab %q not found in any browser", tabID)
+}
+
+// CloseTab finds a tab by ID across all browsers and closes it.
+func (m *Manager) CloseTab(tabID string) error {
+	m.mu.Lock()
+	m.pruneDeadLocked()
+	m.mu.Unlock()
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, b := range m.browsers {
+		if _, err := b.Tabs.Get(tabID); err == nil {
+			return b.Tabs.Close(tabID)
+		}
+	}
+	return fmt.Errorf("tab %q not found in any browser", tabID)
+}
+
+// ActivateTab finds a tab by ID across all browsers and activates it.
+func (m *Manager) ActivateTab(tabID string) error {
+	m.mu.Lock()
+	m.pruneDeadLocked()
+	m.mu.Unlock()
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, b := range m.browsers {
+		if _, err := b.Tabs.Get(tabID); err == nil {
+			return b.Tabs.Activate(tabID)
+		}
+	}
+	return fmt.Errorf("tab %q not found in any browser", tabID)
 }
 
 // BrowserInfo contains summary information about a browser.
@@ -168,11 +211,31 @@ type BrowserInfo struct {
 	Tabs   int    `json:"tabs"`
 }
 
-func (m *Manager) removeFromOrder(id string) {
+// pruneDeadLocked removes all browsers whose Chrome process has been
+// killed or disconnected. Must be called with m.mu held.
+func (m *Manager) pruneDeadLocked() {
+	for id, b := range m.browsers {
+		if !b.Alive() {
+			m.removeLocked(id)
+		}
+	}
+}
+
+// removeLocked removes a browser from the map and MRU order, and updates
+// the active browser if needed. Must be called with m.mu held.
+func (m *Manager) removeLocked(id string) {
+	delete(m.browsers, id)
 	for i, oid := range m.order {
 		if oid == id {
 			m.order = append(m.order[:i], m.order[i+1:]...)
-			return
+			break
+		}
+	}
+	if m.activeID == id {
+		if len(m.order) > 0 {
+			m.activeID = m.order[len(m.order)-1]
+		} else {
+			m.activeID = ""
 		}
 	}
 }

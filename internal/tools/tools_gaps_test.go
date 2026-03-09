@@ -1068,10 +1068,10 @@ func TestUploadFilesEmptyPaths(t *testing.T) {
 }
 
 // ===========================================================================
-// Tab: close the last tab, verify next tool call auto-creates
+// Tab: close the last tab, verify next tool call errors (no auto-create)
 // ===========================================================================
 
-func TestTabCloseLastAndAutoCreate(t *testing.T) {
+func TestTabCloseLastErrors(t *testing.T) {
 	// Launch a separate browser so we don't mess with the shared harness browser.
 	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
@@ -1088,12 +1088,21 @@ func TestTabCloseLastAndAutoCreate(t *testing.T) {
 	// Close the only tab.
 	callTool[struct{}](t, "tab_close", map[string]any{"tab": tab.TabID})
 
-	// tab_list should show 0 tabs (or auto-create may happen).
+	// tab_list should show 0 tabs.
 	list := callTool[TabListOutput](t, "tab_list", map[string]any{
 		"browser": b.BrowserID,
 	})
 	if len(list.Tabs) != 0 {
-		t.Logf("after closing last tab, tab_list shows %d tabs (auto-creation may have occurred)", len(list.Tabs))
+		t.Errorf("after closing last tab, tab_list shows %d tabs, want 0", len(list.Tabs))
+	}
+
+	// A tool call referencing the closed tab should error.
+	errText := callToolExpectErr(t, "evaluate", map[string]any{
+		"tab":        tab.TabID,
+		"expression": "1+1",
+	})
+	if errText == "" {
+		t.Error("evaluate on closed tab should error")
 	}
 }
 
@@ -1276,6 +1285,85 @@ func TestBrowserConnectInvalidURL(t *testing.T) {
 	})
 	if errText == "" {
 		t.Error("browser_connect to invalid URL should error")
+	}
+}
+
+// ===========================================================================
+// Browser: tools error clearly when Chrome is killed externally
+// ===========================================================================
+
+func TestBrowserKilledExternally(t *testing.T) {
+	// Find Chrome binary.
+	chromePath, err := exec.LookPath("chromium")
+	if err != nil {
+		chromePath, err = exec.LookPath("google-chrome")
+		if err != nil {
+			t.Skip("chromium/google-chrome not found in PATH")
+		}
+	}
+
+	port := findFreePort(t)
+	tmpDir, err := os.MkdirTemp("", "chromedp-kill-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Launch Chrome with remote debugging.
+	cmd := exec.Command(chromePath,
+		"--headless",
+		"--no-sandbox",
+		"--disable-gpu",
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		fmt.Sprintf("--user-data-dir=%s", tmpDir),
+		"about:blank",
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start Chrome: %v", err)
+	}
+
+	wsURL := getWSURL(t, port)
+
+	// Connect via MCP tool.
+	out := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+		"url": wsURL,
+	})
+	browserID := out.BrowserID
+	if browserID == "" {
+		t.Fatal("browser_connect returned empty ID")
+	}
+
+	// Create a tab so we have a tab ID to reference.
+	tabOut := callTool[TabNewOutput](t, "tab_new", map[string]any{
+		"browser": browserID,
+	})
+	tabID := tabOut.TabID
+
+	// Kill Chrome externally.
+	cmd.Process.Kill()
+	cmd.Wait()
+
+	// Give chromedp a moment to detect the dead connection.
+	time.Sleep(500 * time.Millisecond)
+
+	// Now tool calls referencing the dead browser should error clearly.
+	errText := callToolExpectErr(t, "get_text", map[string]any{
+		"tab":     tabID,
+		"timeout": 500,
+	})
+	if errText == "" {
+		t.Error("get_text on killed browser should error")
+	}
+	if !strings.Contains(errText, "no longer running") && !strings.Contains(errText, "not found") {
+		t.Logf("error text: %s", errText)
+	}
+
+	// browser_list should no longer include the dead browser.
+	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	for _, b := range list.Browsers {
+		if b.ID == browserID {
+			t.Error("dead browser should have been pruned from browser_list")
+		}
 	}
 }
 
