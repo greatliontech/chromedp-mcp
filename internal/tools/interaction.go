@@ -195,6 +195,21 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
+		// Validate that exactly one selection criterion is provided.
+		criteria := 0
+		if inp.Value != "" {
+			criteria++
+		}
+		if inp.Label != "" {
+			criteria++
+		}
+		if inp.Index != nil {
+			criteria++
+		}
+		if criteria > 1 {
+			return nil, struct{}{}, fmt.Errorf("exactly one of value, label, or index must be provided, not multiple")
+		}
+
 		// Build a JS snippet to select by the appropriate attribute.
 		var js string
 		if inp.Value != "" {

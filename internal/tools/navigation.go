@@ -66,19 +66,48 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			waitEvent = input.WaitUntil
 		}
 
+		// For non-default wait events, set up the lifecycle listener
+		// BEFORE navigating so we don't miss the event (e.g.,
+		// DOMContentLoaded fires before load, and RunResponse waits
+		// for load — by the time RunResponse returns, DOMContentLoaded
+		// has already been dispatched).
+		var lifecycleCh chan struct{}
+		if waitEvent == "domcontentloaded" || waitEvent == "networkidle" {
+			cdpName := waitEvent
+			switch waitEvent {
+			case "domcontentloaded":
+				cdpName = "DOMContentLoaded"
+			case "networkidle":
+				cdpName = "networkIdle"
+			}
+			lifecycleCh = make(chan struct{}, 1)
+			lctx, lcancel := context.WithCancel(tctx)
+			defer lcancel()
+			chromedp.ListenTarget(lctx, func(ev interface{}) {
+				if le, ok := ev.(*page.EventLifecycleEvent); ok {
+					if le.Name == cdpName {
+						select {
+						case lifecycleCh <- struct{}{}:
+						default:
+						}
+					}
+				}
+			})
+		}
+
 		// Navigate and capture the HTTP response to get the status code.
 		resp, err := chromedp.RunResponse(tctx, chromedp.Navigate(input.URL))
 		if err != nil {
 			return nil, NavigateOutput{}, err
 		}
 
-		// If a non-default wait event was requested, wait for it after
-		// the initial navigation + load.
-		if waitEvent == "networkidle" || waitEvent == "domcontentloaded" {
-			if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				return waitForLifecycle(ctx, waitEvent)
-			})); err != nil {
-				return nil, NavigateOutput{}, err
+		// Wait for the lifecycle event if needed.
+		if lifecycleCh != nil {
+			select {
+			case <-lifecycleCh:
+				// Event received — proceed.
+			case <-tctx.Done():
+				return nil, NavigateOutput{}, tctx.Err()
 			}
 		}
 
@@ -102,8 +131,18 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		if err := chromedp.Run(t.Context(), chromedp.Reload()); err != nil {
-			return nil, struct{}{}, err
+		if input.BypassCache {
+			// Use the CDP command directly so we can pass IgnoreCache.
+			// chromedp.Reload() doesn't expose this option.
+			if err := chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+				return page.Reload().WithIgnoreCache(true).Do(ctx)
+			})); err != nil {
+				return nil, struct{}{}, err
+			}
+		} else {
+			if err := chromedp.Run(t.Context(), chromedp.Reload()); err != nil {
+				return nil, struct{}{}, err
+			}
 		}
 		return nil, struct{}{}, nil
 	})
@@ -228,7 +267,10 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 // waitForLifecycle waits for a specific page lifecycle event.
 func waitForLifecycle(ctx context.Context, name string) error {
 	cdpName := name
-	if name == "networkidle" {
+	switch name {
+	case "domcontentloaded":
+		cdpName = "DOMContentLoaded"
+	case "networkidle":
 		cdpName = "networkIdle"
 	}
 

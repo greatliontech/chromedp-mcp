@@ -5,11 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
 )
+
+// evalAwaitPromise is a chromedp.EvaluateOption that tells the CDP
+// Runtime.evaluate call to await the resulting Promise before returning.
+func evalAwaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+	return p.WithAwaitPromise(true)
+}
 
 // EvaluateInput is the input for evaluate.
 type EvaluateInput struct {
@@ -46,9 +53,9 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		var result interface{}
-		evalOpts := []chromedp.EvaluateOption{}
+		evalOpts := []chromedp.EvaluateOption{chromedp.EvalAsValue}
 		if input.AwaitPromise == nil || *input.AwaitPromise {
-			evalOpts = append(evalOpts, chromedp.EvalAsValue)
+			evalOpts = append(evalOpts, evalAwaitPromise)
 		}
 
 		if err := chromedp.Run(t.Context(), chromedp.Evaluate(input.Expression, &result, evalOpts...)); err != nil {
