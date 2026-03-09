@@ -57,6 +57,22 @@
     <button id="confirm-btn" onclick="confirmResult.textContent = String(confirm('Are you sure?'))">Confirm</button>
     <div id="confirm-result"></div>
 
+    <!-- Multi-select -->
+    <select id="multi-select" multiple>
+        <option value="red">Red</option>
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+    </select>
+    <div id="multi-select-output"></div>
+
+    <!-- Hover test: CSS :hover vs JS event -->
+    <style>
+        #hover-target { padding: 10px; background: white; }
+        #hover-target:hover { background: yellow; }
+    </style>
+    <div id="hover-target">Hover me</div>
+    <div id="hover-output"></div>
+
     <!-- File input (non-file) -->
     <input type="text" id="not-file-input" value="">
 
@@ -85,6 +101,17 @@
         // Select change tracking.
         document.getElementById('big-select').addEventListener('change', function() {
             document.getElementById('select-output').textContent = 'selected:' + this.value;
+        });
+
+        // Multi-select change tracking.
+        document.getElementById('multi-select').addEventListener('change', function() {
+            var selected = Array.from(this.selectedOptions).map(o => o.value);
+            document.getElementById('multi-select-output').textContent = 'multi:' + selected.join(',');
+        });
+
+        // Hover JS event tracking.
+        document.getElementById('hover-target').addEventListener('mouseover', function() {
+            document.getElementById('hover-output').textContent = 'hovered';
         });
 
         // Store prompt/confirm result references.

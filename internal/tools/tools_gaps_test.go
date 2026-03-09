@@ -121,20 +121,14 @@ func TestSelectOptionIndexOutOfRange(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tabID)
 
-	// Select index 999 — out of range. JS sets selectedIndex = -1.
-	callTool[struct{}](t, "select_option", map[string]any{
+	// Select index 999 — out of range. Should return an error.
+	errText := callToolExpectErr(t, "select_option", map[string]any{
 		"tab":      tabID,
 		"selector": "#big-select",
 		"index":    999,
 	})
-
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.getElementById('big-select').selectedIndex",
-	})
-	// When index is out of range, selectedIndex becomes -1 (no selection).
-	if string(out.Result) != "-1" {
-		t.Errorf("out-of-range index selected = %s, want -1", out.Result)
+	if !strings.Contains(strings.ToLower(errText), "out of range") {
+		t.Errorf("expected 'out of range' error, got: %s", errText)
 	}
 }
 
@@ -146,27 +140,14 @@ func TestSelectOptionLabelNotFound(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tabID)
 
-	// First select "Beta" (index 1).
-	callTool[struct{}](t, "select_option", map[string]any{
-		"tab":      tabID,
-		"selector": "#big-select",
-		"index":    1,
-	})
-
-	// Now try to select by a label that doesn't exist.
-	callTool[struct{}](t, "select_option", map[string]any{
+	// Try to select by a label that doesn't exist — should error.
+	errText := callToolExpectErr(t, "select_option", map[string]any{
 		"tab":      tabID,
 		"selector": "#big-select",
 		"label":    "NonexistentLabel",
 	})
-
-	// The selectedIndex should stay at 1 (the label loop didn't match anything).
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.getElementById('big-select').selectedIndex",
-	})
-	if string(out.Result) != "1" {
-		t.Errorf("after non-matching label, selectedIndex = %s, want 1 (unchanged)", out.Result)
+	if !strings.Contains(strings.ToLower(errText), "no option with label") {
+		t.Errorf("expected 'no option with label' error, got: %s", errText)
 	}
 }
 

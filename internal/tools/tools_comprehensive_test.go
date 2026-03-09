@@ -777,10 +777,11 @@ func TestConsoleLogSourceField(t *testing.T) {
 	if len(out.Logs) == 0 {
 		t.Skip("no console logs captured")
 	}
-	// Source may be empty in some Chrome versions — just verify we don't crash.
-	// If present, it should be a URL string.
+	// Verify each log entry has the expected fields populated.
 	for _, log := range out.Logs {
-		_ = log.Source // Access the field to verify it exists in the struct.
+		if log.Level == "" {
+			t.Error("log entry has empty level")
+		}
 	}
 }
 

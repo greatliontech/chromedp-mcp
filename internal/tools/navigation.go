@@ -263,36 +263,3 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 		}
 	}
 }
-
-// waitForLifecycle waits for a specific page lifecycle event.
-func waitForLifecycle(ctx context.Context, name string) error {
-	cdpName := name
-	switch name {
-	case "domcontentloaded":
-		cdpName = "DOMContentLoaded"
-	case "networkidle":
-		cdpName = "networkIdle"
-	}
-
-	ch := make(chan struct{}, 1)
-	lctx, lcancel := context.WithCancel(ctx)
-	defer lcancel()
-
-	chromedp.ListenTarget(lctx, func(ev interface{}) {
-		if le, ok := ev.(*page.EventLifecycleEvent); ok {
-			if le.Name == cdpName {
-				select {
-				case ch <- struct{}{}:
-				default:
-				}
-			}
-		}
-	})
-
-	select {
-	case <-ch:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}

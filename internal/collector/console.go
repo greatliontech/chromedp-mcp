@@ -13,7 +13,6 @@ type ConsoleEntry struct {
 	Level     string    `json:"level"`
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
-	Source    string    `json:"source,omitempty"`
 }
 
 // Console collects console.log/warn/error/info/debug messages.

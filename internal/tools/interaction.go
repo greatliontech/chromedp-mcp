@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -207,24 +208,39 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		// Build a JS snippet to select by the appropriate attribute.
+		// Use option.selected = true instead of el.value = X so that
+		// <select multiple> elements are handled correctly.
 		var js string
 		if inp.Value != nil {
-			js = fmt.Sprintf(`document.querySelector(%q).value = %q; document.querySelector(%q).dispatchEvent(new Event('change', {bubbles: true}))`,
-				inp.Selector, *inp.Value, inp.Selector)
+			js = fmt.Sprintf(`(function() {
+				var sel = document.querySelector(%q);
+				if (!sel) throw new Error('element not found');
+				var found = false;
+				for (var i = 0; i < sel.options.length; i++) {
+					if (sel.options[i].value === %q) { sel.options[i].selected = true; found = true; break; }
+				}
+				if (!found) throw new Error('no option with value ' + %q);
+				sel.dispatchEvent(new Event('change', {bubbles: true}));
+			})()`, inp.Selector, *inp.Value, *inp.Value)
 		} else if inp.Label != "" {
 			js = fmt.Sprintf(`(function() {
 				var sel = document.querySelector(%q);
+				if (!sel) throw new Error('element not found');
+				var found = false;
 				for (var i = 0; i < sel.options.length; i++) {
-					if (sel.options[i].text === %q) { sel.selectedIndex = i; break; }
+					if (sel.options[i].text === %q) { sel.options[i].selected = true; found = true; break; }
 				}
+				if (!found) throw new Error('no option with label ' + %q);
 				sel.dispatchEvent(new Event('change', {bubbles: true}));
-			})()`, inp.Selector, inp.Label)
+			})()`, inp.Selector, inp.Label, inp.Label)
 		} else if inp.Index != nil {
 			js = fmt.Sprintf(`(function() {
 				var sel = document.querySelector(%q);
-				sel.selectedIndex = %d;
+				if (!sel) throw new Error('element not found');
+				if (%d < 0 || %d >= sel.options.length) throw new Error('index out of range');
+				sel.options[%d].selected = true;
 				sel.dispatchEvent(new Event('change', {bubbles: true}));
-			})()`, inp.Selector, *inp.Index)
+			})()`, inp.Selector, *inp.Index, *inp.Index, *inp.Index)
 		} else {
 			return nil, struct{}{}, fmt.Errorf("exactly one of value, label, or index must be provided")
 		}
@@ -293,17 +309,38 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		// chromedp doesn't have a direct Hover action. Use MouseClickXY
-		// with just a move by getting element center and dispatching mouseover.
+
+		tctx := t.Context()
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
+		defer cancel()
+
+		// Use chromedp.MouseClickXY coordinates with CDP Input.dispatchMouseEvent
+		// (mouseMoved) so the browser activates its native :hover CSS state.
+		// JS event dispatch alone does NOT trigger :hover pseudo-class.
+		var nodes []*cdp.Node
+		if err := chromedp.Run(sctx, chromedp.Nodes(inp.Selector, &nodes, chromedp.ByQuery)); err != nil {
+			return nil, struct{}{}, err
+		}
+		if len(nodes) == 0 {
+			return nil, struct{}{}, fmt.Errorf("selector %q matched no elements", inp.Selector)
+		}
+
+		// Get element center coordinates via JS (getBoundingClientRect).
+		var coords [2]float64
 		js := fmt.Sprintf(`(function() {
 			var el = document.querySelector(%q);
-			if (!el) throw new Error('element not found');
 			var rect = el.getBoundingClientRect();
-			el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true, clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2}));
-			el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: false, clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2}));
+			return [rect.x + rect.width/2, rect.y + rect.height/2];
 		})()`, inp.Selector)
-		var res interface{}
-		if err := chromedp.Run(t.Context(), chromedp.Evaluate(js, &res)); err != nil {
+		if err := chromedp.Run(tctx, chromedp.Evaluate(js, &coords)); err != nil {
+			return nil, struct{}{}, err
+		}
+
+		// Dispatch a CDP mouseMoved event to the element center.
+		// This triggers the browser's native :hover state.
+		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			return input.DispatchMouseEvent(input.MouseMoved, coords[0], coords[1]).Do(ctx)
+		})); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil

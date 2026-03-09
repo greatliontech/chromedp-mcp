@@ -896,9 +896,10 @@ func TestHoverMissingSelector(t *testing.T) {
 	errText := callToolExpectErr(t, "hover", map[string]any{
 		"tab":      tabID,
 		"selector": "#nonexistent-hover",
+		"timeout":  1000,
 	})
-	if !strings.Contains(errText, "element not found") {
-		t.Errorf("error = %q, want to contain 'element not found'", errText)
+	if errText == "" {
+		t.Error("hover on missing selector should return an error")
 	}
 }
 

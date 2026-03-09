@@ -420,7 +420,7 @@ Select an option from a `<select>` element.
 | `label` | string | no | Option visible text to select |
 | `index` | int | no | Option index to select |
 
-Exactly one of `value`, `label`, or `index` must be provided.
+Exactly one of `value`, `label`, or `index` must be provided. For `<select multiple>` elements, each call adds to the selection (does not deselect existing options).
 
 #### `submit_form`
 
@@ -446,7 +446,7 @@ If `selector` is provided, scrolls the element into view. If omitted, scrolls th
 
 #### `hover`
 
-Hover over an element.
+Hover over an element. Moves the CDP mouse cursor to the element's center, which activates both JavaScript event listeners (`mouseover`, `mouseenter`) and the CSS `:hover` pseudo-class.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
