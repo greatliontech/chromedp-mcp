@@ -3,7 +3,6 @@ package tools
 import (
 	"bytes"
 	"image"
-	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -117,14 +116,18 @@ func TestSaveToDownloadDir(t *testing.T) {
 }
 
 // makePNG creates a solid-colored PNG image of the given dimensions and returns
-// the encoded bytes.
+// the encoded bytes. It fills the pixel buffer directly for performance — the
+// pixel-by-pixel Set() approach is orders of magnitude slower for large images.
 func makePNG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := range h {
-		for x := range w {
-			img.Set(x, y, color.RGBA{R: 100, G: 150, B: 200, A: 255})
-		}
+	// Fill pixel buffer directly: each pixel is 4 bytes (R, G, B, A).
+	pix := img.Pix
+	for i := 0; i < len(pix); i += 4 {
+		pix[i+0] = 100 // R
+		pix[i+1] = 150 // G
+		pix[i+2] = 200 // B
+		pix[i+3] = 255 // A
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
@@ -134,6 +137,11 @@ func makePNG(t *testing.T, w, h int) []byte {
 }
 
 func TestConstrainImageSize(t *testing.T) {
+	// These tests verify dimension math, not image quality. Use small images
+	// that still exceed the maxDim threshold to keep the test fast — PNG
+	// encode/decode and CatmullRom scaling are O(pixels), so 10000x10000
+	// images take minutes while 1000x1000 takes milliseconds.
+
 	t.Run("no-op when within limits", func(t *testing.T) {
 		data := makePNG(t, 800, 600)
 		out, err := constrainImageSize(data, 8000, "png", 0)
@@ -147,8 +155,9 @@ func TestConstrainImageSize(t *testing.T) {
 	})
 
 	t.Run("downscales when width exceeds", func(t *testing.T) {
-		data := makePNG(t, 10000, 5000)
-		out, err := constrainImageSize(data, 8000, "png", 0)
+		// 2000x1000 → maxDim 1600 → 1600x800
+		data := makePNG(t, 2000, 1000)
+		out, err := constrainImageSize(data, 1600, "png", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,17 +166,18 @@ func TestConstrainImageSize(t *testing.T) {
 			t.Fatal(err)
 		}
 		bounds := img.Bounds()
-		if bounds.Dx() != 8000 {
-			t.Errorf("width = %d, want 8000", bounds.Dx())
+		if bounds.Dx() != 1600 {
+			t.Errorf("width = %d, want 1600", bounds.Dx())
 		}
-		if bounds.Dy() != 4000 {
-			t.Errorf("height = %d, want 4000", bounds.Dy())
+		if bounds.Dy() != 800 {
+			t.Errorf("height = %d, want 800", bounds.Dy())
 		}
 	})
 
 	t.Run("downscales when height exceeds", func(t *testing.T) {
-		data := makePNG(t, 750, 16000)
-		out, err := constrainImageSize(data, 8000, "png", 0)
+		// 750x2000 → maxDim 1000 → 375x1000
+		data := makePNG(t, 750, 2000)
+		out, err := constrainImageSize(data, 1000, "png", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,18 +186,19 @@ func TestConstrainImageSize(t *testing.T) {
 			t.Fatal(err)
 		}
 		bounds := img.Bounds()
-		if bounds.Dy() != 8000 {
-			t.Errorf("height = %d, want 8000", bounds.Dy())
+		if bounds.Dy() != 1000 {
+			t.Errorf("height = %d, want 1000", bounds.Dy())
 		}
-		// 750 * (8000/16000) = 375
+		// 750 * (1000/2000) = 375
 		if bounds.Dx() != 375 {
 			t.Errorf("width = %d, want 375", bounds.Dx())
 		}
 	})
 
 	t.Run("downscales jpeg format", func(t *testing.T) {
-		data := makePNG(t, 10000, 10000)
-		out, err := constrainImageSize(data, 5000, "jpeg", 80)
+		// 2000x2000 → maxDim 1000 → 1000x1000
+		data := makePNG(t, 2000, 2000)
+		out, err := constrainImageSize(data, 1000, "jpeg", 80)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -196,14 +207,14 @@ func TestConstrainImageSize(t *testing.T) {
 			t.Fatal(err)
 		}
 		bounds := img.Bounds()
-		if bounds.Dx() != 5000 || bounds.Dy() != 5000 {
-			t.Errorf("dimensions = %dx%d, want 5000x5000", bounds.Dx(), bounds.Dy())
+		if bounds.Dx() != 1000 || bounds.Dy() != 1000 {
+			t.Errorf("dimensions = %dx%d, want 1000x1000", bounds.Dx(), bounds.Dy())
 		}
 	})
 
 	t.Run("exact limit is not downscaled", func(t *testing.T) {
-		data := makePNG(t, 8000, 8000)
-		out, err := constrainImageSize(data, 8000, "png", 0)
+		data := makePNG(t, 1000, 1000)
+		out, err := constrainImageSize(data, 1000, "png", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
