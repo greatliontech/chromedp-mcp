@@ -1,0 +1,22 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build the binary to ./chromedp-mcp
+    cmds:
+      - go build -o chromedp-mcp ./cmd/chromedp-mcp/
+
+  install:
+    desc: Build and install to ~/.local/bin/chromedp-mcp
+    cmds:
+      - go build -o ~/.local/bin/chromedp-mcp ./cmd/chromedp-mcp/
+
+  test:
+    desc: Run all tests with race detector
+    cmds:
+      - go test -race -count=1 -timeout 300s ./...
+
+  test:short:
+    desc: Run a quick subset of tests
+    cmds:
+      - go test -race -count=1 -timeout 60s -run "{{.CLI_ARGS}}" ./internal/tools/
