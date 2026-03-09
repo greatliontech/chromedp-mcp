@@ -782,6 +782,7 @@ func TestClearCookiesIdempotent(t *testing.T) {
 func TestConsoleLogsLevelFilterError(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
@@ -805,6 +806,7 @@ func TestConsoleLogsLevelFilterError(t *testing.T) {
 func TestConsoleLogsLevelFilterLog(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
@@ -828,6 +830,7 @@ func TestConsoleLogsLevelFilterLog(t *testing.T) {
 func TestConsoleLogsLimitWithFilter(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
@@ -847,6 +850,7 @@ func TestConsoleLogsLimitWithFilter(t *testing.T) {
 func TestConsoleLogSourceField(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
@@ -870,6 +874,7 @@ func TestConsoleLogSourceField(t *testing.T) {
 func TestJSErrorsLimit(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":   tabID,
@@ -888,6 +893,7 @@ func TestJSErrorsLimit(t *testing.T) {
 func TestJSErrorsPromiseRejection(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
@@ -914,6 +920,7 @@ func TestJSErrorsPromiseRejection(t *testing.T) {
 func TestJSErrorsDetailedFields(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
@@ -944,6 +951,7 @@ func TestJSErrorsDetailedFields(t *testing.T) {
 func TestNetworkURLPatternNoMatch(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
@@ -962,6 +970,7 @@ func TestNetworkURLPatternNoMatch(t *testing.T) {
 func TestNetworkStatusMinOnly(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
@@ -982,6 +991,7 @@ func TestNetworkStatusMinOnly(t *testing.T) {
 func TestNetworkEntryHeaders(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
@@ -1014,7 +1024,7 @@ func TestGetResponseBodyUnicode(t *testing.T) {
 		"tab":        tabID,
 		"expression": "fetch('/api/unicode')",
 	})
-	time.Sleep(500 * time.Millisecond)
+	waitForNetwork(t, tabID, "/api/unicode")
 
 	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
@@ -1455,6 +1465,8 @@ func TestPerTabCollectorIsolation(t *testing.T) {
 	defer closeTab(t, tab1)
 	tab2 := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tab2)
+	waitForConsole(t, tab1)
+	waitForJSErrors(t, tab2)
 
 	// Tab1 has console logs (log, warn, error).
 	// Tab2 has JS errors.
@@ -1499,6 +1511,7 @@ func TestPerTabNetworkIsolation(t *testing.T) {
 	defer closeTab(t, tab1)
 	tab2 := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tab2)
+	waitForNetwork(t, tab1, "/api/data")
 
 	// Tab1 made fetch calls; tab2 did not.
 	net1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
@@ -1786,6 +1799,7 @@ func TestTypeWithDelayAndClear(t *testing.T) {
 func TestNetworkTypeFilterDocument(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
@@ -1810,6 +1824,7 @@ func TestNetworkTypeFilterDocument(t *testing.T) {
 func TestNetworkTimingFields(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,

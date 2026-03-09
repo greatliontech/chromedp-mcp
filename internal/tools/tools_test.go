@@ -162,6 +162,7 @@ func TestGetAccessibilityTree(t *testing.T) {
 func TestConsoleLogs(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab": tabID,
@@ -185,6 +186,7 @@ func TestConsoleLogs(t *testing.T) {
 func TestJSErrors(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab": tabID,
@@ -207,6 +209,7 @@ func TestJSErrors(t *testing.T) {
 func TestNetworkRequests(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab": tabID,

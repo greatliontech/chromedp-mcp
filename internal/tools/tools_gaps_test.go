@@ -101,8 +101,27 @@ func TestClickTriggersNavigation(t *testing.T) {
 		"selector": "#nav-link",
 	})
 
-	// Wait for navigation to complete.
-	time.Sleep(1 * time.Second)
+	// Poll until the navigation completes and document.title changes.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result := callToolRaw(t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "document.title",
+		})
+		if !result.IsError {
+			if text := contentText(result); strings.Contains(text, "Page 2") {
+				break
+			}
+			// Also check structured content.
+			if result.StructuredContent != nil {
+				b, _ := json.Marshal(result.StructuredContent)
+				if strings.Contains(string(b), "Page 2") {
+					break
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
@@ -473,7 +492,7 @@ func TestNetworkFailedOnly(t *testing.T) {
 		"tab":        tabID,
 		"expression": "fetch('http://127.0.0.1:1/nonexistent').catch(function(){})",
 	})
-	time.Sleep(1 * time.Second)
+	waitForNetwork(t, tabID, "/nonexistent")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
@@ -498,6 +517,7 @@ func TestNetworkFailedOnly(t *testing.T) {
 func TestNetworkCombinedFilters(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
@@ -527,6 +547,7 @@ func TestNetworkCombinedFilters(t *testing.T) {
 func TestNetworkStatusMaxOnly(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
@@ -547,6 +568,7 @@ func TestNetworkStatusMaxOnly(t *testing.T) {
 func TestConsoleDrainWithFilterClearsAll(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	// Drain only "warning" level.
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
@@ -1381,7 +1403,7 @@ func TestConsoleBufferOverflowIntegration(t *testing.T) {
 		"tab":        tabID,
 		"expression": "for (var i = 0; i < 1100; i++) { console.log('msg-' + i); }",
 	})
-	time.Sleep(500 * time.Millisecond)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,

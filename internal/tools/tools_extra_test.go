@@ -552,6 +552,7 @@ func TestGetTextDefaultsToBody(t *testing.T) {
 func TestGetResponseBody(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	// Get network requests to find the /api/data request.
 	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
@@ -584,6 +585,7 @@ func TestGetResponseBody(t *testing.T) {
 func TestGetNetworkRequestsFilters(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	// Filter by URL pattern.
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
@@ -617,6 +619,7 @@ func TestGetNetworkRequestsFilters(t *testing.T) {
 func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	// Peek should not clear the buffer.
 	out1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
@@ -989,6 +992,7 @@ func TestClearCookies(t *testing.T) {
 func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	// First drain — should return logs.
 	out1 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
@@ -1010,6 +1014,7 @@ func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 func TestConsoleLogsLevelFilter(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,

@@ -263,6 +263,9 @@ func contentText(r *mcp.CallToolResult) string {
 
 // navigateToFixture is a helper that navigates a fresh tab to a fixture page.
 // It returns the tab ID. The tab should be closed by the caller.
+//
+// tab_new uses chromedp.Navigate which waits for the load event, so the page
+// (including synchronous inline scripts) is fully loaded when this returns.
 func navigateToFixture(t *testing.T, fixture string) string {
 	t.Helper()
 	out := callTool[TabNewOutput](t, "tab_new", map[string]any{
@@ -271,8 +274,6 @@ func navigateToFixture(t *testing.T, fixture string) string {
 	if out.TabID == "" {
 		t.Fatal("tab_new returned empty tab ID")
 	}
-	// Give the page time to execute inline scripts.
-	time.Sleep(500 * time.Millisecond)
 	return out.TabID
 }
 
@@ -280,4 +281,60 @@ func navigateToFixture(t *testing.T, fixture string) string {
 func closeTab(t *testing.T, tabID string) {
 	t.Helper()
 	callTool[struct{}](t, "tab_close", map[string]any{"tab": tabID})
+}
+
+// waitForConsole polls get_console_logs (peek) until at least one entry is
+// returned or the timeout expires. Use this after navigating to a fixture
+// that emits console messages asynchronously (e.g. via setTimeout).
+func waitForConsole(t *testing.T, tabID string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+			"tab":  tabID,
+			"peek": true,
+		})
+		if len(out.Logs) > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for console logs")
+}
+
+// waitForJSErrors polls get_js_errors (peek) until at least one entry is
+// returned or the timeout expires.
+func waitForJSErrors(t *testing.T, tabID string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+			"tab":  tabID,
+			"peek": true,
+		})
+		if len(out.Errors) > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for JS errors")
+}
+
+// waitForNetwork polls get_network_requests (peek) until at least one entry
+// matching urlPattern is returned or the timeout expires.
+func waitForNetwork(t *testing.T, tabID, urlPattern string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+			"tab":         tabID,
+			"peek":        true,
+			"url_pattern": urlPattern,
+		})
+		if len(out.Requests) > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for network request matching %q", urlPattern)
 }

@@ -658,6 +658,7 @@ func TestSetViewportMobile(t *testing.T) {
 func TestJSErrorsDrainClearsBuffer(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	// First drain.
 	out1 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
@@ -679,6 +680,7 @@ func TestJSErrorsDrainClearsBuffer(t *testing.T) {
 func TestJSErrorsPeek(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	// Peek should not clear the buffer.
 	out1 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
@@ -701,6 +703,7 @@ func TestJSErrorsPeek(t *testing.T) {
 func TestJSErrorsEntryFields(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
@@ -732,6 +735,7 @@ func TestJSErrorsEntryFields(t *testing.T) {
 func TestGetNetworkRequestsTypeFilter(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	// Filter by XHR type.
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
@@ -749,6 +753,7 @@ func TestGetNetworkRequestsTypeFilter(t *testing.T) {
 func TestGetNetworkRequestsLimit(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":   tabID,
@@ -763,6 +768,7 @@ func TestGetNetworkRequestsLimit(t *testing.T) {
 func TestGetNetworkRequestEntryFields(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
@@ -797,6 +803,7 @@ func TestGetNetworkRequestEntryFields(t *testing.T) {
 func TestGetResponseBodyBinary(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForNetwork(t, tabID, "/image.png")
 
 	// The page loads /image.png. Find its request ID.
 	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
@@ -1240,6 +1247,7 @@ func TestGetCoverageAll(t *testing.T) {
 func TestConsoleLogsLimit(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	// index.html emits at least 3 console messages (log, warn, error).
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
@@ -1255,6 +1263,7 @@ func TestConsoleLogsLimit(t *testing.T) {
 func TestConsoleLogsPeekIdempotence(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out1 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
@@ -1272,6 +1281,7 @@ func TestConsoleLogsPeekIdempotence(t *testing.T) {
 func TestConsoleLogEntryFields(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
+	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
@@ -1303,7 +1313,6 @@ func TestActiveTabDefault(t *testing.T) {
 		"url": fixtureURL("page2.html"),
 	})
 	defer closeTab(t, tabOut.TabID)
-	time.Sleep(500 * time.Millisecond)
 
 	// Call get_text WITHOUT the tab parameter — should use the active tab.
 	out := callTool[GetTextOutput](t, "get_text", map[string]any{})
@@ -1340,6 +1349,7 @@ func TestGetLayoutShiftsEmpty(t *testing.T) {
 func TestClearConsoleAlsoClearsJSErrors(t *testing.T) {
 	tabID := navigateToFixture(t, "errors.html")
 	defer closeTab(t, tabID)
+	waitForJSErrors(t, tabID)
 
 	// Verify JS errors exist.
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
