@@ -78,8 +78,10 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, AddScriptOutput{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		var identifier page.ScriptIdentifier
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			var e error
 			identifier, e = page.AddScriptToEvaluateOnNewDocument(input.Source).Do(ctx)
 			return e
@@ -102,7 +104,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.RemoveScriptToEvaluateOnNewDocument(page.ScriptIdentifier(input.Identifier)).Do(ctx)
 		}))
 		return nil, struct{}{}, err
@@ -125,7 +129,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			headers[k] = v
 		}
 
-		err = chromedp.Run(t.Context(), cdpnetwork.SetExtraHTTPHeaders(headers))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, cdpnetwork.SetExtraHTTPHeaders(headers))
 		return nil, struct{}{}, err
 	})
 
@@ -157,7 +163,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			params = params.WithOrigin(input.Origin)
 		}
 
-		err = chromedp.Run(t.Context(), params)
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, params)
 		return nil, struct{}{}, err
 	})
 
@@ -185,7 +193,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			params = params.WithFeatures(features)
 		}
 
-		err = chromedp.Run(t.Context(), params)
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, params)
 		return nil, struct{}{}, err
 	})
 
@@ -201,7 +211,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), security.SetIgnoreCertificateErrors(input.Ignore))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, security.SetIgnoreCertificateErrors(input.Ignore))
 		return nil, struct{}{}, err
 	})
 }

@@ -74,8 +74,10 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, GetPerformanceMetricsOutput{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		var metrics []*performance.Metric
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			if err := performance.Enable().Do(ctx); err != nil {
 				return err
 			}
@@ -142,7 +144,9 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 
 		var entries []CoverageEntry
 
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			if coverageType == "js" || coverageType == "all" {
 				if err := profiler.Enable().Do(ctx); err != nil {
 					return err

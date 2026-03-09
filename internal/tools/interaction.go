@@ -132,7 +132,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 
@@ -194,7 +195,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 
 		var actions chromedp.Tasks
 		if inp.Clear {
@@ -250,7 +252,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, fmt.Errorf("exactly one of value, label, or index must be provided, not multiple")
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 
 		// Wait for the selector to appear in the DOM before running JS.
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
@@ -313,7 +316,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 
 		// Wait for the selector to appear in the DOM before running JS.
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
@@ -348,7 +352,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, ScrollOutput{}, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		if inp.Selector != "" {
 			sctx, cancel := selectorContext(tctx, inp.Timeout)
 			defer cancel()
@@ -385,7 +390,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 
@@ -429,7 +435,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, chromedp.Focus(inp.Selector, chromedp.ByQuery)); err != nil {
@@ -483,8 +490,10 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		// Use chromedp's kb.Encode to generate the full CDP event sequence
 		// (KeyDown + optional KeyChar + KeyUp) with correct code, virtual
 		// key codes, and text fields.
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		events := kb.Encode(r)
-		if err := chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			for _, ev := range events {
 				ev.Modifiers |= modifiers
 				if err := ev.Do(ctx); err != nil {
@@ -506,7 +515,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, chromedp.SetUploadFiles(inp.Selector, inp.Paths, chromedp.ByQuery)); err != nil {
@@ -524,7 +534,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			params := page.HandleJavaScriptDialog(inp.Accept)
 			if inp.Text != "" {
 				params = params.WithPromptText(inp.Text)

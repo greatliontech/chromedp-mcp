@@ -41,7 +41,8 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, nil, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 
 		if input.Selector != "" {
 			// Wait for the element using selectorContext, then execute

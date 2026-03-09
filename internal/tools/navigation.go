@@ -67,7 +67,8 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, NavigateOutput{}, err
 		}
 
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		waitEvent := "load"
 		if input.WaitUntil != "" {
 			switch input.WaitUntil {
@@ -113,13 +114,17 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, NavigateOutput{}, err
 		}
 
-		// Wait for the lifecycle event if needed.
+		// Wait for the lifecycle event if needed. Use a bounded timeout
+		// so that pages with persistent connections (WebSocket, long-polling)
+		// that never reach networkIdle don't hang indefinitely.
 		if lifecycleCh != nil {
+			waitCtx, waitCancel := context.WithTimeout(tctx, defaultLifecycleTimeout)
+			defer waitCancel()
 			select {
 			case <-lifecycleCh:
 				// Event received — proceed.
-			case <-tctx.Done():
-				return nil, NavigateOutput{}, tctx.Err()
+			case <-waitCtx.Done():
+				return nil, NavigateOutput{}, fmt.Errorf("timed out waiting for %q lifecycle event", waitEvent)
 			}
 		}
 
@@ -146,7 +151,8 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, ReloadOutput{}, err
 		}
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		if input.BypassCache {
 			// chromedp.Reload() doesn't expose the IgnoreCache
 			// option, but it wraps page.Reload in responseAction
@@ -180,7 +186,9 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		if err := chromedp.Run(t.Context(), navigateHistory(-1)); err != nil {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		if err := chromedp.Run(tctx, navigateHistory(-1)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -195,7 +203,9 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		if err := chromedp.Run(t.Context(), navigateHistory(+1)); err != nil {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		if err := chromedp.Run(tctx, navigateHistory(+1)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -221,12 +231,15 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+
 		timeout := 30 * time.Second
 		if input.Timeout > 0 {
 			timeout = time.Duration(input.Timeout) * time.Millisecond
 		}
 
-		tctx, cancel := context.WithTimeout(t.Context(), timeout)
+		tctx, cancel := context.WithTimeout(tctx, timeout)
 		defer cancel()
 
 		if input.Selector != "" {

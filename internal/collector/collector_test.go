@@ -197,6 +197,41 @@ func TestRingBufferConcurrentAccess(t *testing.T) {
 	}
 }
 
+// ===========================================================================
+// Fix: RingBuffer panic guard (collector.go)
+//
+// NewRingBuffer now clamps maxSize to 1 if <= 0, preventing panics from
+// make([]T, 0, negative) and rb.entries[-1] on Add.
+// ===========================================================================
+
+func TestRingBufferZeroMaxSize(t *testing.T) {
+	// Previously this would panic with "makeslice: cap out of range" or
+	// "index out of range [-1]" on the first Add.
+	buf := NewRingBuffer[int](0)
+	buf.Add(42) // should not panic
+	if buf.Len() != 1 {
+		t.Errorf("len = %d, want 1 (maxSize clamped to 1)", buf.Len())
+	}
+	entries := buf.Drain(nil)
+	if len(entries) != 1 || entries[0] != 42 {
+		t.Errorf("drain = %v, want [42]", entries)
+	}
+}
+
+func TestRingBufferNegativeMaxSize(t *testing.T) {
+	// Negative maxSize should also be clamped to 1.
+	buf := NewRingBuffer[int](-5)
+	buf.Add(1)
+	buf.Add(2) // should evict 1 since maxSize=1
+	if buf.Len() != 1 {
+		t.Errorf("len = %d, want 1", buf.Len())
+	}
+	entries := buf.Drain(nil)
+	if len(entries) != 1 || entries[0] != 2 {
+		t.Errorf("drain = %v, want [2]", entries)
+	}
+}
+
 func TestRingBufferDrainThenAdd(t *testing.T) {
 	buf := NewRingBuffer[int](5)
 	buf.Add(1)

@@ -94,7 +94,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			params = params.WithAccuracy(1)
 		}
 
-		err = chromedp.Run(t.Context(), params)
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, params)
 		return nil, struct{}{}, err
 	})
 
@@ -110,7 +112,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), emulation.SetTimezoneOverride(input.TimezoneID))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, emulation.SetTimezoneOverride(input.TimezoneID))
 		return nil, struct{}{}, err
 	})
 
@@ -126,7 +130,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), emulation.SetLocaleOverride().WithLocale(input.Locale))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, emulation.SetLocaleOverride().WithLocale(input.Locale))
 		return nil, struct{}{}, err
 	})
 
@@ -150,7 +156,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			params = params.WithPlatform(input.Platform)
 		}
 
-		err = chromedp.Run(t.Context(), params)
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, params)
 		return nil, struct{}{}, err
 	})
 
@@ -171,7 +179,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			rate = 1
 		}
 
-		err = chromedp.Run(t.Context(), emulation.SetCPUThrottlingRate(rate))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, emulation.SetCPUThrottlingRate(rate))
 		return nil, struct{}{}, err
 	})
 
@@ -201,7 +211,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, fmt.Errorf("invalid vision deficiency type %q: must be none, blurredVision, reducedContrast, achromatopsia, deuteranopia, protanopia, or tritanopia", input.Type)
 		}
 
-		err = chromedp.Run(t.Context(), emulation.SetEmulatedVisionDeficiency(defType))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, emulation.SetEmulatedVisionDeficiency(defType))
 		return nil, struct{}{}, err
 	})
 
@@ -226,7 +238,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			upload = -1
 		}
 
-		err = chromedp.Run(t.Context(), cdpnetwork.EmulateNetworkConditions(input.Offline, input.Latency, download, upload))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, cdpnetwork.EmulateNetworkConditions(input.Offline, input.Latency, download, upload))
 		return nil, struct{}{}, err
 	})
 
@@ -247,7 +261,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			patterns = []string{}
 		}
 
-		err = chromedp.Run(t.Context(), cdpnetwork.SetBlockedURLs(patterns))
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, cdpnetwork.SetBlockedURLs(patterns))
 		return nil, struct{}{}, err
 	})
 }

@@ -13,7 +13,11 @@ type RingBuffer[T any] struct {
 }
 
 // NewRingBuffer creates a ring buffer with the given maximum capacity.
+// If maxSize is less than 1, it is clamped to 1.
 func NewRingBuffer[T any](maxSize int) *RingBuffer[T] {
+	if maxSize < 1 {
+		maxSize = 1
+	}
 	return &RingBuffer[T]{
 		entries: make([]T, 0, min(maxSize, 64)),
 		maxSize: maxSize,

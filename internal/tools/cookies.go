@@ -71,8 +71,10 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, GetCookiesOutput{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		var cookies []*network.Cookie
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			params := network.GetCookies()
 			if len(input.URLs) > 0 {
 				params = params.WithURLs(input.URLs)
@@ -115,7 +117,9 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			params := network.SetCookie(input.Name, input.Value)
 			if input.Domain != "" {
 				params = params.WithDomain(input.Domain)
@@ -158,7 +162,9 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			if input.Name == "" {
 				// No name specified — clear all browser cookies.
 				return network.ClearBrowserCookies().Do(ctx)

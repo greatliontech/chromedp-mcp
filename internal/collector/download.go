@@ -106,6 +106,11 @@ func (d *Download) HandleDownloadProgress(ev *browser.EventDownloadProgress) {
 
 		entry.State = DownloadStateCanceled
 		entry.EndTime = time.Now()
+	default:
+		// Unknown state (future Chrome versions may add new states).
+		// Release the lock and ignore — don't add to the buffer.
+		d.mu.Unlock()
+		return
 	}
 
 	d.buf.Add(*entry)

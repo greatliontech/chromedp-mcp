@@ -3,6 +3,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,6 +66,31 @@ type SelectorInput struct {
 // window to appear while keeping failures bounded.
 const defaultSelectorTimeout = 5 * time.Second
 
+// defaultLifecycleTimeout is the maximum time to wait for a navigation
+// lifecycle event (e.g. networkIdle, DOMContentLoaded) after the initial
+// page load. Pages with persistent WebSocket connections or long-polling
+// may never reach networkIdle, so this prevents indefinite hangs.
+const defaultLifecycleTimeout = 30 * time.Second
+
+// tabContext creates a child of the tab's context (tctx) that is also
+// cancelled when the MCP request context (reqCtx) is done. This ensures
+// that if the MCP client disconnects or cancels a request, in-flight
+// CDP operations are terminated. The returned cancel must always be called.
+//
+// The child is derived from tctx (not reqCtx) because chromedp stores
+// internal target state keyed by context — the context hierarchy must
+// descend from the tab's context for chromedp.Run to work.
+func tabContext(reqCtx, tctx context.Context) (context.Context, context.CancelFunc) {
+	child, cancel := context.WithCancelCause(tctx)
+	stop := context.AfterFunc(reqCtx, func() {
+		cancel(context.Cause(reqCtx))
+	})
+	return child, func() {
+		stop()
+		cancel(nil)
+	}
+}
+
 // selectorContext returns a context bounded by the user-specified timeout
 // (in milliseconds) or the default selector timeout.
 func selectorContext(ctx context.Context, timeoutMs int) (context.Context, context.CancelFunc) {
@@ -87,7 +113,7 @@ func selectorError(parentCtx context.Context, selector string, err error) error 
 		// Parent context is dead (browser killed, etc.) — return as-is.
 		return err
 	}
-	if err != context.DeadlineExceeded && err.Error() != "context deadline exceeded" {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	// The selector timed out. Check if the element exists in the DOM.

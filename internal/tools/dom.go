@@ -205,7 +205,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		includeText := input.Text == nil || *input.Text
 
 		var nodes []*cdp.Node
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		if err := chromedp.Run(sctx, chromedp.Nodes(input.Selector, &nodes, chromedp.ByQueryAll)); err != nil {
@@ -232,19 +233,19 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 			if includeText {
 				var text string
-				if err := chromedp.Run(t.Context(), chromedp.TextContent(node.FullXPath(), &text, chromedp.BySearch)); err == nil {
+				if err := chromedp.Run(tctx, chromedp.TextContent(node.FullXPath(), &text, chromedp.BySearch)); err == nil {
 					elem.Text = text
 				}
 			}
 			if input.OuterHTML {
 				var html string
-				if err := chromedp.Run(t.Context(), chromedp.OuterHTML(node.FullXPath(), &html, chromedp.BySearch)); err == nil {
+				if err := chromedp.Run(tctx, chromedp.OuterHTML(node.FullXPath(), &html, chromedp.BySearch)); err == nil {
 					elem.OuterHTML = html
 				}
 			}
 			if len(input.ComputedStyle) > 0 {
 				var styles []*css.ComputedStyleProperty
-				if err := chromedp.Run(t.Context(), chromedp.ComputedStyle(node.FullXPath(), &styles, chromedp.BySearch)); err == nil {
+				if err := chromedp.Run(tctx, chromedp.ComputedStyle(node.FullXPath(), &styles, chromedp.BySearch)); err == nil {
 					cs := make(map[string]string)
 					wanted := make(map[string]bool)
 					for _, p := range input.ComputedStyle {
@@ -260,7 +261,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 			if input.BBox {
 				var model *dom.BoxModel
-				if err := chromedp.Run(t.Context(), chromedp.Dimensions(node.FullXPath(), &model, chromedp.BySearch)); err == nil && model != nil {
+				if err := chromedp.Run(tctx, chromedp.Dimensions(node.FullXPath(), &model, chromedp.BySearch)); err == nil && model != nil {
 					elem.BBox = &BoundingBox{
 						X:      model.Content[0],
 						Y:      model.Content[1],
@@ -295,7 +296,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		outer := input.Outer == nil || *input.Outer
 		var html string
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		if outer {
@@ -328,7 +330,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		var text string
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		var action chromedp.QueryAction
@@ -359,7 +362,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		interestingOnly := input.InterestingOnly == nil || *input.InterestingOnly
 
 		var nodes []*axNode
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		runCtx := tctx
 		if input.Selector != "" {
 			var cancel context.CancelFunc

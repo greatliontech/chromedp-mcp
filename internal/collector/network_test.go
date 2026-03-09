@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 )
@@ -235,6 +236,129 @@ func TestNetworkClear(t *testing.T) {
 	entries := n.Drain(nil, 0)
 	if len(entries) != 0 {
 		t.Errorf("after Clear, buffer = %d, want 0", len(entries))
+	}
+}
+
+// ===========================================================================
+// Fix: Download collector mutex deadlock (download.go)
+//
+// HandleDownloadProgress previously had no default case in its switch
+// statement. If an unexpected DownloadProgressState arrived, the mutex
+// would never be unlocked, causing a deadlock on the next call.
+// The fix adds a default case that unlocks and returns.
+// ===========================================================================
+
+func TestDownloadProgressConcurrent(t *testing.T) {
+	d := NewDownload(100, "")
+
+	var wg sync.WaitGroup
+	const numDownloads = 50
+
+	for i := 0; i < numDownloads; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			guid := fmt.Sprintf("guid-%d", idx)
+
+			d.HandleDownloadWillBegin(&browser.EventDownloadWillBegin{
+				GUID:              guid,
+				URL:               fmt.Sprintf("http://example.com/file-%d.txt", idx),
+				SuggestedFilename: fmt.Sprintf("file-%d.txt", idx),
+			})
+
+			d.HandleDownloadProgress(&browser.EventDownloadProgress{
+				GUID:          guid,
+				ReceivedBytes: 100,
+				TotalBytes:    200,
+				State:         browser.DownloadProgressStateInProgress,
+			})
+
+			// Complete or cancel based on index.
+			if idx%2 == 0 {
+				d.HandleDownloadProgress(&browser.EventDownloadProgress{
+					GUID:          guid,
+					ReceivedBytes: 200,
+					TotalBytes:    200,
+					State:         browser.DownloadProgressStateCompleted,
+				})
+			} else {
+				d.HandleDownloadProgress(&browser.EventDownloadProgress{
+					GUID:          guid,
+					ReceivedBytes: 100,
+					TotalBytes:    200,
+					State:         browser.DownloadProgressStateCanceled,
+				})
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	entries := d.Drain(0)
+	if len(entries) != numDownloads {
+		t.Errorf("expected %d entries, got %d", numDownloads, len(entries))
+	}
+
+	var completed, canceled int
+	for _, e := range entries {
+		switch e.State {
+		case DownloadStateCompleted:
+			completed++
+		case DownloadStateCanceled:
+			canceled++
+		}
+	}
+	if completed != numDownloads/2 {
+		t.Errorf("expected %d completed, got %d", numDownloads/2, completed)
+	}
+	if canceled != numDownloads/2 {
+		t.Errorf("expected %d canceled, got %d", numDownloads/2, canceled)
+	}
+}
+
+func TestDownloadProgressUnknownState(t *testing.T) {
+	d := NewDownload(10, "")
+
+	d.HandleDownloadWillBegin(&browser.EventDownloadWillBegin{
+		GUID:              "test-guid",
+		URL:               "http://example.com/file.txt",
+		SuggestedFilename: "file.txt",
+	})
+
+	// Send an unknown state. Previously this would deadlock because the
+	// mutex was never unlocked in the default case.
+	d.HandleDownloadProgress(&browser.EventDownloadProgress{
+		GUID:          "test-guid",
+		ReceivedBytes: 50,
+		TotalBytes:    100,
+		State:         browser.DownloadProgressState("unknownState"),
+	})
+
+	// If we get here without deadlocking, the fix works.
+	// The unknown state should NOT add an entry to the completed buffer.
+	entries := d.Drain(0)
+	if len(entries) != 0 {
+		t.Errorf("unknown state should not add to buffer, got %d entries", len(entries))
+	}
+
+	// The entry should still be in pending (unknown state doesn't remove it).
+	d.mu.Lock()
+	pendingLen := len(d.pending)
+	d.mu.Unlock()
+	if pendingLen != 1 {
+		t.Errorf("entry should still be pending after unknown state, got %d", pendingLen)
+	}
+
+	// Now send a real completion — should work without deadlock.
+	d.HandleDownloadProgress(&browser.EventDownloadProgress{
+		GUID:          "test-guid",
+		ReceivedBytes: 100,
+		TotalBytes:    100,
+		State:         browser.DownloadProgressStateCompleted,
+	})
+
+	entries = d.Drain(0)
+	if len(entries) != 1 {
+		t.Errorf("after real completion, expected 1 entry, got %d", len(entries))
 	}
 }
 

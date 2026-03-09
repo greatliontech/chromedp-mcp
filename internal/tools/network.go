@@ -86,8 +86,10 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, GetResponseBodyOutput{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		var bodyBytes []byte
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			var err error
 			bodyBytes, err = cdpnetwork.GetResponseBody(cdpnetwork.RequestID(input.RequestID)).Do(ctx)
 			return err

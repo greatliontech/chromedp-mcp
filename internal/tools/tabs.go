@@ -57,7 +57,9 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		out := TabNewOutput{TabID: t.ID}
 		if input.URL != "" {
-			if err := chromedp.Run(t.Context(), chromedp.Navigate(input.URL)); err != nil {
+			tctx, tcancel := tabContext(ctx, t.Context())
+			defer tcancel()
+			if err := chromedp.Run(tctx, chromedp.Navigate(input.URL)); err != nil {
 				return nil, TabNewOutput{}, err
 			}
 			out.URL = input.URL

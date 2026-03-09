@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -63,7 +65,8 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		}
 
 		var buf []byte
-		tctx := t.Context()
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 
 		// Compute the CDP screenshot format/quality parameters once.
 		format := page.CaptureScreenshotFormatPng
@@ -77,9 +80,11 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		}
 
 		if input.Selector != "" {
-			// Element screenshot. Use chromedp.ScreenshotScale which
-			// sets clip.Scale on the CDP command — Chrome renders the
-			// element at the target resolution directly (GPU-accelerated).
+			// Element screenshot. We build the CDP command manually so
+			// that format and quality are respected (chromedp.ScreenshotScale
+			// hardcodes PNG). The approach mirrors chromedp's ScreenshotNodes:
+			// query the element's bounding rect, round it like Puppeteer does,
+			// then call Page.captureScreenshot with the computed clip.
 			scale := 1.0
 			if input.MaxDimension > 0 {
 				scale, err = elementScale(tctx, input.Selector, input.MaxDimension)
@@ -87,7 +92,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 					return nil, struct{}{}, err
 				}
 			}
-			err = chromedp.Run(tctx, chromedp.ScreenshotScale(input.Selector, scale, &buf, chromedp.NodeVisible))
+			err = chromedp.Run(tctx, elementScreenshot(input.Selector, format, jpegQuality, scale, &buf))
 		} else {
 			// Viewport or full-page screenshot. Build the CDP command
 			// directly so we can set format, quality, and clip.Scale.
@@ -164,8 +169,10 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			return nil, struct{}{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		var pdfData []byte
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			printBg := input.PrintBackground == nil || *input.PrintBackground
 			params := page.PrintToPDF().WithPrintBackground(printBg)
 			if input.Landscape {
@@ -232,12 +239,14 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			return nil, struct{}{}, err
 		}
 
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
 		scale := input.DeviceScaleFactor
 		if scale <= 0 {
 			scale = 1.0
 		}
 
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			return emulation.SetDeviceMetricsOverride(int64(input.Width), int64(input.Height), scale, input.Mobile).Do(ctx)
 		}))
 		if err != nil {
@@ -312,6 +321,64 @@ func captureClip(ctx context.Context, fullPage bool, maxDim int) (*page.Viewport
 		Height: h,
 		Scale:  scale,
 	}, scale, nil
+}
+
+// elementScreenshot captures a screenshot of the element matching selector with
+// the given format, quality, and scale. It mirrors chromedp's ScreenshotNodes
+// logic (bounding rect → rounded clip → CaptureScreenshot) but allows the
+// caller to specify format and quality instead of hardcoding PNG.
+func elementScreenshot(selector string, format page.CaptureScreenshotFormat, quality int64, scale float64, buf *[]byte) chromedp.QueryAction {
+	return chromedp.QueryAfter(selector, func(ctx context.Context, _ runtime.ExecutionContextID, nodes ...*cdp.Node) error {
+		if len(nodes) < 1 {
+			return fmt.Errorf("selector %q did not return any nodes", selector)
+		}
+
+		// Get the element's bounding client rect via callFunctionOnNode.
+		// chromedp doesn't export this helper, so we use JavaScript to
+		// compute the same result that ScreenshotNodes uses internally.
+		var rect struct {
+			X      float64 `json:"x"`
+			Y      float64 `json:"y"`
+			Width  float64 `json:"width"`
+			Height float64 `json:"height"`
+		}
+		js := fmt.Sprintf(`(() => {
+			const el = document.querySelector(%q);
+			if (!el) return null;
+			const r = el.getBoundingClientRect();
+			return {x: r.x, y: r.y, width: r.width, height: r.height};
+		})()`, selector)
+		if err := chromedp.Evaluate(js, &rect).Do(ctx); err != nil {
+			return fmt.Errorf("getting bounding rect for %q: %w", selector, err)
+		}
+
+		// Round coordinates the same way Puppeteer and chromedp do to
+		// handle fractional dimensions properly.
+		x, y := math.Round(rect.X), math.Round(rect.Y)
+		w := math.Round(rect.Width + rect.X - x)
+		h := math.Round(rect.Height + rect.Y - y)
+
+		clip := &page.Viewport{
+			X:      x,
+			Y:      y,
+			Width:  w,
+			Height: h,
+			Scale:  scale,
+		}
+
+		params := page.CaptureScreenshot().
+			WithFormat(format).
+			WithCaptureBeyondViewport(true).
+			WithFromSurface(true).
+			WithClip(clip)
+		if quality > 0 {
+			params = params.WithQuality(quality)
+		}
+
+		var err error
+		*buf, err = params.Do(ctx)
+		return err
+	}, chromedp.NodeVisible)
 }
 
 // elementScale returns the scale factor needed to fit an element within
