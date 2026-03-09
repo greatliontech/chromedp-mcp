@@ -4,15 +4,44 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
 )
+
+// namedKeys maps key names used in the press_key MCP tool to the chromedp
+// kb package rune constants. These runes are then passed to kb.Encode which
+// generates the full CDP DispatchKeyEvent sequence with correct code,
+// virtual key codes, and text fields.
+var namedKeys map[string]rune
+
+func init() {
+	// Build the named key map from chromedp's kb constants. The constants
+	// are UTF-8 encoded strings that may be multi-byte.
+	entries := map[string]string{
+		"Enter": kb.Enter, "Tab": kb.Tab, "Backspace": kb.Backspace,
+		"Delete": kb.Delete, "Escape": kb.Escape,
+		"ArrowDown": kb.ArrowDown, "ArrowLeft": kb.ArrowLeft,
+		"ArrowRight": kb.ArrowRight, "ArrowUp": kb.ArrowUp,
+		"Home": kb.Home, "End": kb.End,
+		"PageDown": kb.PageDown, "PageUp": kb.PageUp,
+		"F1": kb.F1, "F2": kb.F2, "F3": kb.F3, "F4": kb.F4,
+		"F5": kb.F5, "F6": kb.F6, "F7": kb.F7, "F8": kb.F8,
+		"F9": kb.F9, "F10": kb.F10, "F11": kb.F11, "F12": kb.F12,
+	}
+	namedKeys = make(map[string]rune, len(entries))
+	for name, s := range entries {
+		r, _ := utf8.DecodeRuneInString(s)
+		namedKeys[name] = r
+	}
+}
 
 // ClickInput is the input for click.
 type ClickInput struct {
@@ -98,15 +127,24 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		tctx := t.Context()
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
+		defer cancel()
 
 		if inp.ClickCount == 2 {
-			sctx, cancel := selectorContext(tctx, inp.Timeout)
-			defer cancel()
-			return nil, struct{}{}, chromedp.Run(sctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery))
+			err := chromedp.Run(sctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery))
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 		}
 
 		// For non-standard buttons or click counts, use JS dispatch.
+		// First wait for the element to be visible (same as chromedp.Click),
+		// then dispatch the events via JS.
 		if inp.Button == "right" || inp.Button == "middle" || inp.ClickCount > 2 {
+			// Wait for visible element.
+			var nodes []*cdp.Node
+			if err := chromedp.Run(sctx, chromedp.Nodes(inp.Selector, &nodes, chromedp.ByQuery, chromedp.NodeVisible)); err != nil {
+				return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+			}
+
 			button := 0
 			switch inp.Button {
 			case "right":
@@ -137,9 +175,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, nil
 		}
 
-		sctx, cancel := selectorContext(tctx, inp.Timeout)
-		defer cancel()
-		return nil, struct{}{}, chromedp.Run(sctx, chromedp.Click(inp.Selector, chromedp.ByQuery))
+		err = chromedp.Run(sctx, chromedp.Click(inp.Selector, chromedp.ByQuery))
+		return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -178,7 +215,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, actions); err != nil {
-			return nil, struct{}{}, err
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 		}
 		return nil, struct{}{}, nil
 	})
@@ -286,14 +323,18 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
+		tctx := t.Context()
 		if inp.Selector != "" {
-			sctx, cancel := selectorContext(t.Context(), inp.Timeout)
+			sctx, cancel := selectorContext(tctx, inp.Timeout)
 			defer cancel()
 			err = chromedp.Run(sctx, chromedp.ScrollIntoView(inp.Selector, chromedp.ByQuery))
+			if err != nil {
+				return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+			}
 		} else {
 			js := fmt.Sprintf("window.scrollBy(%d, %d)", inp.X, inp.Y)
 			var res interface{}
-			err = chromedp.Run(t.Context(), chromedp.Evaluate(js, &res))
+			err = chromedp.Run(tctx, chromedp.Evaluate(js, &res))
 		}
 		if err != nil {
 			return nil, struct{}{}, err
@@ -319,7 +360,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		// JS event dispatch alone does NOT trigger :hover pseudo-class.
 		var nodes []*cdp.Node
 		if err := chromedp.Run(sctx, chromedp.Nodes(inp.Selector, &nodes, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, err
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 		}
 		if len(nodes) == 0 {
 			return nil, struct{}{}, fmt.Errorf("selector %q matched no elements", inp.Selector)
@@ -354,10 +395,11 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		sctx, cancel := selectorContext(t.Context(), inp.Timeout)
+		tctx := t.Context()
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, chromedp.Focus(inp.Selector, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, err
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 		}
 		return nil, struct{}{}, nil
 	})
@@ -385,17 +427,35 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 		}
 
+		// Resolve the key to a rune for kb.Encode. Named keys (Enter, Tab,
+		// ArrowDown, etc.) map to special chromedp runes. Single characters
+		// map directly.
+		var r rune
+		if mapped, ok := namedKeys[inp.Key]; ok {
+			r = mapped
+		} else if len(inp.Key) == 1 {
+			r = rune(inp.Key[0])
+		} else {
+			// Try decoding as a single UTF-8 rune.
+			decoded, size := utf8.DecodeRuneInString(inp.Key)
+			if decoded == utf8.RuneError || size != len(inp.Key) {
+				return nil, struct{}{}, fmt.Errorf("unknown key: %q", inp.Key)
+			}
+			r = decoded
+		}
+
+		// Use chromedp's kb.Encode to generate the full CDP event sequence
+		// (KeyDown + optional KeyChar + KeyUp) with correct code, virtual
+		// key codes, and text fields.
+		events := kb.Encode(r)
 		if err := chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
-			down := input.DispatchKeyEvent(input.KeyDown).WithKey(inp.Key).WithModifiers(modifiers)
-			// For single printable characters, set the text field so the
-			// character is inserted into focused input/textarea elements.
-			if len(inp.Key) == 1 && modifiers == 0 {
-				down = down.WithText(inp.Key)
+			for _, ev := range events {
+				ev.Modifiers |= modifiers
+				if err := ev.Do(ctx); err != nil {
+					return err
+				}
 			}
-			if err := down.Do(ctx); err != nil {
-				return err
-			}
-			return input.DispatchKeyEvent(input.KeyUp).WithKey(inp.Key).WithModifiers(modifiers).Do(ctx)
+			return nil
 		})); err != nil {
 			return nil, struct{}{}, err
 		}
@@ -410,10 +470,11 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		sctx, cancel := selectorContext(t.Context(), inp.Timeout)
+		tctx := t.Context()
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, chromedp.SetUploadFiles(inp.Selector, inp.Paths, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, err
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 		}
 		return nil, struct{}{}, nil
 	})

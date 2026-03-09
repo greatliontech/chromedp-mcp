@@ -121,10 +121,11 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		includeText := input.Text == nil || *input.Text
 
 		var nodes []*cdp.Node
-		sctx, scancel := selectorContext(t.Context(), input.Timeout)
+		tctx := t.Context()
+		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		if err := chromedp.Run(sctx, chromedp.Nodes(input.Selector, &nodes, chromedp.ByQueryAll)); err != nil {
-			return nil, QueryOutput{}, err
+			return nil, QueryOutput{}, selectorError(tctx, input.Selector, err)
 		}
 
 		total := len(nodes)
@@ -210,7 +211,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		outer := input.Outer == nil || *input.Outer
 		var html string
-		sctx, scancel := selectorContext(t.Context(), input.Timeout)
+		tctx := t.Context()
+		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		if outer {
 			err = chromedp.Run(sctx, chromedp.OuterHTML(selector, &html, chromedp.ByQuery))
@@ -218,7 +220,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			err = chromedp.Run(sctx, chromedp.InnerHTML(selector, &html, chromedp.ByQuery))
 		}
 		if err != nil {
-			return nil, GetHTMLOutput{}, err
+			return nil, GetHTMLOutput{}, selectorError(tctx, selector, err)
 		}
 		return nil, GetHTMLOutput{HTML: html}, nil
 	})
@@ -242,7 +244,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		var text string
-		sctx, scancel := selectorContext(t.Context(), input.Timeout)
+		tctx := t.Context()
+		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		var action chromedp.QueryAction
 		if input.Hidden {
@@ -251,7 +254,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			action = chromedp.Text(selector, &text, chromedp.ByQuery)
 		}
 		if err := chromedp.Run(sctx, action); err != nil {
-			return nil, GetTextOutput{}, err
+			return nil, GetTextOutput{}, selectorError(tctx, selector, err)
 		}
 		return nil, GetTextOutput{Text: text}, nil
 	})
@@ -273,12 +276,13 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		var axNodes []*accessibility.Node
 		tctx := t.Context()
+		runCtx := tctx
 		if input.Selector != "" {
 			var cancel context.CancelFunc
-			tctx, cancel = selectorContext(tctx, input.Timeout)
+			runCtx, cancel = selectorContext(tctx, input.Timeout)
 			defer cancel()
 		}
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Run(runCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 			if input.Selector != "" {
 				// Get the DOM node ID for the selector first.
 				var nodes []*cdp.Node
@@ -305,6 +309,9 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			return err
 		}))
 		if err != nil {
+			if input.Selector != "" {
+				return nil, nil, selectorError(tctx, input.Selector, err)
+			}
 			return nil, nil, err
 		}
 

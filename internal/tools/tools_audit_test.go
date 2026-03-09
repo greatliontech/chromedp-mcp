@@ -132,7 +132,11 @@ func TestSelectOptionEmptyValue(t *testing.T) {
 // ===========================================================================
 
 func TestNavigateUnreachableURL(t *testing.T) {
+	tab := callTool[TabNewOutput](t, "tab_new", map[string]any{})
+	defer closeTab(t, tab.TabID)
+
 	errText := callToolExpectErr(t, "navigate", map[string]any{
+		"tab": tab.TabID,
 		"url": "http://192.0.2.1:1/unreachable", // TEST-NET address, guaranteed unreachable
 	})
 	if errText == "" {

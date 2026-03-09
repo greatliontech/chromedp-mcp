@@ -447,3 +447,189 @@ func TestSelectOptionByValueNonexistent(t *testing.T) {
 		t.Errorf("expected 'no option with value' error, got: %s", errText)
 	}
 }
+
+// ===========================================================================
+// Click: hidden element (display:none) should timeout with clear error
+// ===========================================================================
+
+func TestClickHiddenElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// #hidden-btn is display:none. click should fail with a clear message
+	// that the element exists but is not visible.
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#hidden-btn",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Fatal("click on hidden element should error")
+	}
+	if !strings.Contains(errText, "not visible") {
+		t.Errorf("error should mention 'not visible', got: %s", errText)
+	}
+}
+
+// ===========================================================================
+// Click: right-click on hidden element should also fail with clear error
+// ===========================================================================
+
+func TestClickRightHiddenElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#hidden-btn",
+		"button":   "right",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Fatal("right-click on hidden element should error")
+	}
+	if !strings.Contains(errText, "not visible") {
+		t.Errorf("error should mention 'not visible', got: %s", errText)
+	}
+}
+
+// ===========================================================================
+// Click: non-existent element should fail with clear "not found" error
+// ===========================================================================
+
+func TestClickNonExistentElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#does-not-exist",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Fatal("click on non-existent element should error")
+	}
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error should mention 'not found', got: %s", errText)
+	}
+}
+
+// ===========================================================================
+// Click: zero-size element (chromedp clicks it — element exists in DOM)
+// ===========================================================================
+
+func TestClickZeroSizeElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// chromedp clicks zero-size elements without error (they exist in DOM,
+	// just have no visual dimensions). This matches browser behavior —
+	// you can programmatically click hidden inputs.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#zero-size-input",
+	})
+}
+
+// ===========================================================================
+// Click: Wikipedia-like pattern — click toggle reveals input, then click input
+// ===========================================================================
+
+func TestClickToggleRevealsElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// The wiki-search-input is initially hidden. Clicking the toggle reveals it.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#wiki-search-toggle",
+	})
+
+	// Now the input should be visible and clickable.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#wiki-search-input",
+	})
+
+	// Verify the input is focused.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.activeElement.id",
+	})
+	if string(out.Result) != `"wiki-search-input"` {
+		t.Errorf("active element = %s, want wiki-search-input", out.Result)
+	}
+}
+
+// ===========================================================================
+// Press Enter: submits a search form
+// ===========================================================================
+
+func TestPressEnterSubmitsForm(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Type into search input.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#search-input",
+		"text":     "test query",
+	})
+
+	// Press Enter — should trigger form submission.
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Enter",
+	})
+
+	// Give the submit handler time to fire.
+	time.Sleep(100 * time.Millisecond)
+
+	// Check that the form's submit handler was called.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent",
+	})
+	if string(out.Result) != `"submitted:test query"` {
+		t.Errorf("form submit result = %s, want 'submitted:test query'", out.Result)
+	}
+}
+
+// ===========================================================================
+// Press Enter: in a focused input, Enter submits the form
+// ===========================================================================
+
+func TestPressEnterAfterFocus(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Focus the search input explicitly, then type + Enter.
+	callTool[struct{}](t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#search-input",
+	})
+
+	// Type using press_key character by character.
+	for _, ch := range "hello" {
+		callTool[struct{}](t, "press_key", map[string]any{
+			"tab": tabID,
+			"key": string(ch),
+		})
+	}
+
+	// Press Enter.
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Enter",
+	})
+
+	time.Sleep(100 * time.Millisecond)
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent",
+	})
+	if string(out.Result) != `"submitted:hello"` {
+		t.Errorf("form submit after focus+type = %s, want 'submitted:hello'", out.Result)
+	}
+}

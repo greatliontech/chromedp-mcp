@@ -30,6 +30,25 @@
     <div id="triple-click-output"></div>
     <div id="scroll-x-target" style="width: 3000px; height: 10px; background: #ddd;"></div>
 
+    <!-- Hidden element: exists in DOM but display:none -->
+    <button id="hidden-btn" style="display:none">Hidden Button</button>
+
+    <!-- Zero-size element: exists but has no dimensions (like Wikipedia's collapsed search) -->
+    <input id="zero-size-input" type="text" style="width:0;height:0;padding:0;border:0;overflow:hidden">
+
+    <!-- Search form: tests Enter key submission -->
+    <form id="search-form" action="/submit" method="get">
+        <input id="search-input" type="search" name="q" placeholder="Search...">
+        <button type="submit">Search</button>
+    </form>
+    <div id="search-submitted"></div>
+
+    <!-- Wikipedia-like pattern: hidden input revealed by clicking a toggle -->
+    <div id="wiki-search">
+        <button id="wiki-search-toggle" onclick="document.getElementById('wiki-search-input').style.display='block'">Open Search</button>
+        <input id="wiki-search-input" type="text" style="display:none" placeholder="Wiki search...">
+    </div>
+
     <script>
         var clicks = 0;
         document.getElementById('click-target').addEventListener('click', function() {
@@ -69,6 +88,13 @@
             if (e.altKey) parts.push('Alt');
             if (e.metaKey) parts.push('Meta');
             document.getElementById('key-output').textContent = parts.join('+');
+        });
+
+        // Track search form submission (prevent actual navigation).
+        document.getElementById('search-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var q = document.getElementById('search-input').value;
+            document.getElementById('search-submitted').textContent = 'submitted:' + q;
         });
     </script>
 </body>

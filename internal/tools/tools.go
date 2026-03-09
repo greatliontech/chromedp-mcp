@@ -3,8 +3,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
@@ -50,4 +52,33 @@ func selectorContext(ctx context.Context, timeoutMs int) (context.Context, conte
 		d = time.Duration(timeoutMs) * time.Millisecond
 	}
 	return context.WithTimeout(ctx, d)
+}
+
+// selectorError wraps a selector timeout error with a more descriptive
+// message. When the error is a context deadline exceeded, it checks the
+// DOM to distinguish "element not found" from "element exists but not
+// visible". parentCtx must be the tab's context (not the timed-out one).
+func selectorError(parentCtx context.Context, selector string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx_err := context.Cause(parentCtx); ctx_err != nil {
+		// Parent context is dead (browser killed, etc.) — return as-is.
+		return err
+	}
+	if err != context.DeadlineExceeded && err.Error() != "context deadline exceeded" {
+		return err
+	}
+	// The selector timed out. Check if the element exists in the DOM.
+	var exists bool
+	checkCtx, cancel := context.WithTimeout(parentCtx, 500*time.Millisecond)
+	defer cancel()
+	js := fmt.Sprintf("document.querySelector(%q) !== null", selector)
+	if evalErr := chromedp.Run(checkCtx, chromedp.Evaluate(js, &exists)); evalErr != nil {
+		return err // Can't check, return original error.
+	}
+	if exists {
+		return fmt.Errorf("element %q exists but is not visible (timed out waiting for it to become visible)", selector)
+	}
+	return fmt.Errorf("element %q not found in the DOM (timed out waiting for it to appear)", selector)
 }
