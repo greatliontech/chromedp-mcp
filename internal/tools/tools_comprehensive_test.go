@@ -647,7 +647,7 @@ func TestUploadMultipleFiles(t *testing.T) {
 func TestSetCookieCustomPath(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	callTool[struct{}](t, "set_cookie", map[string]any{
 		"tab":    tabID,
@@ -673,7 +673,7 @@ func TestSetCookieCustomPath(t *testing.T) {
 func TestSetCookieSameSite(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	callTool[struct{}](t, "set_cookie", map[string]any{
 		"tab":       tabID,
@@ -698,7 +698,7 @@ func TestSetCookieSameSite(t *testing.T) {
 func TestSetCookieWithExpires(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	// Set expiry 1 hour from now.
 	expiry := float64(time.Now().Add(time.Hour).Unix())
@@ -729,7 +729,7 @@ func TestSetCookieWithExpires(t *testing.T) {
 func TestDeleteCookieWithoutDomain(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	callTool[struct{}](t, "set_cookie", map[string]any{
 		"tab":    tabID,
@@ -766,7 +766,7 @@ func TestDeleteNonexistentCookie(t *testing.T) {
 }
 
 // ===========================================================================
-// Cookies: clear_cookies idempotent (double clear)
+// Cookies: delete_cookies idempotent (double clear)
 // ===========================================================================
 
 func TestClearCookiesIdempotent(t *testing.T) {
@@ -774,8 +774,8 @@ func TestClearCookiesIdempotent(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Clear when nothing exists — should not error.
-	callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
-	callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 }
 
 // ===========================================================================
@@ -1076,14 +1076,14 @@ func TestEvaluatePromiseRejection(t *testing.T) {
 }
 
 // ===========================================================================
-// JS eval: evaluate_on_selector with expression that throws
+// JS eval: evaluate with selector with expression that throws
 // ===========================================================================
 
 func TestEvaluateOnSelectorExpressionThrows(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "evaluate_on_selector", map[string]any{
+	errText := callToolExpectErr(t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "throw new Error('element expression error')",
@@ -1839,7 +1839,7 @@ func TestNetworkTimingFields(t *testing.T) {
 func TestCookieSizeField(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	callTool[struct{}](t, "set_cookie", map[string]any{
 		"tab":    tabID,
@@ -1885,7 +1885,7 @@ func TestSetViewportDefaultScaleFactor(t *testing.T) {
 }
 
 // ===========================================================================
-// evaluate_on_selector: access element classList and dataset
+// evaluate with selector: access element classList and dataset
 // ===========================================================================
 
 func TestEvaluateOnSelectorElementProperties(t *testing.T) {
@@ -1893,7 +1893,7 @@ func TestEvaluateOnSelectorElementProperties(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Test classList.
-	out := callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   ".content",
 		"expression": "return Array.from(el.classList);",
@@ -1903,7 +1903,7 @@ func TestEvaluateOnSelectorElementProperties(t *testing.T) {
 	}
 
 	// Test getAttribute.
-	out = callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "return el.getAttribute('id');",
@@ -1914,14 +1914,14 @@ func TestEvaluateOnSelectorElementProperties(t *testing.T) {
 }
 
 // ===========================================================================
-// evaluate_on_selector: expression without return (returns undefined)
+// evaluate with selector: expression without return (returns undefined)
 // ===========================================================================
 
 func TestEvaluateOnSelectorNoReturn(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "el.textContent;", // No return statement.

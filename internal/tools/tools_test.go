@@ -247,13 +247,13 @@ func TestEvaluateOnSelector(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "return el.textContent",
 	})
 	if string(out.Result) != `"Hello World"` {
-		t.Errorf("evaluate_on_selector result = %s, want \"Hello World\"", out.Result)
+		t.Errorf("evaluate with selector result = %s, want \"Hello World\"", out.Result)
 	}
 }
 

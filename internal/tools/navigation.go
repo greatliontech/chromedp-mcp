@@ -54,6 +54,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "navigate",
 		Description: "Navigate a tab to a URL. Returns the final URL (after redirects), page title, and HTTP status code.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input NavigateInput) (*mcp.CallToolResult, NavigateOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -126,6 +127,9 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "reload",
 		Description: "Reload the current page.",
+		Annotations: &mcp.ToolAnnotations{
+			IdempotentHint: true,
+		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReloadInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -150,6 +154,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "go_back",
 		Description: "Navigate back in browser history.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GoBackInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -164,6 +169,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "go_forward",
 		Description: "Navigate forward in browser history.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GoForwardInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Emulation Test</title>
+</head>
+<body>
+  <h1 id="title">Emulation Test Page</h1>
+  <p id="timezone"></p>
+  <p id="locale"></p>
+  <p id="user-agent"></p>
+  <p id="geolocation"></p>
+
+  <script>
+    // Report timezone.
+    document.getElementById('timezone').textContent =
+      Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    // Report locale.
+    document.getElementById('locale').textContent = navigator.language;
+
+    // Report user agent.
+    document.getElementById('user-agent').textContent = navigator.userAgent;
+  </script>
+</body>
+</html>

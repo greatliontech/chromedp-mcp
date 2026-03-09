@@ -38,6 +38,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerPerformanceTools(s, mgr)
 	registerDownloadTools(s, mgr)
 	registerConfigTools(s, mgr)
+	registerEmulationTools(s, mgr)
 }
 
 // ptrBool returns a pointer to a bool value.
@@ -45,10 +46,17 @@ func ptrBool(v bool) *bool {
 	return &v
 }
 
-// TabInput is embedded by tool inputs that operate on a tab.
+// TabInput is embedded by tool inputs that operate on a tab but do not
+// involve CSS selector polling.
 type TabInput struct {
-	Tab     string `json:"tab,omitempty" jsonschema:"Tab ID. If omitted uses the active tab."`
-	Timeout int    `json:"timeout,omitempty" jsonschema:"Max time in milliseconds to wait for selectors (default 5000). Set lower for elements known to be present."`
+	Tab string `json:"tab,omitempty" jsonschema:"Tab ID. If omitted uses the active tab."`
+}
+
+// SelectorInput is embedded by tool inputs that involve CSS selector polling
+// with a configurable timeout. It extends TabInput with a Timeout field.
+type SelectorInput struct {
+	TabInput
+	Timeout int `json:"timeout,omitempty" jsonschema:"Max time in milliseconds to wait for selectors (default 5000). Set lower for elements known to be present."`
 }
 
 // defaultSelectorTimeout is the default timeout for selector-based chromedp

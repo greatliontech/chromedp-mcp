@@ -122,9 +122,9 @@ Close a tab.
 
 If the active tab is closed, the most recently used remaining tab becomes active.
 
-### Implicit Browser and Tab Creation
+### Explicit Browser and Tab Lifecycle
 
-If no browser exists when a tool that requires one is called (e.g., `navigate`), a headless browser is launched automatically with default settings. Similarly, if no tab exists, one is created automatically. This keeps the common case simple — the LLM can just call `navigate` without any setup.
+No implicit auto-creation. If no browser exists when a tool that requires one is called, an error is returned telling the LLM to call `browser_launch` or `browser_connect`. Similarly, if no tab exists, the error tells the LLM to call `tab_new`.
 
 ## Event Collectors
 
@@ -363,27 +363,17 @@ Returns: the response body as text, or base64 for binary responses.
 
 #### `evaluate`
 
-Execute JavaScript in the page context.
+Execute JavaScript in the page context. When a selector is provided, the first matching element is passed as the first argument to the expression.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `expression` | string | yes | JavaScript expression to evaluate |
+| `selector` | string | no | CSS selector. If provided, the first matched element is passed as the first argument. |
+| `timeout` | int | no | Max time in milliseconds to wait for selector (default 5000). Only used when `selector` is set. |
 | `await_promise` | bool | no | If the expression returns a Promise, wait for it to resolve (default `true`) |
 
 Returns: the evaluation result as JSON, or an error description if the evaluation threw.
-
-#### `evaluate_on_selector`
-
-Execute JavaScript with the first element matching a selector available as the first argument.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector |
-| `expression` | string | yes | JavaScript function body. The matched element is passed as the first argument. |
-
-Returns: the evaluation result.
 
 ### Interaction
 
@@ -525,22 +515,14 @@ Set a browser cookie.
 
 #### `delete_cookies`
 
-Delete cookies.
+Delete cookies by name, or clear all cookies when name is omitted.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `name` | string | yes | Cookie name to delete |
+| `name` | string | no | Cookie name to delete. If omitted, deletes all cookies. |
 | `domain` | string | no | Scope deletion to a domain |
 | `path` | string | no | Scope deletion to a path |
-
-#### `clear_cookies`
-
-Clear all browser cookies.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
 
 ### Performance & Diagnostics
 
@@ -655,6 +637,89 @@ Ignore or enforce TLS certificate errors. Enable to test against local dev serve
 | `tab` | string | no | Tab ID |
 | `ignore` | bool | yes | If true, all certificate errors will be ignored. |
 
+### Emulation
+
+#### `set_geolocation`
+
+Override device geolocation. Omit all coordinate fields to reset. Requires geolocation permission to be granted via `set_permission`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `latitude` | float | no | Mock latitude (-90 to 90). Omit all fields to reset. |
+| `longitude` | float | no | Mock longitude (-180 to 180). Omit all fields to reset. |
+| `accuracy` | float | no | Mock accuracy in meters (default 1 when coordinates are set). |
+
+#### `set_timezone`
+
+Override timezone. Uses IANA timezone IDs.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `timezone_id` | string | yes | IANA timezone ID (e.g. `"America/New_York"`, `"Europe/London"`, `"Asia/Tokyo"`). Empty string resets to default. |
+
+#### `set_locale`
+
+Override browser locale. Affects `Intl` APIs (number/date formatting).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `locale` | string | yes | ICU locale (e.g. `"en_US"`, `"fr_FR"`, `"ja_JP"`). Empty string resets to default. |
+
+#### `set_user_agent`
+
+Override the browser user agent string.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `user_agent` | string | yes | User agent string to use. |
+| `accept_language` | string | no | Browser language to emulate (e.g. `"en-US"`, `"fr-FR"`). |
+| `platform` | string | no | Platform `navigator.platform` should return (e.g. `"Win32"`, `"MacIntel"`). |
+
+#### `set_cpu_throttling`
+
+Throttle CPU to simulate slow devices.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `rate` | float | yes | Throttling rate (1 = no throttle, 2 = 2x slowdown, 4 = 4x slowdown). Set to 1 to disable. |
+
+#### `set_vision_deficiency`
+
+Simulate vision deficiencies for accessibility testing.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `type` | string | yes | `"none"`, `"blurredVision"`, `"reducedContrast"`, `"achromatopsia"`, `"deuteranopia"`, `"protanopia"`, `"tritanopia"` |
+
+### Network Control
+
+#### `emulate_network`
+
+Emulate network conditions (offline, latency, throttled bandwidth). Call with all defaults to reset.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `offline` | bool | no | Simulate offline mode (default `false`) |
+| `latency` | float | no | Minimum latency in milliseconds (0 to disable) |
+| `download_throughput` | float | no | Maximum download throughput in bytes/sec (-1 = disabled) |
+| `upload_throughput` | float | no | Maximum upload throughput in bytes/sec (-1 = disabled) |
+
+#### `block_urls`
+
+Block URLs matching patterns. Supports `*` wildcards.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `patterns` | []string | yes | URL patterns to block. Pass empty array to clear. |
+
 ## Internal Architecture
 
 ### Package Structure
@@ -685,10 +750,11 @@ chromedp-mcp/
       dom.go            # query, get_html, get_text, get_accessibility_tree
       console.go        # get_console_logs, get_js_errors, clear_console
       network.go        # get_network_requests, get_response_body
-      js.go             # evaluate, evaluate_on_selector
+      js.go             # evaluate (with optional selector)
       interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, handle_dialog
-      cookies.go        # get_cookies, set_cookie, delete_cookies, clear_cookies
+      cookies.go        # get_cookies, set_cookie, delete_cookies
       performance.go    # get_performance_metrics, get_layout_shifts, get_coverage
+      emulation.go      # set_geolocation, set_timezone, set_locale, set_user_agent, set_cpu_throttling, set_vision_deficiency, emulate_network, block_urls
 ```
 
 ### Key Types
@@ -742,7 +808,7 @@ type RingBuffer[T any] struct {
 ### Lifecycle
 
 1. **Startup**: Create `browser.Manager` (empty — no browser yet). Create MCP `Server`. Register all tools. Run `server.Run(ctx, StdioTransport)`.
-2. **First tool call**: If no browser exists, a headless browser is launched automatically with defaults. If no tab exists, one is created automatically.
+2. **First tool call**: If no browser exists, the tool returns an error telling the LLM to call `browser_launch` or `browser_connect`. Same for missing tabs.
 3. **Browser creation**: `browser_launch` calls `chromedp.NewExecAllocator` + `chromedp.NewContext`. `browser_connect` calls `chromedp.NewRemoteAllocator` + `chromedp.NewContext`. Both create a `tab.Manager` for the browser.
 4. **Tab creation**: `tab.Manager.NewTab()` calls `chromedp.NewContext(browserCtx)`, starts CDP event listeners (`ListenTarget`), creates collectors, returns tab ID.
 5. **Tool execution**: Tool handler resolves the target tab (explicit ID → active tab → auto-create), executes chromedp actions on the tab's context, reads from collectors as needed, returns the result.
@@ -794,10 +860,11 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Cookies (`get_cookies`) | true | false | true |
 | Cookies (`set_cookie`) | false | false | true |
 | Cookies (`delete_cookies`) | false | true | false |
-| Cookies (`clear_cookies`) | false | true | true |
 | Performance (`get_performance_metrics`) | true | false | true |
 | Performance (`get_layout_shifts` drain) | false | false | false |
 | Performance (`get_coverage`) | true | false | true |
+| Emulation (`set_geolocation`, `set_timezone`, `set_locale`, `set_user_agent`, `set_cpu_throttling`, `set_vision_deficiency`) | false | false | true |
+| Network (`emulate_network`, `block_urls`) | false | false | true |
 
 ## Configuration
 
@@ -826,19 +893,11 @@ Features not in the initial scope but supported by CDP and worth adding later.
 ### Network Control
 
 - **Request Interception** — Intercept, modify, mock, or fail network requests via `fetch` domain. Enables testing error states, simulating API responses, and injecting faults.
-- **Network Throttling** — Simulate slow connections (3G, offline) via `network.EmulateNetworkConditions`. Useful for testing loading states and offline behavior.
-- **Block URLs** — Block specific URL patterns via `network.SetBlockedURLs`. Useful for testing graceful degradation when resources fail to load.
 - **Certificate Inspection** — Get site certificate details via `network.GetCertificate`.
 
 ### Emulation
 
-- **Geolocation** — Override device geolocation via `emulation.SetGeolocationOverride`. Useful for testing location-dependent features.
 - **Device Emulation** — Emulate specific devices (iPhone, Pixel, etc.) with appropriate viewport, user agent, touch, and device scale factor.
-- **Timezone** — Override timezone via `emulation.SetTimezoneOverride`. Useful for testing date/time display.
-- **Locale** — Override locale via `emulation.SetLocaleOverride`. Useful for testing i18n.
-- **Vision Deficiency** — Simulate color blindness and blurred vision via `emulation.SetEmulatedVisionDeficiency`. Useful for accessibility testing.
-- **CPU Throttling** — Slow down JavaScript execution via `emulation.SetCPUThrottlingRate`. Useful for testing performance on low-end devices.
-- **User Agent** — Override the browser user agent string via `emulation.SetUserAgentOverride`.
 
 ### Security & Auth
 

@@ -666,13 +666,13 @@ func TestEvaluateOnSelectorNoMatch(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "evaluate_on_selector", map[string]any{
+	errText := callToolExpectErr(t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#nonexistent",
 		"expression": "return el.textContent",
 	})
-	if !strings.Contains(errText, "matched no elements") {
-		t.Errorf("evaluate_on_selector error = %q, want 'matched no elements'", errText)
+	if !strings.Contains(errText, "not found") && !strings.Contains(errText, "matched no elements") {
+		t.Errorf("evaluate with selector error = %q, want 'not found' or 'matched no elements'", errText)
 	}
 }
 
@@ -883,9 +883,10 @@ func TestSubmitFormMissingSelector(t *testing.T) {
 	errText := callToolExpectErr(t, "submit_form", map[string]any{
 		"tab":      tabID,
 		"selector": "#nonexistent-form",
+		"timeout":  1000,
 	})
-	if !strings.Contains(errText, "element not found") {
-		t.Errorf("error = %q, want to contain 'element not found'", errText)
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error = %q, want to contain 'not found'", errText)
 	}
 }
 
@@ -973,12 +974,12 @@ func TestClearCookies(t *testing.T) {
 	})
 
 	// Clear all cookies.
-	callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	// Verify none remain.
 	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
 	if len(out.Cookies) != 0 {
-		t.Errorf("after clear_cookies, expected 0 cookies, got %d", len(out.Cookies))
+		t.Errorf("after delete_cookies, expected 0 cookies, got %d", len(out.Cookies))
 	}
 }
 

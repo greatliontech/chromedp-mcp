@@ -897,7 +897,7 @@ func TestEvaluateOnSelectorSideEffect(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Modify the element via the expression.
-	callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "el.textContent = 'Modified'; return el.textContent;",
@@ -909,7 +909,7 @@ func TestEvaluateOnSelectorSideEffect(t *testing.T) {
 		"expression": "document.getElementById('title').textContent",
 	})
 	if !strings.Contains(string(out.Result), "Modified") {
-		t.Errorf("after evaluate_on_selector side effect, text = %s, want 'Modified'", out.Result)
+		t.Errorf("after evaluate with selector side effect, text = %s, want 'Modified'", out.Result)
 	}
 }
 
@@ -926,13 +926,13 @@ func TestEvaluateOnSelectorReturnTypes(t *testing.T) {
 		{"return el.id === 'title';", "true"},
 	}
 	for _, tc := range tests {
-		out := callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"selector":   "#title",
 			"expression": tc.expr,
 		})
 		if string(out.Result) != tc.want {
-			t.Errorf("evaluate_on_selector(%s) = %s, want %s", tc.expr, out.Result, tc.want)
+			t.Errorf("evaluate with selector(%s) = %s, want %s", tc.expr, out.Result, tc.want)
 		}
 	}
 }
@@ -1020,7 +1020,7 @@ func TestCookieFields(t *testing.T) {
 		"domain":    "127.0.0.1",
 		"http_only": true,
 	})
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
 	var found *CookieInfo
@@ -1057,7 +1057,7 @@ func TestSetCookieDefaultPath(t *testing.T) {
 		"value":  "pv",
 		"domain": "127.0.0.1",
 	})
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
 	for _, c := range out.Cookies {

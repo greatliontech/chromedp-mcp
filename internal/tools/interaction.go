@@ -45,7 +45,7 @@ func init() {
 
 // ClickInput is the input for click.
 type ClickInput struct {
-	TabInput
+	SelectorInput
 	Selector   string `json:"selector" jsonschema:"CSS selector of the element to click"`
 	Button     string `json:"button,omitempty" jsonschema:"Mouse button: left (default) right middle"`
 	ClickCount int    `json:"click_count,omitempty" jsonschema:"Number of clicks (default 1 use 2 for double-click)"`
@@ -53,7 +53,7 @@ type ClickInput struct {
 
 // TypeInput is the input for type.
 type TypeInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector" jsonschema:"CSS selector of the input element"`
 	Text     string `json:"text" jsonschema:"Text to type"`
 	Clear    bool   `json:"clear,omitempty" jsonschema:"Clear the field before typing (default false)"`
@@ -62,7 +62,7 @@ type TypeInput struct {
 
 // SelectOptionInput is the input for select_option.
 type SelectOptionInput struct {
-	TabInput
+	SelectorInput
 	Selector string  `json:"selector" jsonschema:"CSS selector of the select element"`
 	Value    *string `json:"value,omitempty" jsonschema:"Option value to select"`
 	Label    string  `json:"label,omitempty" jsonschema:"Option visible text to select"`
@@ -71,13 +71,13 @@ type SelectOptionInput struct {
 
 // SubmitFormInput is the input for submit_form.
 type SubmitFormInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector" jsonschema:"CSS selector of the form or an element within the form"`
 }
 
 // ScrollInput is the input for scroll.
 type ScrollInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector,omitempty" jsonschema:"CSS selector to scroll into view. If omitted scrolls the page."`
 	X        int    `json:"x,omitempty" jsonschema:"Horizontal scroll offset in pixels"`
 	Y        int    `json:"y,omitempty" jsonschema:"Vertical scroll offset in pixels"`
@@ -85,13 +85,13 @@ type ScrollInput struct {
 
 // HoverInput is the input for hover.
 type HoverInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector" jsonschema:"CSS selector of the element to hover over"`
 }
 
 // FocusInput is the input for focus.
 type FocusInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector" jsonschema:"CSS selector of the element to focus"`
 }
 
@@ -104,7 +104,7 @@ type PressKeyInput struct {
 
 // UploadFilesInput is the input for upload_files.
 type UploadFilesInput struct {
-	TabInput
+	SelectorInput
 	Selector string   `json:"selector" jsonschema:"CSS selector of the file input element"`
 	Paths    []string `json:"paths" jsonschema:"Absolute file paths to set"`
 }
@@ -244,6 +244,15 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, fmt.Errorf("exactly one of value, label, or index must be provided, not multiple")
 		}
 
+		tctx := t.Context()
+
+		// Wait for the selector to appear in the DOM before running JS.
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
+		defer cancel()
+		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+		}
+
 		// Build a JS snippet to select by the appropriate attribute.
 		// Use option.selected = true instead of el.value = X so that
 		// <select multiple> elements are handled correctly.
@@ -283,7 +292,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		var res interface{}
-		if err := chromedp.Run(t.Context(), chromedp.Evaluate(js, &res)); err != nil {
+		if err := chromedp.Run(tctx, chromedp.Evaluate(js, &res)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -297,6 +306,16 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
+
+		tctx := t.Context()
+
+		// Wait for the selector to appear in the DOM before running JS.
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
+		defer cancel()
+		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+		}
+
 		// Use requestSubmit() which fires the submit event (unlike the
 		// native .submit() method used by chromedp.Submit). This allows
 		// JS submit handlers and e.preventDefault() to work correctly.
@@ -308,7 +327,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			form.requestSubmit();
 		})()`, inp.Selector)
 		var res interface{}
-		if err := chromedp.Run(t.Context(), chromedp.Evaluate(js, &res)); err != nil {
+		if err := chromedp.Run(tctx, chromedp.Evaluate(js, &res)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil

@@ -43,6 +43,7 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_console_logs",
 		Description: "Get captured console messages (log, warn, error, info, debug). By default drains (returns and clears) the buffer.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetConsoleLogsInput) (*mcp.CallToolResult, GetConsoleLogsOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -64,6 +65,7 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_js_errors",
 		Description: "Get captured JavaScript exceptions and promise rejections. By default drains (returns and clears) the buffer.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetJSErrorsInput) (*mcp.CallToolResult, GetJSErrorsOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

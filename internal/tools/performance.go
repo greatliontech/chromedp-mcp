@@ -97,6 +97,7 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_layout_shifts",
 		Description: "Get Cumulative Layout Shift (CLS) data. By default drains the buffer.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetLayoutShiftsInput) (*mcp.CallToolResult, GetLayoutShiftsOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

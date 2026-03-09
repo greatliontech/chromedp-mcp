@@ -52,14 +52,9 @@ type SetCookieInput struct {
 // DeleteCookiesInput is the input for delete_cookies.
 type DeleteCookiesInput struct {
 	TabInput
-	Name   string `json:"name" jsonschema:"Cookie name to delete"`
+	Name   string `json:"name,omitempty" jsonschema:"Cookie name to delete. If omitted deletes all cookies."`
 	Domain string `json:"domain,omitempty" jsonschema:"Scope deletion to a domain"`
 	Path   string `json:"path,omitempty" jsonschema:"Scope deletion to a path"`
-}
-
-// ClearCookiesInput is the input for clear_cookies.
-type ClearCookiesInput struct {
-	TabInput
 }
 
 func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
@@ -153,7 +148,7 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_cookies",
-		Description: "Delete cookies by name, optionally scoped to a domain and path.",
+		Description: "Delete cookies by name, optionally scoped to a domain and path. If name is omitted, deletes all cookies.",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: ptrBool(true),
 		},
@@ -164,6 +159,10 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+			if input.Name == "" {
+				// No name specified — clear all browser cookies.
+				return network.ClearBrowserCookies().Do(ctx)
+			}
 			params := network.DeleteCookies(input.Name)
 			if input.Domain != "" {
 				params = params.WithDomain(input.Domain)
@@ -172,28 +171,6 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 				params = params.WithPath(input.Path)
 			}
 			return params.Do(ctx)
-		}))
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		return nil, struct{}{}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "clear_cookies",
-		Description: "Clear all browser cookies.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: ptrBool(true),
-			IdempotentHint:  true,
-		},
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ClearCookiesInput) (*mcp.CallToolResult, struct{}, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-
-		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.ClearBrowserCookies().Do(ctx)
 		}))
 		if err != nil {
 			return nil, struct{}{}, err

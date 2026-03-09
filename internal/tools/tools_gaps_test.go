@@ -343,7 +343,7 @@ func TestPressKeyMetaModifier(t *testing.T) {
 func TestCookieOverwrite(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	// Set cookie with value "v1".
 	callTool[struct{}](t, "set_cookie", map[string]any{
@@ -385,7 +385,7 @@ func TestCookieOverwrite(t *testing.T) {
 func TestSetCookieSameSiteStrict(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	callTool[struct{}](t, "set_cookie", map[string]any{
 		"tab":       tabID,
@@ -414,7 +414,7 @@ func TestSetCookieSameSiteStrict(t *testing.T) {
 func TestDeleteCookieWithPath(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	callTool[struct{}](t, "set_cookie", map[string]any{
 		"tab":    tabID,
@@ -449,7 +449,7 @@ func TestGetCookiesNoCookies(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Clear any existing cookies first.
-	callTool[struct{}](t, "clear_cookies", map[string]any{"tab": tabID})
+	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 
 	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
 	if out.Cookies == nil {
@@ -734,7 +734,7 @@ func TestPDFPageRanges(t *testing.T) {
 }
 
 // ===========================================================================
-// JS: evaluate_on_selector first match (querySelector returns first)
+// JS: evaluate with selector first match (querySelector returns first)
 // ===========================================================================
 
 func TestEvaluateOnSelectorFirstMatch(t *testing.T) {
@@ -742,7 +742,7 @@ func TestEvaluateOnSelectorFirstMatch(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// .content matches two <p> elements. Should use the first one.
-	out := callTool[EvaluateOnSelectorOutput](t, "evaluate_on_selector", map[string]any{
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   ".content",
 		"expression": "return el.textContent;",

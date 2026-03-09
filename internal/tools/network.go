@@ -46,6 +46,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_network_requests",
 		Description: "Get captured network requests with their URLs, methods, status codes, timing, and headers. By default drains the buffer.",
+		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkRequestsInput) (*mcp.CallToolResult, GetNetworkRequestsOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

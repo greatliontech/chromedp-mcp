@@ -101,7 +101,7 @@ func getPartialAXTree(ctx context.Context, backendNodeID cdp.BackendNodeID, fetc
 
 // QueryInput is the input for query.
 type QueryInput struct {
-	TabInput
+	SelectorInput
 	Selector      string   `json:"selector" jsonschema:"CSS selector"`
 	Limit         int      `json:"limit,omitempty" jsonschema:"Max elements to return (default 10)"`
 	Attributes    *bool    `json:"attributes,omitempty" jsonschema:"Include element attributes (default true)"`
@@ -138,7 +138,7 @@ type QueryOutput struct {
 
 // GetHTMLInput is the input for get_html.
 type GetHTMLInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector,omitempty" jsonschema:"CSS selector to scope to a subtree. If omitted returns the full page."`
 	Outer    *bool  `json:"outer,omitempty" jsonschema:"Return outer HTML (default true). If false returns inner HTML."`
 }
@@ -150,7 +150,7 @@ type GetHTMLOutput struct {
 
 // GetTextInput is the input for get_text.
 type GetTextInput struct {
-	TabInput
+	SelectorInput
 	Selector string `json:"selector,omitempty" jsonschema:"CSS selector. If omitted returns text of the entire page body."`
 	Hidden   bool   `json:"hidden,omitempty" jsonschema:"Include text from hidden elements (default false). When false uses innerText (visible text only). When true uses textContent (all DOM text)."`
 }
@@ -162,7 +162,7 @@ type GetTextOutput struct {
 
 // GetAccessibilityTreeInput is the input for get_accessibility_tree.
 type GetAccessibilityTreeInput struct {
-	TabInput
+	SelectorInput
 	Selector        string `json:"selector,omitempty" jsonschema:"CSS selector to scope to a subtree"`
 	Depth           int    `json:"depth,omitempty" jsonschema:"Max tree depth (default unlimited)"`
 	InterestingOnly *bool  `json:"interesting_only,omitempty" jsonschema:"Filter to only interesting nodes with a role name or value (default true)"`
