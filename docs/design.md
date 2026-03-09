@@ -210,8 +210,9 @@ Capture a screenshot.
 | `full_page` | bool | no | Capture the full scrollable page instead of just the viewport (default `false`). Ignored if `selector` is set. |
 | `format` | string | no | `"png"` (default) or `"jpeg"` |
 | `quality` | int | no | JPEG quality 1-100 (default 80). Ignored for PNG. |
+| `filename` | string | no | Save to disk with this filename (requires `--download-dir`). Timestamp-based name used if empty. The image is still returned inline. |
 
-Returns: `ImageContent` with the screenshot.
+Returns: `ImageContent` with the screenshot. If `filename` is set and `--download-dir` is configured, also saves to disk and appends a `TextContent` with the file path.
 
 #### `pdf`
 
@@ -226,8 +227,9 @@ Generate a PDF of the current page.
 | `paper_width` | float | no | Paper width in inches (default 8.5) |
 | `paper_height` | float | no | Paper height in inches (default 11) |
 | `page_ranges` | string | no | Page ranges, e.g. `"1-5, 8"`. Defaults to all pages. |
+| `filename` | string | no | Save to disk with this filename (requires `--download-dir`). Timestamp-based name used if empty. |
 
-Returns: `EmbeddedResource` with the PDF as a blob (`application/pdf`).
+Returns: `EmbeddedResource` with the PDF as a blob (`application/pdf`). If `filename` is set and `--download-dir` is configured, saves to disk and returns a `TextContent` with the file path instead of the inline blob.
 
 #### `set_viewport`
 
@@ -720,13 +722,17 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 
 ## Configuration
 
-The server binary takes no flags. All browser configuration is done via tools at runtime.
+All browser configuration is done via tools at runtime. The server accepts one optional flag:
 
 ```
-chromedp-mcp
+chromedp-mcp [--download-dir <path>]
 ```
 
-That's it. The LLM controls everything.
+| Flag | Description |
+|------|-------------|
+| `--download-dir` | Directory for saving screenshots, PDFs, and downloads. When set, `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk. Path traversal is blocked — filenames must not contain directory separators. The directory is created automatically if it doesn't exist. |
+
+When `--download-dir` is not set, the tools return binary data inline only and requesting a `filename` returns an error.
 
 ## Future Features
 

@@ -80,7 +80,7 @@ func TestMain(m *testing.M) {
 		Name:    "chromedp-mcp-test",
 		Version: "test",
 	}, nil)
-	Register(srv, mgr)
+	Register(srv, mgr, nil)
 
 	// Connect an in-memory MCP client to the server.
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()

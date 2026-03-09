@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	downloadDir := flag.String("download-dir", "", "Directory for saving screenshots, PDFs, and downloads")
+	flag.Parse()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -26,7 +30,9 @@ func main() {
 		Version: "0.1.0",
 	}, nil)
 
-	tools.Register(srv, mgr)
+	tools.Register(srv, mgr, &tools.Options{
+		DownloadDir: *downloadDir,
+	})
 
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

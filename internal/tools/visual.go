@@ -2,6 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
@@ -18,6 +22,7 @@ type ScreenshotInput struct {
 	FullPage bool   `json:"full_page,omitempty" jsonschema:"Capture the full scrollable page (default false). Ignored if selector is set."`
 	Format   string `json:"format,omitempty" jsonschema:"Image format: png (default) or jpeg"`
 	Quality  int    `json:"quality,omitempty" jsonschema:"JPEG quality 1-100 (default 80). Ignored for PNG."`
+	Filename string `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Timestamp-based name used if empty. The image is still returned inline."`
 }
 
 // PDFInput is the input for pdf.
@@ -29,6 +34,7 @@ type PDFInput struct {
 	PaperWidth      float64 `json:"paper_width,omitempty" jsonschema:"Paper width in inches (default 8.5)"`
 	PaperHeight     float64 `json:"paper_height,omitempty" jsonschema:"Paper height in inches (default 11)"`
 	PageRanges      string  `json:"page_ranges,omitempty" jsonschema:"Page ranges e.g. 1-5 8. Defaults to all pages."`
+	Filename        string  `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Timestamp-based name used if empty."`
 }
 
 // SetViewportInput is the input for set_viewport.
@@ -40,7 +46,7 @@ type SetViewportInput struct {
 	Mobile            bool    `json:"mobile,omitempty" jsonschema:"Emulate mobile device (default false)"`
 }
 
-func registerVisualTools(s *mcp.Server, mgr *browser.Manager) {
+func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "screenshot",
 		Description: "Capture a screenshot of the viewport, full page, or a specific element.",
@@ -92,18 +98,31 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		mimeType := "image/png"
+		ext := ".png"
 		if input.Format == "jpeg" {
 			mimeType = "image/jpeg"
+			ext = ".jpg"
 		}
 
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.ImageContent{
-					Data:     buf,
-					MIMEType: mimeType,
-				},
+		content := []mcp.Content{
+			&mcp.ImageContent{
+				Data:     buf,
+				MIMEType: mimeType,
 			},
-		}, struct{}{}, nil
+		}
+
+		// Save to disk if requested and download dir is configured.
+		if input.Filename != "" {
+			path, err := saveToDownloadDir(opts.DownloadDir, input.Filename, ext, buf)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			content = append(content, &mcp.TextContent{
+				Text: fmt.Sprintf("Saved to %s", path),
+			})
+		}
+
+		return &mcp.CallToolResult{Content: content}, struct{}{}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -146,6 +165,22 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
+		// When saving to disk, return the file path instead of the
+		// (potentially large) inline blob.
+		if input.Filename != "" {
+			path, err := saveToDownloadDir(opts.DownloadDir, input.Filename, ".pdf", pdfData)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{
+						Text: fmt.Sprintf("Saved to %s", path),
+					},
+				},
+			}, struct{}{}, nil
+		}
+
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.EmbeddedResource{
@@ -184,4 +219,36 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		return nil, struct{}{}, nil
 	})
+}
+
+// saveToDownloadDir writes data to a file in the configured download
+// directory. If filename has no extension, defaultExt is appended. If
+// filename is empty, a timestamp-based name is generated. Returns the
+// absolute path of the written file.
+func saveToDownloadDir(dir, filename, defaultExt string, data []byte) (string, error) {
+	if dir == "" {
+		return "", fmt.Errorf("--download-dir not configured; cannot save to disk")
+	}
+
+	// Ensure the directory exists.
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("creating download dir: %w", err)
+	}
+
+	if filename == "" {
+		filename = time.Now().Format("20060102-150405") + defaultExt
+	} else if filepath.Ext(filename) == "" {
+		filename += defaultExt
+	}
+
+	// Prevent path traversal.
+	if filepath.Base(filename) != filename {
+		return "", fmt.Errorf("filename must not contain path separators: %q", filename)
+	}
+
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("writing file: %w", err)
+	}
+	return path, nil
 }

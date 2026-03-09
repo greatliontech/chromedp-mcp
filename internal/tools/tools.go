@@ -12,12 +12,23 @@ import (
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
 )
 
+// Options configures optional behavior for the MCP tools.
+type Options struct {
+	// DownloadDir is the directory for saving screenshots, PDFs, and
+	// downloads. When empty, save-to-disk is unavailable and the tools
+	// return binary data inline only.
+	DownloadDir string
+}
+
 // Register registers all tools on the given MCP server.
-func Register(s *mcp.Server, mgr *browser.Manager) {
+func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
+	if opts == nil {
+		opts = &Options{}
+	}
 	registerBrowserTools(s, mgr)
 	registerTabTools(s, mgr)
 	registerNavigationTools(s, mgr)
-	registerVisualTools(s, mgr)
+	registerVisualTools(s, mgr, opts)
 	registerDOMTools(s, mgr)
 	registerConsoleTools(s, mgr)
 	registerNetworkTools(s, mgr)
