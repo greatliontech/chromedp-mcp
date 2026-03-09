@@ -33,10 +33,10 @@ type TypeInput struct {
 // SelectOptionInput is the input for select_option.
 type SelectOptionInput struct {
 	TabInput
-	Selector string `json:"selector" jsonschema:"CSS selector of the select element"`
-	Value    string `json:"value,omitempty" jsonschema:"Option value to select"`
-	Label    string `json:"label,omitempty" jsonschema:"Option visible text to select"`
-	Index    *int   `json:"index,omitempty" jsonschema:"Option index to select"`
+	Selector string  `json:"selector" jsonschema:"CSS selector of the select element"`
+	Value    *string `json:"value,omitempty" jsonschema:"Option value to select"`
+	Label    string  `json:"label,omitempty" jsonschema:"Option visible text to select"`
+	Index    *int    `json:"index,omitempty" jsonschema:"Option index to select"`
 }
 
 // SubmitFormInput is the input for submit_form.
@@ -193,7 +193,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		// Validate that exactly one selection criterion is provided.
 		criteria := 0
-		if inp.Value != "" {
+		if inp.Value != nil {
 			criteria++
 		}
 		if inp.Label != "" {
@@ -208,9 +208,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		// Build a JS snippet to select by the appropriate attribute.
 		var js string
-		if inp.Value != "" {
+		if inp.Value != nil {
 			js = fmt.Sprintf(`document.querySelector(%q).value = %q; document.querySelector(%q).dispatchEvent(new Event('change', {bubbles: true}))`,
-				inp.Selector, inp.Value, inp.Selector)
+				inp.Selector, *inp.Value, inp.Selector)
 		} else if inp.Label != "" {
 			js = fmt.Sprintf(`(function() {
 				var sel = document.querySelector(%q);
@@ -349,7 +349,13 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		if err := chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
-			if err := input.DispatchKeyEvent(input.KeyDown).WithKey(inp.Key).WithModifiers(modifiers).Do(ctx); err != nil {
+			down := input.DispatchKeyEvent(input.KeyDown).WithKey(inp.Key).WithModifiers(modifiers)
+			// For single printable characters, set the text field so the
+			// character is inserted into focused input/textarea elements.
+			if len(inp.Key) == 1 && modifiers == 0 {
+				down = down.WithText(inp.Key)
+			}
+			if err := down.Do(ctx); err != nil {
 				return err
 			}
 			return input.DispatchKeyEvent(input.KeyUp).WithKey(inp.Key).WithModifiers(modifiers).Do(ctx)

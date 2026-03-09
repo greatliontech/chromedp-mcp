@@ -368,7 +368,6 @@ Execute JavaScript in the page context.
 | `tab` | string | no | Tab ID |
 | `expression` | string | yes | JavaScript expression to evaluate |
 | `await_promise` | bool | no | If the expression returns a Promise, wait for it to resolve (default `true`) |
-| `return_by_value` | bool | no | Return the result by value rather than as a remote object reference (default `true`) |
 
 Returns: the evaluation result as JSON, or an error description if the evaluation threw.
 
