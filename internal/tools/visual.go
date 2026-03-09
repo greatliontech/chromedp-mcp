@@ -70,7 +70,22 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 			err = chromedp.Run(tctx, chromedp.FullScreenshot(&buf, quality))
 		} else {
-			err = chromedp.Run(tctx, chromedp.CaptureScreenshot(&buf))
+			// Viewport screenshot. Use CDP directly so we can specify
+			// the image format (chromedp.CaptureScreenshot is always PNG).
+			err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+				params := page.CaptureScreenshot()
+				if input.Format == "jpeg" {
+					params = params.WithFormat(page.CaptureScreenshotFormatJpeg)
+					quality := input.Quality
+					if quality <= 0 {
+						quality = 80
+					}
+					params = params.WithQuality(int64(quality))
+				}
+				var captureErr error
+				buf, captureErr = params.Do(ctx)
+				return captureErr
+			}))
 		}
 		if err != nil {
 			return nil, struct{}{}, err

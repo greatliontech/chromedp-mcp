@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Interaction Test 2</title>
+    <style>
+        #scroll-container { width: 100%; height: 200px; overflow: auto; }
+        #scroll-inner { width: 3000px; height: 3000px; background: linear-gradient(135deg, #eee, #ccc); }
+        #nested-text { margin: 10px; }
+        #empty-el { margin: 10px; }
+        #disabled-btn { margin: 10px; }
+        #nav-link { margin: 10px; }
+        #disabled-output { margin: 10px; }
+    </style>
+</head>
+<body>
+    <h1 id="title">Interaction Test 2</h1>
+
+    <!-- Disabled button test -->
+    <button id="disabled-btn" disabled>Disabled</button>
+    <div id="disabled-output"></div>
+
+    <!-- Link that navigates -->
+    <a id="nav-link" href="/page2.html">Go to Page 2</a>
+
+    <!-- Textarea for typing tests -->
+    <textarea id="textarea-target" rows="3" cols="40"></textarea>
+
+    <!-- Contenteditable div -->
+    <div id="contenteditable-target" contenteditable="true" style="border: 1px solid #ccc; min-height: 30px;"></div>
+
+    <!-- Nested text content -->
+    <div id="nested-text">
+        <span>Hello </span>
+        <strong>bold </strong>
+        <em>italic</em>
+    </div>
+
+    <!-- Empty element -->
+    <div id="empty-el"></div>
+
+    <!-- Select with many options -->
+    <select id="big-select">
+        <option value="a">Alpha</option>
+        <option value="b">Beta</option>
+        <option value="c">Gamma</option>
+        <option value="d">Delta</option>
+        <option value="e">Epsilon</option>
+    </select>
+    <div id="select-output"></div>
+
+    <!-- Prompt dialog -->
+    <button id="prompt-btn" onclick="promptResult.textContent = prompt('Enter name:')">Prompt</button>
+    <div id="prompt-result"></div>
+
+    <!-- Confirm dialog -->
+    <button id="confirm-btn" onclick="confirmResult.textContent = String(confirm('Are you sure?'))">Confirm</button>
+    <div id="confirm-result"></div>
+
+    <!-- File input (non-file) -->
+    <input type="text" id="not-file-input" value="">
+
+    <!-- Multiple items for query -->
+    <ul id="query-list">
+        <li class="query-item" data-idx="0">Item 0</li>
+        <li class="query-item" data-idx="1">Item 1</li>
+        <li class="query-item" data-idx="2">Item 2</li>
+        <li class="query-item" data-idx="3">Item 3</li>
+        <li class="query-item" data-idx="4">Item 4</li>
+        <li class="query-item" data-idx="5">Item 5</li>
+        <li class="query-item" data-idx="6">Item 6</li>
+        <li class="query-item" data-idx="7">Item 7</li>
+        <li class="query-item" data-idx="8">Item 8</li>
+        <li class="query-item" data-idx="9">Item 9</li>
+        <li class="query-item" data-idx="10">Item 10</li>
+        <li class="query-item" data-idx="11">Item 11</li>
+    </ul>
+
+    <script>
+        // Disabled button click listener (should NOT fire due to disabled attribute).
+        document.getElementById('disabled-btn').addEventListener('click', function() {
+            document.getElementById('disabled-output').textContent = 'clicked-disabled';
+        });
+
+        // Select change tracking.
+        document.getElementById('big-select').addEventListener('change', function() {
+            document.getElementById('select-output').textContent = 'selected:' + this.value;
+        });
+
+        // Store prompt/confirm result references.
+        var promptResult = document.getElementById('prompt-result');
+        var confirmResult = document.getElementById('confirm-result');
+    </script>
+</body>
+</html>
