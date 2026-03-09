@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/chromedp/cdproto/runtime"
@@ -76,32 +77,8 @@ func formatStackTrace(st *runtime.StackTrace) string {
 			name = "(anonymous)"
 		}
 		result += name + " (" + frame.URL + ":" +
-			itoa(frame.LineNumber) + ":" +
-			itoa(frame.ColumnNumber) + ")\n"
+			strconv.FormatInt(frame.LineNumber, 10) + ":" +
+			strconv.FormatInt(frame.ColumnNumber, 10) + ")\n"
 	}
 	return result
-}
-
-// itoa converts an int64 to a string without importing strconv.
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

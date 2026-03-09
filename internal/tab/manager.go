@@ -2,10 +2,10 @@ package tab
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
+
+	"github.com/thegrumpylion/chromedp-mcp/internal/id"
 )
 
 // Manager manages the set of open tabs within a single browser and tracks
@@ -32,15 +32,15 @@ func NewManager(parentCtx context.Context, opts *TabOptions) *Manager {
 // NewTab creates a new tab, optionally navigating to a URL. The new tab
 // becomes the active tab.
 func (m *Manager) NewTab() (*Tab, error) {
-	id := generateID()
-	t, err := New(m.parentCtx, id, m.tabOpts)
+	newID := id.Generate()
+	t, err := New(m.parentCtx, newID, m.tabOpts)
 	if err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
-	m.tabs[id] = t
-	m.activeID = id
-	m.order = append(m.order, id)
+	m.tabs[newID] = t
+	m.activeID = newID
+	m.order = append(m.order, newID)
 	m.mu.Unlock()
 	return t, nil
 }
@@ -102,17 +102,26 @@ func (m *Manager) Close(id string) error {
 
 // List returns info about all open tabs.
 func (m *Manager) List() []TabInfo {
+	// Copy tab pointers and the active ID under the lock, then release
+	// before calling URL/Title which do CDP I/O over websocket. This
+	// avoids holding the lock during potentially slow network calls.
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	infos := make([]TabInfo, 0, len(m.tabs))
+	tabs := make([]*Tab, 0, len(m.tabs))
 	for _, t := range m.tabs {
+		tabs = append(tabs, t)
+	}
+	activeID := m.activeID
+	m.mu.RUnlock()
+
+	infos := make([]TabInfo, 0, len(tabs))
+	for _, t := range tabs {
 		url, _ := t.URL()
 		title, _ := t.Title()
 		infos = append(infos, TabInfo{
 			ID:     t.ID,
 			URL:    url,
 			Title:  title,
-			Active: t.ID == m.activeID,
+			Active: t.ID == activeID,
 		})
 	}
 	return infos
@@ -172,11 +181,4 @@ func (m *Manager) removeFromOrder(id string) {
 			return
 		}
 	}
-}
-
-// generateID produces a short random hex ID for a tab.
-func generateID() string {
-	var b [4]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }

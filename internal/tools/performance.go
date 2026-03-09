@@ -189,20 +189,44 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 
 			if coverageType == "css" || coverageType == "all" {
+				// Collect stylesheet metadata (ID → source URL) by
+				// listening for styleSheetAdded events from CSS.enable.
+				sheetURLs := make(map[string]string)
+				lctx, lcancel := context.WithCancel(ctx)
+				chromedp.ListenTarget(lctx, func(ev interface{}) {
+					if e, ok := ev.(*cdpcss.EventStyleSheetAdded); ok && e.Header != nil {
+						sheetURLs[e.Header.StyleSheetID.String()] = e.Header.SourceURL
+					}
+				})
+
+				if err := cdpcss.Enable().Do(ctx); err != nil {
+					lcancel()
+					return err
+				}
+
 				if err := cdpcss.StartRuleUsageTracking().Do(ctx); err != nil {
+					lcancel()
+					cdpcss.Disable().Do(ctx) //nolint:errcheck
 					return err
 				}
 				ruleUsage, err := cdpcss.StopRuleUsageTracking().Do(ctx)
+				lcancel()
+				cdpcss.Disable().Do(ctx) //nolint:errcheck
 				if err != nil {
 					return err
 				}
 				// Aggregate by stylesheet.
 				stylesheets := make(map[string]*CoverageEntry)
 				for _, rule := range ruleUsage {
-					ce, ok := stylesheets[rule.StyleSheetID.String()]
+					key := rule.StyleSheetID.String()
+					ce, ok := stylesheets[key]
 					if !ok {
-						ce = &CoverageEntry{URL: rule.StyleSheetID.String()}
-						stylesheets[rule.StyleSheetID.String()] = ce
+						url := sheetURLs[key]
+						if url == "" {
+							url = key // Fall back to stylesheet ID.
+						}
+						ce = &CoverageEntry{URL: url}
+						stylesheets[key] = ce
 					}
 					size := int64(rule.EndOffset - rule.StartOffset)
 					ce.TotalBytes += size

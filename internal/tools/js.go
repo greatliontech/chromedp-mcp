@@ -57,10 +57,10 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 			// Wrap the expression in an IIFE that queries the selector and
 			// passes the element as the first argument.
 			js := fmt.Sprintf(`(function() {
-				var el = document.querySelector(%q);
-				if (!el) throw new Error('selector %s matched no elements');
-				return (function(el) { %s })(el);
-			})()`, input.Selector, input.Selector, input.Expression)
+			var el = document.querySelector(%q);
+			if (!el) throw new Error('selector ' + %q + ' matched no elements');
+			return (function(el) { %s })(el);
+		})()`, input.Selector, input.Selector, input.Expression)
 
 			var result interface{}
 			evalOpts := []chromedp.EvaluateOption{chromedp.EvalAsValue}

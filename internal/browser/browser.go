@@ -59,12 +59,10 @@ func Launch(parentCtx context.Context, id string, opts LaunchOptions) (*Browser,
 	if opts.Headless {
 		allocOpts = append(allocOpts, chromedp.Headless)
 	} else {
-		// Remove the default headless flag.
-		filtered := make([]chromedp.ExecAllocatorOption, 0, len(allocOpts))
-		for _, o := range allocOpts {
-			filtered = append(filtered, o)
-		}
-		allocOpts = append(filtered, chromedp.Flag("headless", false))
+		// DefaultExecAllocatorOptions includes Headless which sets
+		// the "headless" flag to true. Override it to false. Since
+		// flags are stored in a map, the last write wins.
+		allocOpts = append(allocOpts, chromedp.Flag("headless", false))
 	}
 	if opts.Width > 0 && opts.Height > 0 {
 		allocOpts = append(allocOpts, chromedp.WindowSize(opts.Width, opts.Height))

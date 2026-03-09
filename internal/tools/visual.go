@@ -330,7 +330,7 @@ func elementScale(ctx context.Context, selector string, maxDim int) (float64, er
 		H float64 `json:"h"`
 	}
 	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &result)); err != nil {
-		return 1.0, nil // Fall back to scale 1 on error.
+		return 0, fmt.Errorf("evaluating element dimensions for %q: %w", selector, err)
 	}
 	w, h = result.W, result.H
 	if w == 0 && h == 0 {

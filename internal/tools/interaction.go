@@ -458,6 +458,8 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				modifiers |= input.ModifierAlt
 			case "meta":
 				modifiers |= input.ModifierMeta
+			default:
+				return nil, struct{}{}, fmt.Errorf("unknown modifier %q: must be ctrl, shift, alt, or meta", m)
 			}
 		}
 

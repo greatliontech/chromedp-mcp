@@ -75,8 +75,8 @@ func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 // HandleResponseReceived records a response for a pending request.
 func (n *Network) HandleResponseReceived(ev *network.EventResponseReceived) {
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	entry, ok := n.pending[ev.RequestID]
-	n.mu.Unlock()
 	if !ok {
 		return
 	}
@@ -113,6 +113,8 @@ func (n *Network) HandleLoadingFinished(ev *network.EventLoadingFinished) {
 	if !ok {
 		return
 	}
+	// Safe to mutate entry without lock: it has been removed from pending,
+	// so no other handler can access it concurrently.
 	entry.Completed = true
 	entry.Size = ev.EncodedDataLength
 	entry.EndTime = ev.Timestamp.Time()
@@ -133,6 +135,8 @@ func (n *Network) HandleLoadingFailed(ev *network.EventLoadingFailed) {
 	if !ok {
 		return
 	}
+	// Safe to mutate entry without lock: it has been removed from pending,
+	// so no other handler can access it concurrently.
 	entry.Failed = true
 	entry.Error = ev.ErrorText
 	entry.EndTime = ev.Timestamp.Time()

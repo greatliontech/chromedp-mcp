@@ -2,11 +2,10 @@ package browser
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
 
+	"github.com/thegrumpylion/chromedp-mcp/internal/id"
 	"github.com/thegrumpylion/chromedp-mcp/internal/tab"
 )
 
@@ -29,15 +28,15 @@ func NewManager(parentCtx context.Context) *Manager {
 
 // Launch starts a new Chrome browser and registers it as the active browser.
 func (m *Manager) Launch(opts LaunchOptions) (*Browser, error) {
-	id := generateID()
-	b, err := Launch(m.parentCtx, id, opts)
+	newID := id.Generate()
+	b, err := Launch(m.parentCtx, newID, opts)
 	if err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
-	m.browsers[id] = b
-	m.activeID = id
-	m.order = append(m.order, id)
+	m.browsers[newID] = b
+	m.activeID = newID
+	m.order = append(m.order, newID)
 	m.mu.Unlock()
 	return b, nil
 }
@@ -45,15 +44,15 @@ func (m *Manager) Launch(opts LaunchOptions) (*Browser, error) {
 // Connect connects to an existing Chrome browser and registers it as the
 // active browser.
 func (m *Manager) Connect(url string, opts ConnectOptions) (*Browser, error) {
-	id := generateID()
-	b, err := Connect(m.parentCtx, id, url, opts)
+	newID := id.Generate()
+	b, err := Connect(m.parentCtx, newID, url, opts)
 	if err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
-	m.browsers[id] = b
-	m.activeID = id
-	m.order = append(m.order, id)
+	m.browsers[newID] = b
+	m.activeID = newID
+	m.order = append(m.order, newID)
 	m.mu.Unlock()
 	return b, nil
 }
@@ -103,11 +102,8 @@ func (m *Manager) Close(id string) error {
 // List returns info about all managed browsers. Dead browsers are pruned.
 func (m *Manager) List() []BrowserInfo {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.pruneDeadLocked()
-	m.mu.Unlock()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	infos := make([]BrowserInfo, 0, len(m.browsers))
 	for _, b := range m.browsers {
 		mode := "launch"
@@ -154,31 +150,11 @@ func (m *Manager) ResolveTab(browserID, tabID string) (*tab.Tab, error) {
 	return b.Tabs.Resolve(tabID)
 }
 
-// FindTab searches all browsers for a tab by ID. Returns the tab and its
-// owning browser. Prunes dead browsers during the search.
-func (m *Manager) FindTab(tabID string) (*tab.Tab, *Browser, error) {
-	m.mu.Lock()
-	m.pruneDeadLocked()
-	m.mu.Unlock()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, b := range m.browsers {
-		if t, err := b.Tabs.Get(tabID); err == nil {
-			return t, b, nil
-		}
-	}
-	return nil, nil, fmt.Errorf("tab %q not found in any browser", tabID)
-}
-
 // CloseTab finds a tab by ID across all browsers and closes it.
 func (m *Manager) CloseTab(tabID string) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.pruneDeadLocked()
-	m.mu.Unlock()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	for _, b := range m.browsers {
 		if _, err := b.Tabs.Get(tabID); err == nil {
 			return b.Tabs.Close(tabID)
@@ -190,11 +166,8 @@ func (m *Manager) CloseTab(tabID string) error {
 // ActivateTab finds a tab by ID across all browsers and activates it.
 func (m *Manager) ActivateTab(tabID string) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.pruneDeadLocked()
-	m.mu.Unlock()
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	for _, b := range m.browsers {
 		if _, err := b.Tabs.Get(tabID); err == nil {
 			return b.Tabs.Activate(tabID)
@@ -238,10 +211,4 @@ func (m *Manager) removeLocked(id string) {
 			m.activeID = ""
 		}
 	}
-}
-
-func generateID() string {
-	var b [4]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }

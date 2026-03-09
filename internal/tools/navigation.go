@@ -70,7 +70,12 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx := t.Context()
 		waitEvent := "load"
 		if input.WaitUntil != "" {
-			waitEvent = input.WaitUntil
+			switch input.WaitUntil {
+			case "load", "domcontentloaded", "networkidle":
+				waitEvent = input.WaitUntil
+			default:
+				return nil, NavigateOutput{}, fmt.Errorf("invalid wait_until value %q: must be load, domcontentloaded, or networkidle", input.WaitUntil)
+			}
 		}
 
 		// For non-default wait events, set up the lifecycle listener
