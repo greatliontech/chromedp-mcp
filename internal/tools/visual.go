@@ -24,7 +24,7 @@ type ScreenshotInput struct {
 type PDFInput struct {
 	TabInput
 	Landscape       bool    `json:"landscape,omitempty" jsonschema:"Landscape orientation (default false)"`
-	PrintBackground bool    `json:"print_background,omitempty" jsonschema:"Include background graphics (default true)"`
+	PrintBackground *bool   `json:"print_background,omitempty" jsonschema:"Include background graphics (default true)"`
 	Scale           float64 `json:"scale,omitempty" jsonschema:"Page rendering scale (default 1.0)"`
 	PaperWidth      float64 `json:"paper_width,omitempty" jsonschema:"Paper width in inches (default 8.5)"`
 	PaperHeight     float64 `json:"paper_height,omitempty" jsonschema:"Paper height in inches (default 11)"`
@@ -106,7 +106,8 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager) {
 
 		var pdfData []byte
 		err = chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
-			params := page.PrintToPDF().WithPrintBackground(true)
+			printBg := input.PrintBackground == nil || *input.PrintBackground
+			params := page.PrintToPDF().WithPrintBackground(printBg)
 			if input.Landscape {
 				params = params.WithLandscape(true)
 			}

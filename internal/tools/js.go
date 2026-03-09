@@ -14,9 +14,8 @@ import (
 // EvaluateInput is the input for evaluate.
 type EvaluateInput struct {
 	TabInput
-	Expression    string `json:"expression" jsonschema:"JavaScript expression to evaluate"`
-	AwaitPromise  *bool  `json:"await_promise,omitempty" jsonschema:"Wait for Promise to resolve (default true)"`
-	ReturnByValue *bool  `json:"return_by_value,omitempty" jsonschema:"Return result by value (default true)"`
+	Expression   string `json:"expression" jsonschema:"JavaScript expression to evaluate"`
+	AwaitPromise *bool  `json:"await_promise,omitempty" jsonschema:"Wait for Promise to resolve (default true)"`
 }
 
 // EvaluateOutput is the output for evaluate.

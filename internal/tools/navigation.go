@@ -66,19 +66,20 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			waitEvent = input.WaitUntil
 		}
 
-		// Navigate and wait for the specified lifecycle event.
-		var actions []chromedp.Action
-		actions = append(actions, chromedp.Navigate(input.URL))
-
-		if waitEvent == "networkidle" || waitEvent == "domcontentloaded" {
-			// Wait for the lifecycle event after navigation.
-			actions = append(actions, chromedp.ActionFunc(func(ctx context.Context) error {
-				return waitForLifecycle(ctx, waitEvent)
-			}))
+		// Navigate and capture the HTTP response to get the status code.
+		resp, err := chromedp.RunResponse(tctx, chromedp.Navigate(input.URL))
+		if err != nil {
+			return nil, NavigateOutput{}, err
 		}
 
-		if err := chromedp.Run(tctx, actions...); err != nil {
-			return nil, NavigateOutput{}, err
+		// If a non-default wait event was requested, wait for it after
+		// the initial navigation + load.
+		if waitEvent == "networkidle" || waitEvent == "domcontentloaded" {
+			if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+				return waitForLifecycle(ctx, waitEvent)
+			})); err != nil {
+				return nil, NavigateOutput{}, err
+			}
 		}
 
 		var url, title string
@@ -86,7 +87,11 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, NavigateOutput{}, err
 		}
 
-		return nil, NavigateOutput{URL: url, Title: title}, nil
+		out := NavigateOutput{URL: url, Title: title}
+		if resp != nil {
+			out.Status = resp.Status
+		}
+		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

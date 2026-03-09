@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/base64"
+	"unicode/utf8"
 
 	cdpnetwork "github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -106,41 +107,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 }
 
-// isValidUTF8 checks if a string is valid UTF-8.
+// isValidUTF8 checks if a byte slice is valid UTF-8 text.
 func isValidUTF8(s string) bool {
-	for i := 0; i < len(s); {
-		r, size := decodeRuneInString(s[i:])
-		if r == 0xFFFD && size == 1 {
-			return false
-		}
-		i += size
-	}
-	return true
-}
-
-// decodeRuneInString is a minimal rune decoder to avoid importing unicode/utf8
-// in this file. For production robustness, we could use utf8.DecodeRuneInString.
-func decodeRuneInString(s string) (rune, int) {
-	if len(s) == 0 {
-		return 0xFFFD, 0
-	}
-	b := s[0]
-	if b < 0x80 {
-		return rune(b), 1
-	}
-	// Simplified: treat any multi-byte sequence as potentially valid.
-	// In practice, use unicode/utf8.
-	if b < 0xC0 {
-		return 0xFFFD, 1
-	}
-	if b < 0xE0 && len(s) >= 2 {
-		return rune(b&0x1F)<<6 | rune(s[1]&0x3F), 2
-	}
-	if b < 0xF0 && len(s) >= 3 {
-		return rune(b&0x0F)<<12 | rune(s[1]&0x3F)<<6 | rune(s[2]&0x3F), 3
-	}
-	if len(s) >= 4 {
-		return rune(b&0x07)<<18 | rune(s[1]&0x3F)<<12 | rune(s[2]&0x3F)<<6 | rune(s[3]&0x3F), 4
-	}
-	return 0xFFFD, 1
+	return utf8.ValidString(s)
 }

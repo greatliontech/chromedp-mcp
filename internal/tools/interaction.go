@@ -148,7 +148,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		var actions chromedp.Tasks
 		if inp.Clear {
-			actions = append(actions, chromedp.Clear(inp.Selector, chromedp.ByQuery))
+			// Use JS to clear the field value. chromedp.Clear only
+			// resets the HTML attribute, not the JS property, which
+			// means typed text may not actually be removed.
+			clearJS := fmt.Sprintf(`(function() {
+				var el = document.querySelector(%q);
+				if (el) { el.value = ''; el.dispatchEvent(new Event('input', {bubbles:true})); }
+			})()`, inp.Selector)
+			actions = append(actions, chromedp.Evaluate(clearJS, nil))
 		}
 		if inp.Delay > 0 {
 			// Type character by character with delay.

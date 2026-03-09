@@ -44,6 +44,14 @@ func TestMain(m *testing.M) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintf(w, "submitted")
 	})
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/page2.html", http.StatusFound)
+	})
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<html><body><h1>Slow Page</h1></body></html>`)
+	})
 	// Serve a tiny PNG for image tests.
 	mux.HandleFunc("/image.png", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -171,6 +179,27 @@ func callToolRaw(t *testing.T, name string, args any) *mcp.CallToolResult {
 		t.Fatalf("CallTool(%s): %v", name, err)
 	}
 	return result
+}
+
+// callToolExpectErr calls an MCP tool and expects it to return an error.
+// Returns the error text. Fails the test if the tool succeeds.
+func callToolExpectErr(t *testing.T, name string, args any) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(harness.ctx, 10*time.Second)
+	defer cancel()
+
+	result, err := harness.session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      name,
+		Arguments: args,
+	})
+	if err != nil {
+		// Protocol-level error — that's also an error, return it.
+		return err.Error()
+	}
+	if !result.IsError {
+		t.Fatalf("CallTool(%s) expected error, got success: %s", name, contentText(result))
+	}
+	return contentText(result)
 }
 
 // fixtureURL returns the test server URL for a fixture file.
