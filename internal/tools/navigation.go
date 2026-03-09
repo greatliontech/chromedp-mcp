@@ -32,6 +32,12 @@ type ReloadInput struct {
 	BypassCache bool `json:"bypass_cache,omitempty" jsonschema:"Bypass browser cache (default false)"`
 }
 
+// ReloadOutput is the output for reload.
+type ReloadOutput struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
 // GoBackInput is the input for go_back.
 type GoBackInput struct {
 	TabInput
@@ -126,29 +132,38 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "reload",
-		Description: "Reload the current page.",
+		Description: "Reload the current page. Returns the final URL and page title after reload.",
 		Annotations: &mcp.ToolAnnotations{
 			IdempotentHint: true,
 		},
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReloadInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReloadInput) (*mcp.CallToolResult, ReloadOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ReloadOutput{}, err
 		}
+		tctx := t.Context()
 		if input.BypassCache {
-			// Use the CDP command directly so we can pass IgnoreCache.
-			// chromedp.Reload() doesn't expose this option.
-			if err := chromedp.Run(t.Context(), chromedp.ActionFunc(func(ctx context.Context) error {
+			// chromedp.Reload() doesn't expose the IgnoreCache
+			// option, but it wraps page.Reload in responseAction
+			// which waits for the page load event. We need the
+			// same wait behaviour here, so we use RunResponse with
+			// an ActionFunc that sends the bypass-cache variant.
+			if _, err := chromedp.RunResponse(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 				return page.Reload().WithIgnoreCache(true).Do(ctx)
 			})); err != nil {
-				return nil, struct{}{}, err
+				return nil, ReloadOutput{}, err
 			}
 		} else {
-			if err := chromedp.Run(t.Context(), chromedp.Reload()); err != nil {
-				return nil, struct{}{}, err
+			if err := chromedp.Run(tctx, chromedp.Reload()); err != nil {
+				return nil, ReloadOutput{}, err
 			}
 		}
-		return nil, struct{}{}, nil
+
+		var url, title string
+		if err := chromedp.Run(tctx, chromedp.Location(&url), chromedp.Title(&title)); err != nil {
+			return nil, ReloadOutput{}, err
+		}
+		return nil, ReloadOutput{URL: url, Title: title}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

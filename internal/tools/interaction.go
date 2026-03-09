@@ -83,6 +83,12 @@ type ScrollInput struct {
 	Y        int    `json:"y,omitempty" jsonschema:"Vertical scroll offset in pixels"`
 }
 
+// ScrollOutput is the output for scroll, reporting the resulting scroll position.
+type ScrollOutput struct {
+	ScrollX float64 `json:"scroll_x"`
+	ScrollY float64 `json:"scroll_y"`
+}
+
 // HoverInput is the input for hover.
 type HoverInput struct {
 	SelectorInput
@@ -336,10 +342,10 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Scroll a page or scroll an element into view.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ScrollInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ScrollInput) (*mcp.CallToolResult, ScrollOutput, error) {
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ScrollOutput{}, err
 		}
 
 		tctx := t.Context()
@@ -348,7 +354,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			defer cancel()
 			err = chromedp.Run(sctx, chromedp.ScrollIntoView(inp.Selector, chromedp.ByQuery))
 			if err != nil {
-				return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+				return nil, ScrollOutput{}, selectorError(tctx, inp.Selector, err)
 			}
 		} else {
 			js := fmt.Sprintf("window.scrollBy(%d, %d)", inp.X, inp.Y)
@@ -356,9 +362,18 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			err = chromedp.Run(tctx, chromedp.Evaluate(js, &res))
 		}
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ScrollOutput{}, err
 		}
-		return nil, struct{}{}, nil
+
+		// Report the resulting scroll position.
+		var out ScrollOutput
+		if err := chromedp.Run(tctx,
+			chromedp.Evaluate("window.scrollX", &out.ScrollX),
+			chromedp.Evaluate("window.scrollY", &out.ScrollY),
+		); err != nil {
+			return nil, ScrollOutput{}, err
+		}
+		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

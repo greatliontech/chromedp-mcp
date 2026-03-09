@@ -102,17 +102,16 @@ func TestReload(t *testing.T) {
 		"tab":        tabID,
 		"expression": "document.title = 'mutated'",
 	})
-	// Reload should restore the original.
-	callTool[struct{}](t, "reload", map[string]any{"tab": tabID})
-	// Give the page time to reload.
-	time.Sleep(500 * time.Millisecond)
-
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.title",
-	})
-	if strings.Contains(string(out.Result), "mutated") {
-		t.Errorf("after reload, title should not be 'mutated', got %s", out.Result)
+	// Reload should restore the original and return useful output.
+	rout := callTool[ReloadOutput](t, "reload", map[string]any{"tab": tabID})
+	if rout.Title == "mutated" {
+		t.Errorf("after reload, title should not be 'mutated', got %s", rout.Title)
+	}
+	if rout.URL == "" {
+		t.Error("reload output should include URL")
+	}
+	if rout.Title != "Interaction Test" {
+		t.Errorf("after reload, title = %q, want %q", rout.Title, "Interaction Test")
 	}
 }
 

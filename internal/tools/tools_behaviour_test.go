@@ -81,19 +81,16 @@ func TestReloadBypassCache(t *testing.T) {
 		"expression": "document.title = 'cached-mutant'",
 	})
 
-	// Reload with bypass_cache.
-	callTool[struct{}](t, "reload", map[string]any{
+	// Reload with bypass_cache — should wait for page load and return output.
+	rout := callTool[ReloadOutput](t, "reload", map[string]any{
 		"tab":          tabID,
 		"bypass_cache": true,
 	})
-	time.Sleep(500 * time.Millisecond)
-
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.title",
-	})
-	if strings.Contains(string(out.Result), "cached-mutant") {
+	if rout.Title == "cached-mutant" {
 		t.Error("after bypass_cache reload, title should be restored from server")
+	}
+	if rout.URL == "" {
+		t.Error("reload output should include URL")
 	}
 }
 

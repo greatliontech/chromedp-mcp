@@ -101,18 +101,15 @@ func TestReloadBypassCacheFalse(t *testing.T) {
 	})
 
 	// Reload with bypass_cache=false (explicit) — should behave same as default reload.
-	callTool[struct{}](t, "reload", map[string]any{
+	rout := callTool[ReloadOutput](t, "reload", map[string]any{
 		"tab":          tabID,
 		"bypass_cache": false,
 	})
-	time.Sleep(500 * time.Millisecond)
-
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.title",
-	})
-	if strings.Contains(string(out.Result), "mutated-again") {
+	if rout.Title == "mutated-again" {
 		t.Error("after reload(bypass_cache=false), title should be restored")
+	}
+	if rout.URL == "" {
+		t.Error("reload output should include URL")
 	}
 }
 
