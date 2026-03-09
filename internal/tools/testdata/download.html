@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head><title>Download Test</title></head>
+<body>
+  <h1>Download Test Page</h1>
+  <a id="download-link" href="/download/test-file.txt" download="test-file.txt">Download Text File</a>
+  <a id="download-csv" href="/download/data.csv" download="data.csv">Download CSV</a>
+  <button id="download-blob" onclick="downloadBlob()">Download Blob</button>
+
+  <script>
+    function downloadBlob() {
+      const content = 'blob content from javascript';
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'blob-file.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>

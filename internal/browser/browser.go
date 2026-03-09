@@ -8,8 +8,12 @@ import (
 
 	"github.com/chromedp/chromedp"
 
+	"github.com/thegrumpylion/chromedp-mcp/internal/collector"
 	"github.com/thegrumpylion/chromedp-mcp/internal/tab"
 )
+
+// DefaultDownloadBuffer is the default buffer size for tracking downloads.
+const DefaultDownloadBuffer = 200
 
 // Mode indicates how the browser was created.
 type Mode int
@@ -29,13 +33,15 @@ type Browser struct {
 	browserCtx    context.Context
 	browserCancel context.CancelFunc
 	Tabs          *tab.Manager
+	Downloads     *collector.Download
 }
 
 // LaunchOptions configures a launched browser.
 type LaunchOptions struct {
-	Headless bool
-	Width    int
-	Height   int
+	Headless    bool
+	Width       int
+	Height      int
+	DownloadDir string
 }
 
 // DefaultLaunchOptions returns the default launch configuration.
@@ -75,18 +81,29 @@ func Launch(parentCtx context.Context, id string, opts LaunchOptions) (*Browser,
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 
+	dl := collector.NewDownload(DefaultDownloadBuffer, opts.DownloadDir)
+
 	return &Browser{
 		ID:            id,
 		Mode:          ModeLaunch,
 		allocCancel:   allocCancel,
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
-		Tabs:          tab.NewManager(browserCtx),
+		Tabs: tab.NewManager(browserCtx, &tab.TabOptions{
+			Downloads:   dl,
+			DownloadDir: opts.DownloadDir,
+		}),
+		Downloads: dl,
 	}, nil
 }
 
+// ConnectOptions configures a connected browser.
+type ConnectOptions struct {
+	DownloadDir string
+}
+
 // Connect connects to an existing Chrome browser via its remote debugging URL.
-func Connect(parentCtx context.Context, id string, url string) (*Browser, error) {
+func Connect(parentCtx context.Context, id string, url string, opts ConnectOptions) (*Browser, error) {
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(parentCtx, url)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
@@ -97,13 +114,19 @@ func Connect(parentCtx context.Context, id string, url string) (*Browser, error)
 		return nil, fmt.Errorf("connect to browser at %s: %w", url, err)
 	}
 
+	dl := collector.NewDownload(DefaultDownloadBuffer, opts.DownloadDir)
+
 	return &Browser{
 		ID:            id,
 		Mode:          ModeConnect,
 		allocCancel:   allocCancel,
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
-		Tabs:          tab.NewManager(browserCtx),
+		Tabs: tab.NewManager(browserCtx, &tab.TabOptions{
+			Downloads:   dl,
+			DownloadDir: opts.DownloadDir,
+		}),
+		Downloads: dl,
 	}, nil
 }
 

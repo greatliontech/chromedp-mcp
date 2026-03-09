@@ -45,7 +45,7 @@ type BrowserListOutput struct {
 	Browsers []browser.BrowserInfo `json:"browsers"`
 }
 
-func registerBrowserTools(s *mcp.Server, mgr *browser.Manager) {
+func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_launch",
 		Description: "Launch a new Chrome browser instance managed by the server.",
@@ -53,17 +53,18 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager) {
 			ReadOnlyHint: false,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserLaunchInput) (*mcp.CallToolResult, BrowserLaunchOutput, error) {
-		opts := browser.DefaultLaunchOptions()
+		launchOpts := browser.DefaultLaunchOptions()
 		if input.Headless != nil {
-			opts.Headless = *input.Headless
+			launchOpts.Headless = *input.Headless
 		}
 		if input.Width > 0 {
-			opts.Width = input.Width
+			launchOpts.Width = input.Width
 		}
 		if input.Height > 0 {
-			opts.Height = input.Height
+			launchOpts.Height = input.Height
 		}
-		b, err := mgr.Launch(opts)
+		launchOpts.DownloadDir = opts.DownloadDir
+		b, err := mgr.Launch(launchOpts)
 		if err != nil {
 			return nil, BrowserLaunchOutput{}, err
 		}
@@ -77,7 +78,9 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager) {
 			ReadOnlyHint: false,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserConnectInput) (*mcp.CallToolResult, BrowserConnectOutput, error) {
-		b, err := mgr.Connect(input.URL)
+		b, err := mgr.Connect(input.URL, browser.ConnectOptions{
+			DownloadDir: opts.DownloadDir,
+		})
 		if err != nil {
 			return nil, BrowserConnectOutput{}, err
 		}

@@ -16,13 +16,16 @@ type Manager struct {
 	activeID  string
 	order     []string // MRU order (most recent last)
 	parentCtx context.Context
+	tabOpts   *TabOptions
 }
 
 // NewManager creates a tab manager for tabs within the given browser context.
-func NewManager(parentCtx context.Context) *Manager {
+// The optional TabOptions are applied to every new tab created by this manager.
+func NewManager(parentCtx context.Context, opts *TabOptions) *Manager {
 	return &Manager{
 		tabs:      make(map[string]*Tab),
 		parentCtx: parentCtx,
+		tabOpts:   opts,
 	}
 }
 
@@ -30,7 +33,7 @@ func NewManager(parentCtx context.Context) *Manager {
 // becomes the active tab.
 func (m *Manager) NewTab() (*Tab, error) {
 	id := generateID()
-	t, err := New(m.parentCtx, id)
+	t, err := New(m.parentCtx, id, m.tabOpts)
 	if err != nil {
 		return nil, err
 	}

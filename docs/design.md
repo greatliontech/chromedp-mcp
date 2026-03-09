@@ -576,6 +576,22 @@ Get CSS and JavaScript code coverage data.
 
 Returns: per-file coverage data with used/unused byte ranges and percentage.
 
+### Downloads
+
+When `--download-dir` is configured, Chrome automatically saves downloaded files. Downloads are tracked via CDP events and files are renamed from their internal GUID names to their suggested filenames on completion.
+
+#### `get_downloads`
+
+Get tracked file downloads with their status, progress, and file paths. Shows both completed and in-progress downloads. Downloads are browser-scoped (not per-tab).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `browser` | string | no | Browser ID. Defaults to active browser. |
+| `peek` | bool | no | If true, do not clear the buffer (default `false`) |
+| `limit` | int | no | Max entries to return (default all) |
+
+Returns: `downloads` (completed/canceled entries) and `in_progress` (currently downloading).
+
 ## Internal Architecture
 
 ### Package Structure
@@ -730,7 +746,7 @@ chromedp-mcp [--download-dir <path>]
 
 | Flag | Description |
 |------|-------------|
-| `--download-dir` | Directory for saving screenshots, PDFs, and downloads. When set, `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk. Path traversal is blocked — filenames must not contain directory separators. The directory is created automatically if it doesn't exist. |
+| `--download-dir` | Directory for saving screenshots, PDFs, and downloads. When set, `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file saving and event tracking via `get_downloads`. Path traversal is blocked — filenames must not contain directory separators. The directory is created automatically if it doesn't exist. |
 
 When `--download-dir` is not set, the tools return binary data inline only and requesting a `filename` returns an error.
 
@@ -796,7 +812,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 
 ### Browser
 
-- **Downloads** — Control download behavior (allow, deny, set download path) via `browser.SetDownloadBehavior`. Monitor and cancel downloads.
 - **Window Management** — Get/set browser window position and size via `browser.GetWindowBounds` / `browser.SetWindowBounds`.
 
 ### Other

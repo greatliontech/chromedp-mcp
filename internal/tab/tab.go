@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/performancetimeline"
 	"github.com/chromedp/cdproto/runtime"
@@ -36,9 +37,19 @@ type Tab struct {
 	Performance *collector.Performance
 }
 
+// TabOptions configures optional per-tab behavior.
+type TabOptions struct {
+	// Downloads is the browser-level download collector. When non-nil,
+	// download events from this tab are routed to it.
+	Downloads *collector.Download
+	// DownloadDir is the directory for saving downloads. When non-empty,
+	// SetDownloadBehavior is called on each new tab to enable downloads.
+	DownloadDir string
+}
+
 // New creates a new tab from a parent browser context. It creates a new
 // Chrome target, starts event listeners, and initializes collectors.
-func New(parentCtx context.Context, id string) (*Tab, error) {
+func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 	ctx, cancel := chromedp.NewContext(parentCtx)
 
 	t := &Tab{
@@ -49,6 +60,12 @@ func New(parentCtx context.Context, id string) (*Tab, error) {
 		JSErrors:    collector.NewJSErrors(DefaultErrorBuffer),
 		Network:     collector.NewNetwork(DefaultNetworkBuffer),
 		Performance: collector.NewPerformance(DefaultPerformanceBuffer, 50),
+	}
+
+	// Resolve optional download collector.
+	var dl *collector.Download
+	if opts != nil {
+		dl = opts.Downloads
 	}
 
 	// Register CDP event listeners. These are called synchronously by
@@ -69,17 +86,43 @@ func New(parentCtx context.Context, id string) (*Tab, error) {
 			t.Network.HandleLoadingFailed(ev)
 		case *performancetimeline.EventTimelineEventAdded:
 			t.Performance.HandleTimelineEvent(ev)
+		case *browser.EventDownloadWillBegin:
+			if dl != nil {
+				dl.HandleDownloadWillBegin(ev)
+			}
+		case *browser.EventDownloadProgress:
+			if dl != nil {
+				dl.HandleDownloadProgress(ev)
+			}
 		}
 	})
 
-	// Enable performance timeline events. We need to run a chromedp action
-	// to trigger the target allocation (chromedp creates the target lazily
-	// on the first Run call).
+	// Resolve optional download dir for enabling downloads on this tab.
+	var downloadDir string
+	if opts != nil {
+		downloadDir = opts.DownloadDir
+	}
+
+	// Initialize the tab: enable performance timeline and (optionally)
+	// downloads. We need to run a chromedp action to trigger the target
+	// allocation (chromedp creates the target lazily on the first Run call).
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		return performancetimeline.Enable([]string{
+		if err := performancetimeline.Enable([]string{
 			"largest-contentful-paint",
 			"layout-shift",
-		}).Do(ctx)
+		}).Do(ctx); err != nil {
+			return err
+		}
+		// Enable downloads per-tab if a download directory is configured.
+		// SetDownloadBehavior is session-scoped — it must be called on
+		// each tab's context for events to be delivered to that tab.
+		if downloadDir != "" {
+			return browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
+				WithDownloadPath(downloadDir).
+				WithEventsEnabled(true).
+				Do(ctx)
+		}
+		return nil
 	}))
 	if err != nil {
 		cancel()

@@ -17,11 +17,12 @@ import (
 
 // testHarness holds the shared test infrastructure.
 type testHarness struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	httpSrv *httptest.Server
-	mgr     *browser.Manager
-	session *mcp.ClientSession
+	ctx         context.Context
+	cancel      context.CancelFunc
+	httpSrv     *httptest.Server
+	mgr         *browser.Manager
+	session     *mcp.ClientSession
+	downloadDir string
 }
 
 // Global harness, initialized in TestMain.
@@ -56,6 +57,18 @@ func TestMain(m *testing.M) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		fmt.Fprintf(w, `{"message":"héllo wörld 🌍","emoji":"🚀✨"}`)
 	})
+	// Serve downloadable files.
+	mux.HandleFunc("/download/test-file.txt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="test-file.txt"`)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "hello from download test")
+	})
+	mux.HandleFunc("/download/data.csv", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="data.csv"`)
+		w.Header().Set("Content-Type", "text/csv")
+		fmt.Fprint(w, "name,value\nalpha,1\nbeta,2\n")
+	})
+
 	// Serve a tiny PNG for image tests.
 	mux.HandleFunc("/image.png", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -72,6 +85,15 @@ func TestMain(m *testing.M) {
 	})
 	httpSrv := httptest.NewServer(mux)
 
+	// Create a temp download directory for tests.
+	downloadDir, err := os.MkdirTemp("", "chromedp-mcp-test-downloads-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create temp download dir: %v\n", err)
+		cancel()
+		httpSrv.Close()
+		os.Exit(1)
+	}
+
 	// Create browser manager.
 	mgr := browser.NewManager(ctx)
 
@@ -80,7 +102,7 @@ func TestMain(m *testing.M) {
 		Name:    "chromedp-mcp-test",
 		Version: "test",
 	}, nil)
-	Register(srv, mgr, nil)
+	Register(srv, mgr, &Options{DownloadDir: downloadDir})
 
 	// Connect an in-memory MCP client to the server.
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
@@ -102,9 +124,10 @@ func TestMain(m *testing.M) {
 
 	// Pre-launch a browser so tests don't each pay the startup cost.
 	_, err = mgr.Launch(browser.LaunchOptions{
-		Headless: true,
-		Width:    1280,
-		Height:   720,
+		Headless:    true,
+		Width:       1280,
+		Height:      720,
+		DownloadDir: downloadDir,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to launch browser: %v\n", err)
@@ -114,11 +137,12 @@ func TestMain(m *testing.M) {
 	}
 
 	harness = &testHarness{
-		ctx:     ctx,
-		cancel:  cancel,
-		httpSrv: httpSrv,
-		mgr:     mgr,
-		session: session,
+		ctx:         ctx,
+		cancel:      cancel,
+		httpSrv:     httpSrv,
+		mgr:         mgr,
+		session:     session,
+		downloadDir: downloadDir,
 	}
 
 	code := m.Run()
@@ -126,6 +150,7 @@ func TestMain(m *testing.M) {
 	mgr.CloseAll()
 	httpSrv.Close()
 	cancel()
+	os.RemoveAll(downloadDir)
 	os.Exit(code)
 }
 

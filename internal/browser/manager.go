@@ -44,9 +44,9 @@ func (m *Manager) Launch(opts LaunchOptions) (*Browser, error) {
 
 // Connect connects to an existing Chrome browser and registers it as the
 // active browser.
-func (m *Manager) Connect(url string) (*Browser, error) {
+func (m *Manager) Connect(url string, opts ConnectOptions) (*Browser, error) {
 	id := generateID()
-	b, err := Connect(m.parentCtx, id, url)
+	b, err := Connect(m.parentCtx, id, url, opts)
 	if err != nil {
 		return nil, err
 	}

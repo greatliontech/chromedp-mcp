@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestSaveToDownloadDir(t *testing.T) {
@@ -110,32 +112,71 @@ func TestSaveToDownloadDir(t *testing.T) {
 	})
 }
 
-// TestScreenshotFilenameNoDownloadDir verifies that requesting a filename
-// on screenshot when --download-dir is not configured returns an error.
-func TestScreenshotFilenameNoDownloadDir(t *testing.T) {
+// TestScreenshotSaveToDisk verifies that requesting a filename on screenshot
+// saves the file to the download directory and still returns the image inline.
+func TestScreenshotSaveToDisk(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "screenshot", map[string]any{
+	result := callToolRaw(t, "screenshot", map[string]any{
 		"tab":      tabID,
-		"filename": "test.png",
+		"filename": "test-screenshot.png",
 	})
-	if !strings.Contains(errText, "download-dir not configured") {
-		t.Fatalf("expected download-dir error, got: %s", errText)
+
+	// Should have both image content and text content with path.
+	var hasImage, hasText bool
+	for _, c := range result.Content {
+		switch c.(type) {
+		case *mcp.ImageContent:
+			hasImage = true
+		case *mcp.TextContent:
+			hasText = true
+		}
 	}
+	if !hasImage {
+		t.Fatal("expected image content in result")
+	}
+	if !hasText {
+		t.Fatal("expected text content with file path in result")
+	}
+
+	// Verify file exists on disk.
+	path := filepath.Join(harness.downloadDir, "test-screenshot.png")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("screenshot file not found: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("screenshot file is empty")
+	}
+	os.Remove(path)
 }
 
-// TestPDFFilenameNoDownloadDir verifies that requesting a filename
-// on pdf when --download-dir is not configured returns an error.
-func TestPDFFilenameNoDownloadDir(t *testing.T) {
+// TestPDFSaveToDisk verifies that requesting a filename on pdf
+// saves the file to the download directory.
+func TestPDFSaveToDisk(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "pdf", map[string]any{
+	result := callToolRaw(t, "pdf", map[string]any{
 		"tab":      tabID,
-		"filename": "test.pdf",
+		"filename": "test-output.pdf",
 	})
-	if !strings.Contains(errText, "download-dir not configured") {
-		t.Fatalf("expected download-dir error, got: %s", errText)
+
+	// Should return text content with path (not the PDF blob).
+	text := contentText(result)
+	if !strings.Contains(text, "Saved to") {
+		t.Fatalf("expected 'Saved to' in result, got: %s", text)
 	}
+
+	// Verify file exists on disk.
+	path := filepath.Join(harness.downloadDir, "test-output.pdf")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("PDF file not found: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("PDF file is empty")
+	}
+	os.Remove(path)
 }
