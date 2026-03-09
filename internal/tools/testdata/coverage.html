@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Coverage Test</title>
+    <style>
+        .used-style { color: blue; font-size: 16px; }
+        .unused-style { background: pink; border: 3px solid red; }
+        .also-unused { transform: rotate(45deg); opacity: 0.5; }
+    </style>
+</head>
+<body>
+    <h1 class="used-style">Coverage Test</h1>
+    <p class="used-style">This element uses the style.</p>
+    <script>
+        // Used function.
+        function usedFunction() {
+            return 42;
+        }
+
+        // Unused function.
+        function unusedFunction() {
+            return "this code is never called";
+        }
+
+        // Another unused function.
+        function anotherUnused(x) {
+            return x * 2 + 1;
+        }
+
+        // Call the used function.
+        var result = usedFunction();
+        document.title = "Coverage Test - " + result;
+    </script>
+</body>
+</html>

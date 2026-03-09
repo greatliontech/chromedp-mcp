@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Page</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .highlight { color: red; font-weight: bold; }
+        #hidden-el { display: none; }
+    </style>
+</head>
+<body>
+    <h1 id="title">Hello World</h1>
+    <p class="content">This is a test paragraph.</p>
+    <p class="content">This is another paragraph.</p>
+    <div id="hidden-el">Hidden content</div>
+    <ul id="list">
+        <li class="item">Item 1</li>
+        <li class="item">Item 2</li>
+        <li class="item">Item 3</li>
+    </ul>
+    <a id="nav-link" href="/page2.html">Go to page 2</a>
+    <img id="test-img" src="/image.png" alt="Test image" width="100" height="100">
+    <script>
+        // Emit some console messages after a short delay so tests can capture them.
+        setTimeout(function() {
+            console.log("hello from console");
+            console.warn("this is a warning");
+            console.error("this is an error");
+        }, 100);
+    </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Error Test</title>
+</head>
+<body>
+    <h1>Error Test Page</h1>
+    <script>
+        // Throw an error after a short delay so the collector can capture it.
+        setTimeout(function() {
+            throw new Error("test error from page");
+        }, 100);
+
+        // Unhandled promise rejection.
+        setTimeout(function() {
+            Promise.reject("unhandled rejection");
+        }, 200);
+    </script>
+</body>
+</html>

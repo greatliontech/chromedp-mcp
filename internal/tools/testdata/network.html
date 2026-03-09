@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Network Test</title>
+</head>
+<body>
+    <h1>Network Test Page</h1>
+    <div id="api-result"></div>
+    <script>
+        // Make a fetch request so the network collector captures it.
+        fetch('/api/data')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                document.getElementById('api-result').textContent = JSON.stringify(data);
+            })
+            .catch(function(err) {
+                document.getElementById('api-result').textContent = 'Error: ' + err;
+            });
+
+        // Also make a request that will fail.
+        fetch('/api/not-found').catch(function() {});
+    </script>
+</body>
+</html>

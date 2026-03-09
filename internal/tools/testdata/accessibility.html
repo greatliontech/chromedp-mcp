@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Accessibility Test</title>
+</head>
+<body>
+    <header>
+        <nav aria-label="Main navigation">
+            <ul>
+                <li><a href="#home">Home</a></li>
+                <li><a href="#about">About</a></li>
+                <li><a href="#contact">Contact</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        <h1>Accessibility Test</h1>
+        <section aria-labelledby="section-heading">
+            <h2 id="section-heading">Section One</h2>
+            <p>Content of section one.</p>
+            <button id="action-btn" aria-label="Perform action">Click me</button>
+        </section>
+        <form aria-label="Contact form">
+            <label for="a11y-name">Name</label>
+            <input type="text" id="a11y-name" required>
+            <label for="a11y-email">Email</label>
+            <input type="email" id="a11y-email" required>
+            <button type="submit">Send</button>
+        </form>
+    </main>
+    <footer>
+        <p>&copy; 2025 Test</p>
+    </footer>
+</body>
+</html>
