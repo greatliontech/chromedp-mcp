@@ -257,11 +257,7 @@ func TestHandleDialogDismiss(t *testing.T) {
 		done <- string(out.Result)
 	}()
 
-	time.Sleep(300 * time.Millisecond)
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": false,
-	})
+	handleDialog(t, tabID, map[string]any{"accept": false})
 
 	select {
 	case result := <-done:
@@ -286,11 +282,7 @@ func TestHandleDialogConfirmAccept(t *testing.T) {
 		done <- string(out.Result)
 	}()
 
-	time.Sleep(300 * time.Millisecond)
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": true,
-	})
+	handleDialog(t, tabID, map[string]any{"accept": true})
 
 	select {
 	case result := <-done:
@@ -315,12 +307,7 @@ func TestHandleDialogPrompt(t *testing.T) {
 		done <- string(out.Result)
 	}()
 
-	time.Sleep(300 * time.Millisecond)
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": true,
-		"text":   "Alice",
-	})
+	handleDialog(t, tabID, map[string]any{"accept": true, "text": "Alice"})
 
 	select {
 	case result := <-done:

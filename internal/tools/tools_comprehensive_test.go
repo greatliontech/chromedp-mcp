@@ -1359,7 +1359,11 @@ func TestGetLayoutShiftsReal(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Wait for the injected element to appear (causes layout shift).
-	time.Sleep(800 * time.Millisecond)
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":      tabID,
+		"selector": "#injected",
+		"timeout":  5000,
+	})
 
 	out := callTool[GetLayoutShiftsOutput](t, "get_layout_shifts", map[string]any{
 		"tab": tabID,
@@ -1596,13 +1600,8 @@ func TestHandleDialogTextOnAlert(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	time.Sleep(300 * time.Millisecond)
 	// Pass text to an alert dialog — should be ignored, no error.
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": true,
-		"text":   "ignored text",
-	})
+	handleDialog(t, tabID, map[string]any{"accept": true, "text": "ignored text"})
 
 	select {
 	case <-done:
@@ -1679,7 +1678,6 @@ func TestBrowserLaunchCustomDimensions(t *testing.T) {
 	})
 	defer closeTab(t, tab.TabID)
 
-	time.Sleep(500 * time.Millisecond)
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab.TabID,
 		"expression": "window.innerWidth",

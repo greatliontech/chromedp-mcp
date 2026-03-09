@@ -273,11 +273,7 @@ func TestHandleDialogDismissConfirm(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	time.Sleep(300 * time.Millisecond)
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": false,
-	})
+	handleDialog(t, tabID, map[string]any{"accept": false})
 
 	select {
 	case <-done:
@@ -311,11 +307,7 @@ func TestHandleDialogDismissPrompt(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	time.Sleep(300 * time.Millisecond)
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": false,
-	})
+	handleDialog(t, tabID, map[string]any{"accept": false})
 
 	select {
 	case <-done:
@@ -1264,7 +1256,6 @@ func TestBrowserConnect(t *testing.T) {
 		"url":     fixtureURL("page2.html"),
 		"browser": out.BrowserID,
 	})
-	time.Sleep(500 * time.Millisecond)
 
 	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab.TabID,
@@ -1365,14 +1356,20 @@ func TestBrowserKilledExternally(t *testing.T) {
 	cmd.Process.Kill()
 	cmd.Wait()
 
-	// Give chromedp a moment to detect the dead connection.
-	time.Sleep(500 * time.Millisecond)
-
-	// Now tool calls referencing the dead browser should error clearly.
-	errText := callToolExpectErr(t, "get_text", map[string]any{
-		"tab":     tabID,
-		"timeout": 500,
-	})
+	// Poll until chromedp detects the dead connection and tool calls error.
+	var errText string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result := callToolRaw(t, "get_text", map[string]any{
+			"tab":     tabID,
+			"timeout": 500,
+		})
+		if result.IsError {
+			errText = contentText(result)
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	if errText == "" {
 		t.Error("get_text on killed browser should error")
 	}

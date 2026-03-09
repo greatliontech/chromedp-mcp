@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 )
 
 // ===========================================================================
@@ -65,7 +64,6 @@ func TestBrowserConnectHTTPURL(t *testing.T) {
 		"url":     fixtureURL("index.html"),
 		"browser": out.BrowserID,
 	})
-	time.Sleep(500 * time.Millisecond)
 
 	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab.TabID,
@@ -265,17 +263,12 @@ func TestTabMRUOrder(t *testing.T) {
 	tabA := callTool[TabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("index.html"),
 	})
-	time.Sleep(200 * time.Millisecond)
-
 	tabB := callTool[TabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
-	time.Sleep(200 * time.Millisecond)
-
 	tabC := callTool[TabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("forms.html"),
 	})
-	time.Sleep(200 * time.Millisecond)
 
 	// MRU order should now be: A, B, C (C is most recent / active).
 
@@ -320,7 +313,6 @@ func TestTabMRUOrderComplexSequence(t *testing.T) {
 	tabD := callTool[TabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("interaction.html"),
 	})
-	time.Sleep(200 * time.Millisecond)
 
 	// MRU: A, B, C, D (D is active)
 
@@ -582,8 +574,12 @@ func TestPressEnterSubmitsForm(t *testing.T) {
 		"key": "Enter",
 	})
 
-	// Give the submit handler time to fire.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the submit handler to update the DOM.
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent !== ''",
+		"timeout":    3000,
+	})
 
 	// Check that the form's submit handler was called.
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -623,7 +619,12 @@ func TestPressEnterAfterFocus(t *testing.T) {
 		"key": "Enter",
 	})
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the submit handler to update the DOM.
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent !== ''",
+		"timeout":    3000,
+	})
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,

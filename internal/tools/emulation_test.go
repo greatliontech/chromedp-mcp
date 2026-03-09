@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
 
 // --- set_geolocation ---
@@ -441,9 +440,6 @@ func TestBlockURLs(t *testing.T) {
 		"tab":      tabID,
 		"patterns": []string{},
 	})
-
-	// Small delay to let the unblock take effect.
-	time.Sleep(100 * time.Millisecond)
 
 	// Fetch should work now.
 	result = callTool[evalResult](t, "evaluate", map[string]any{

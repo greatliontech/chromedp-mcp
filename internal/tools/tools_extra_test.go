@@ -442,14 +442,8 @@ func TestHandleDialog(t *testing.T) {
 		})
 	}()
 
-	// Give Chrome time to show the dialog.
-	time.Sleep(300 * time.Millisecond)
-
-	// Handle the dialog.
-	callTool[struct{}](t, "handle_dialog", map[string]any{
-		"tab":    tabID,
-		"accept": true,
-	})
+	// Handle the dialog (retries until dialog appears).
+	handleDialog(t, tabID, map[string]any{"accept": true})
 
 	// Wait for the evaluate to complete.
 	select {

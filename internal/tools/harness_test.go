@@ -283,6 +283,22 @@ func closeTab(t *testing.T, tabID string) {
 	callTool[struct{}](t, "tab_close", map[string]any{"tab": tabID})
 }
 
+// handleDialog retries handle_dialog until the dialog is showing or timeout.
+// Use this instead of time.Sleep before handle_dialog calls.
+func handleDialog(t *testing.T, tabID string, args map[string]any) {
+	t.Helper()
+	args["tab"] = tabID
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		result := callToolRaw(t, "handle_dialog", args)
+		if !result.IsError {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for dialog to appear")
+}
+
 // waitForConsole polls get_console_logs (peek) until at least one entry is
 // returned or the timeout expires. Use this after navigating to a fixture
 // that emits console messages asynchronously (e.g. via setTimeout).
