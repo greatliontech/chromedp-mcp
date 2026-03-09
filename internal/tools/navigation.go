@@ -216,22 +216,30 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 }
 
+// historyNavResult describes how the browser navigated after a history entry change.
+type historyNavResult int
+
+const (
+	historyNavCrossDocument historyNavResult = iota // Real navigation (new document loaded)
+	historyNavBFCache                               // Back-forward cache restore
+	historyNavSameDocument                          // SPA pushState / history API
+)
+
 // navigateHistory navigates the browser history by the given delta (-1 for
-// back, +1 for forward). It uses page.NavigateToHistoryEntry, waits for
-// EventFrameNavigated, then reloads the page.
+// back, +1 for forward). It uses page.NavigateToHistoryEntry and listens
+// for CDP events to determine the navigation type:
 //
-// The reload is necessary because Chrome's back-forward cache (bfcache)
-// restores pages without emitting dom.EventDocumentUpdated, which leaves
-// chromedp's internal DOM node cache stale. All selector-based operations
-// (click, query, get_text, etc.) fail because chromedp looks up new node
-// IDs in its stale cache and never finds them.
+//   - Same-document (SPA/pushState): fires EventNavigatedWithinDocument.
+//     No reload needed — the DOM is already live and correct.
 //
-// chromedp's built-in NavigateBack/NavigateForward also have this problem —
-// they hang waiting for lifecycle events that bfcache restores don't
-// produce (see https://github.com/chromedp/chromedp/issues/1346).
+//   - Back-forward cache restore: fires EventFrameNavigated with
+//     Type == BackForwardCacheRestore. Requires a reload because Chrome
+//     doesn't emit dom.EventDocumentUpdated, leaving chromedp's internal
+//     DOM node cache stale (chromedp/chromedp#1346).
 //
-// The reload forces a fresh page load that properly triggers all CDP
-// events, giving chromedp a consistent DOM tree.
+//   - Normal cross-document navigation: fires EventFrameNavigated with
+//     Type == Navigation. No reload needed — the full page load triggers
+//     proper DOM events that resync chromedp's cache.
 func navigateHistory(delta int) chromedp.ActionFunc {
 	return func(ctx context.Context) error {
 		cur, entries, err := page.GetNavigationHistory().Do(ctx)
@@ -246,18 +254,37 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 			return fmt.Errorf("no forward history entry")
 		}
 
-		// Listen for the root frame navigation event before triggering
-		// the history entry change so we don't miss it.
-		ch := make(chan struct{}, 1)
+		// Listen for navigation events before triggering the history
+		// entry change so we don't miss them. We need to distinguish
+		// three cases: same-document (SPA), bfcache restore, and
+		// normal cross-document navigation.
+		type navEvent struct {
+			result historyNavResult
+		}
+		ch := make(chan navEvent, 1)
 		lctx, lcancel := context.WithCancel(ctx)
 		defer lcancel()
+
 		chromedp.ListenTarget(lctx, func(ev interface{}) {
-			if fn, ok := ev.(*page.EventFrameNavigated); ok {
-				if fn.Frame.ParentID == "" {
-					select {
-					case ch <- struct{}{}:
-					default:
-					}
+			switch e := ev.(type) {
+			case *page.EventNavigatedWithinDocument:
+				// SPA pushState / history API — same document,
+				// DOM is already correct.
+				select {
+				case ch <- navEvent{historyNavSameDocument}:
+				default:
+				}
+			case *page.EventFrameNavigated:
+				if e.Frame.ParentID != "" {
+					return // Ignore subframe navigations
+				}
+				result := historyNavCrossDocument
+				if e.Type == page.NavigationTypeBackForwardCacheRestore {
+					result = historyNavBFCache
+				}
+				select {
+				case ch <- navEvent{result}:
+				default:
 				}
 			}
 		})
@@ -266,16 +293,23 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 			return err
 		}
 
+		var nav navEvent
 		select {
-		case <-ch:
+		case nav = <-ch:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 
-		// Reload the page to force a fresh document load. This triggers
-		// dom.EventDocumentUpdated, which resyncs chromedp's DOM cache.
-		// Without this, bfcache restores leave the cache stale and all
-		// selector-based queries time out.
-		return chromedp.Reload().Do(ctx)
+		if nav.result == historyNavBFCache {
+			// Reload to force a fresh document load. This triggers
+			// dom.EventDocumentUpdated, which resyncs chromedp's
+			// DOM cache. Without this, bfcache restores leave the
+			// cache stale and all selector-based queries time out.
+			return chromedp.Reload().Do(ctx)
+		}
+
+		// Same-document and normal cross-document navigations don't
+		// need a reload — the DOM is already in a consistent state.
+		return nil
 	}
 }
