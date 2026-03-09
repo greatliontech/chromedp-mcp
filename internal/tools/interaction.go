@@ -99,9 +99,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx := t.Context()
 
 		if inp.ClickCount == 2 {
-			return nil, struct{}{}, withSelectorCheck(tctx, inp.Selector, func(ctx context.Context) error {
-				return chromedp.Run(ctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery))
-			})
+			sctx, cancel := selectorContext(tctx, inp.Timeout)
+			defer cancel()
+			return nil, struct{}{}, chromedp.Run(sctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery))
 		}
 
 		// For non-standard buttons or click counts, use JS dispatch.
@@ -123,9 +123,10 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				var rect = el.getBoundingClientRect();
 				var x = rect.x + rect.width/2, y = rect.y + rect.height/2;
 				for (var i = 0; i < %d; i++) {
-					el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, button:%d, clientX:x, clientY:y}));
-					el.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, button:%d, clientX:x, clientY:y}));
-					el.dispatchEvent(new MouseEvent('click', {bubbles:true, button:%d, clientX:x, clientY:y}));
+					var detail = i + 1;
+					el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, button:%d, detail:detail, clientX:x, clientY:y}));
+					el.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, button:%d, detail:detail, clientX:x, clientY:y}));
+					el.dispatchEvent(new MouseEvent('click', {bubbles:true, button:%d, detail:detail, clientX:x, clientY:y}));
 				}
 			})()`, inp.Selector, clickCount, button, button, button)
 			var res interface{}
@@ -135,9 +136,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, nil
 		}
 
-		return nil, struct{}{}, withSelectorCheck(tctx, inp.Selector, func(ctx context.Context) error {
-			return chromedp.Run(ctx, chromedp.Click(inp.Selector, chromedp.ByQuery))
-		})
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
+		defer cancel()
+		return nil, struct{}{}, chromedp.Run(sctx, chromedp.Click(inp.Selector, chromedp.ByQuery))
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -150,11 +151,6 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		tctx := t.Context()
-
-		// Pre-check the selector exists before building actions.
-		if err := checkSelector(tctx, inp.Selector); err != nil {
-			return nil, struct{}{}, err
-		}
 
 		var actions chromedp.Tasks
 		if inp.Clear {
@@ -178,7 +174,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			actions = append(actions, chromedp.SendKeys(inp.Selector, inp.Text, chromedp.ByQuery))
 		}
 
-		sctx, cancel := context.WithTimeout(tctx, selectorTimeout)
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, actions); err != nil {
 			return nil, struct{}{}, err
@@ -275,9 +271,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		if inp.Selector != "" {
-			err = withSelectorCheck(t.Context(), inp.Selector, func(ctx context.Context) error {
-				return chromedp.Run(ctx, chromedp.ScrollIntoView(inp.Selector, chromedp.ByQuery))
-			})
+			sctx, cancel := selectorContext(t.Context(), inp.Timeout)
+			defer cancel()
+			err = chromedp.Run(sctx, chromedp.ScrollIntoView(inp.Selector, chromedp.ByQuery))
 		} else {
 			js := fmt.Sprintf("window.scrollBy(%d, %d)", inp.X, inp.Y)
 			var res interface{}
@@ -321,9 +317,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		if err := withSelectorCheck(t.Context(), inp.Selector, func(ctx context.Context) error {
-			return chromedp.Run(ctx, chromedp.Focus(inp.Selector, chromedp.ByQuery))
-		}); err != nil {
+		sctx, cancel := selectorContext(t.Context(), inp.Timeout)
+		defer cancel()
+		if err := chromedp.Run(sctx, chromedp.Focus(inp.Selector, chromedp.ByQuery)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -371,9 +367,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, struct{}{}, err
 		}
-		if err := withSelectorCheck(t.Context(), inp.Selector, func(ctx context.Context) error {
-			return chromedp.Run(ctx, chromedp.SetUploadFiles(inp.Selector, inp.Paths, chromedp.ByQuery))
-		}); err != nil {
+		sctx, cancel := selectorContext(t.Context(), inp.Timeout)
+		defer cancel()
+		if err := chromedp.Run(sctx, chromedp.SetUploadFiles(inp.Selector, inp.Paths, chromedp.ByQuery)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil

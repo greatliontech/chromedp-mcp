@@ -52,6 +52,10 @@ func TestMain(m *testing.M) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html><body><h1>Slow Page</h1></body></html>`)
 	})
+	mux.HandleFunc("/api/unicode", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		fmt.Fprintf(w, `{"message":"héllo wörld 🌍","emoji":"🚀✨"}`)
+	})
 	// Serve a tiny PNG for image tests.
 	mux.HandleFunc("/image.png", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")

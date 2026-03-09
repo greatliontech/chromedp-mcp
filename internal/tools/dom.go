@@ -119,13 +119,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		includeAttrs := input.Attributes == nil || *input.Attributes
 		includeText := input.Text == nil || *input.Text
 
-		// Pre-check: fail fast if the selector matches nothing.
-		if err := checkSelector(t.Context(), input.Selector); err != nil {
-			return nil, QueryOutput{}, err
-		}
-
 		var nodes []*cdp.Node
-		sctx, scancel := context.WithTimeout(t.Context(), selectorTimeout)
+		sctx, scancel := selectorContext(t.Context(), input.Timeout)
 		defer scancel()
 		if err := chromedp.Run(sctx, chromedp.Nodes(input.Selector, &nodes, chromedp.ByQueryAll)); err != nil {
 			return nil, QueryOutput{}, err
@@ -214,12 +209,14 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		outer := input.Outer == nil || *input.Outer
 		var html string
-		if err := withSelectorCheck(t.Context(), selector, func(ctx context.Context) error {
-			if outer {
-				return chromedp.Run(ctx, chromedp.OuterHTML(selector, &html, chromedp.ByQuery))
-			}
-			return chromedp.Run(ctx, chromedp.InnerHTML(selector, &html, chromedp.ByQuery))
-		}); err != nil {
+		sctx, scancel := selectorContext(t.Context(), input.Timeout)
+		defer scancel()
+		if outer {
+			err = chromedp.Run(sctx, chromedp.OuterHTML(selector, &html, chromedp.ByQuery))
+		} else {
+			err = chromedp.Run(sctx, chromedp.InnerHTML(selector, &html, chromedp.ByQuery))
+		}
+		if err != nil {
 			return nil, GetHTMLOutput{}, err
 		}
 		return nil, GetHTMLOutput{HTML: html}, nil
@@ -244,9 +241,9 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		var text string
-		if err := withSelectorCheck(t.Context(), selector, func(ctx context.Context) error {
-			return chromedp.Run(ctx, chromedp.Text(selector, &text, chromedp.NodeVisible, chromedp.ByQuery))
-		}); err != nil {
+		sctx, scancel := selectorContext(t.Context(), input.Timeout)
+		defer scancel()
+		if err := chromedp.Run(sctx, chromedp.Text(selector, &text, chromedp.NodeVisible, chromedp.ByQuery)); err != nil {
 			return nil, GetTextOutput{}, err
 		}
 		return nil, GetTextOutput{Text: text}, nil
@@ -267,18 +264,11 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		interestingOnly := input.InterestingOnly == nil || *input.InterestingOnly
 
-		// Pre-check selector if provided.
-		if input.Selector != "" {
-			if err := checkSelector(t.Context(), input.Selector); err != nil {
-				return nil, nil, err
-			}
-		}
-
 		var axNodes []*accessibility.Node
 		tctx := t.Context()
 		if input.Selector != "" {
 			var cancel context.CancelFunc
-			tctx, cancel = context.WithTimeout(tctx, selectorTimeout)
+			tctx, cancel = selectorContext(tctx, input.Timeout)
 			defer cancel()
 		}
 		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {

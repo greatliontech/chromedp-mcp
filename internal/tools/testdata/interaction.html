@@ -26,6 +26,10 @@
 
     <div id="scroll-marker">You scrolled here!</div>
 
+    <div id="middle-click-output"></div>
+    <div id="triple-click-output"></div>
+    <div id="scroll-x-target" style="width: 3000px; height: 10px; background: #ddd;"></div>
+
     <script>
         var clicks = 0;
         document.getElementById('click-target').addEventListener('click', function() {
@@ -35,13 +39,36 @@
             document.getElementById('click-count').textContent = String(clicks);
         });
 
+        // Middle-click detection via mousedown.
+        document.getElementById('click-target').addEventListener('mousedown', function(e) {
+            if (e.button === 1) {
+                document.getElementById('middle-click-output').textContent = 'middle-click';
+            }
+        });
+
+        // Triple-click detection.
+        document.getElementById('click-target').addEventListener('click', function(e) {
+            if (e.detail === 3) {
+                document.getElementById('triple-click-output').textContent = 'triple-click';
+            }
+        });
+
         document.getElementById('hover-target').addEventListener('mouseover', function() {
             this.classList.add('hovered');
             this.textContent = 'Hovered!';
         });
 
+        document.getElementById('hover-target').addEventListener('mouseout', function() {
+            document.getElementById('hover-target').dataset.mouseout = 'true';
+        });
+
         document.addEventListener('keydown', function(e) {
-            document.getElementById('key-output').textContent = e.key + (e.ctrlKey ? '+Ctrl' : '') + (e.shiftKey ? '+Shift' : '');
+            var parts = [e.key];
+            if (e.ctrlKey) parts.push('Ctrl');
+            if (e.shiftKey) parts.push('Shift');
+            if (e.altKey) parts.push('Alt');
+            if (e.metaKey) parts.push('Meta');
+            document.getElementById('key-output').textContent = parts.join('+');
         });
     </script>
 </body>

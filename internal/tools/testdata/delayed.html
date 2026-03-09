@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Delayed Content</title>
+</head>
+<body>
+    <h1 id="title">Delayed Content Test</h1>
+    <div id="container"></div>
+
+    <script>
+        // After 500ms, inject a new element and set a flag.
+        setTimeout(function() {
+            var el = document.createElement('div');
+            el.id = 'delayed-element';
+            el.textContent = 'I appeared after a delay!';
+            document.getElementById('container').appendChild(el);
+            window.__delayedReady = true;
+        }, 500);
+    </script>
+</body>
+</html>

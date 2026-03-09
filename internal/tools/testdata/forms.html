@@ -29,6 +29,7 @@
     </form>
 
     <div id="result" style="display:none;"></div>
+    <div id="change-output"></div>
 
     <script>
         document.getElementById('test-form').addEventListener('submit', function(e) {
@@ -36,6 +37,11 @@
             var result = document.getElementById('result');
             result.style.display = 'block';
             result.textContent = 'Form submitted: ' + new FormData(this).get('name');
+        });
+
+        // Track change events on the select.
+        document.getElementById('color').addEventListener('change', function() {
+            document.getElementById('change-output').textContent = 'changed:' + this.value;
         });
     </script>
 </body>

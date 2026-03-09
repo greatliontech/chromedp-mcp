@@ -4,10 +4,8 @@ package tools
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
-	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
@@ -40,41 +38,22 @@ func ptrBool(v bool) *bool {
 
 // TabInput is embedded by tool inputs that operate on a tab.
 type TabInput struct {
-	Tab string `json:"tab,omitempty" jsonschema:"Tab ID. If omitted uses the active tab."`
+	Tab     string `json:"tab,omitempty" jsonschema:"Tab ID. If omitted uses the active tab."`
+	Timeout int    `json:"timeout,omitempty" jsonschema:"Max time in milliseconds to wait for selectors (default 5000). Set lower for elements known to be present."`
 }
 
-// selectorTimeout is a safety-net timeout for chromedp selector-based actions.
-// It caps the maximum time spent polling for an element to avoid hanging
-// indefinitely on missing selectors. The JS pre-check in checkSelector
-// should catch most missing-element cases instantly; this timeout is a
-// fallback for races where an element disappears between check and action.
-const selectorTimeout = 3 * time.Second
+// defaultSelectorTimeout is the default timeout for selector-based chromedp
+// actions. chromedp polls with a 5ms retry loop until the element appears or
+// the context times out. This default gives dynamic elements a reasonable
+// window to appear while keeping failures bounded.
+const defaultSelectorTimeout = 5 * time.Second
 
-// checkSelector verifies that a CSS selector matches at least one element
-// in the page. It uses a single JS querySelector call which returns
-// immediately, avoiding chromedp's retry/poll loop that would otherwise
-// wait until the context deadline on missing elements.
-func checkSelector(ctx context.Context, selector string) error {
-	var exists bool
-	if err := chromedp.Run(ctx, chromedp.Evaluate(
-		fmt.Sprintf(`document.querySelector(%q) !== null`, selector), &exists,
-	)); err != nil {
-		return fmt.Errorf("selector check failed: %w", err)
+// selectorContext returns a context bounded by the user-specified timeout
+// (in milliseconds) or the default selector timeout.
+func selectorContext(ctx context.Context, timeoutMs int) (context.Context, context.CancelFunc) {
+	d := defaultSelectorTimeout
+	if timeoutMs > 0 {
+		d = time.Duration(timeoutMs) * time.Millisecond
 	}
-	if !exists {
-		return fmt.Errorf("element %q not found", selector)
-	}
-	return nil
-}
-
-// withSelectorCheck runs a pre-check for the selector and then executes the
-// given function with a timeout-bounded context. This provides both instant
-// failure for missing elements and a safety-net timeout for edge cases.
-func withSelectorCheck(ctx context.Context, selector string, fn func(ctx context.Context) error) error {
-	if err := checkSelector(ctx, selector); err != nil {
-		return err
-	}
-	sctx, cancel := context.WithTimeout(ctx, selectorTimeout)
-	defer cancel()
-	return fn(sctx)
+	return context.WithTimeout(ctx, d)
 }

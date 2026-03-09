@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Layout Shifts Test</title>
+    <style>
+        body { margin: 0; padding: 20px; }
+        #content { font-size: 16px; line-height: 1.5; }
+        #injected { background: yellow; padding: 20px; font-size: 24px; }
+    </style>
+</head>
+<body>
+    <div id="content">
+        <p>This is paragraph one.</p>
+        <p>This is paragraph two.</p>
+        <p>This is paragraph three.</p>
+        <p>This is paragraph four.</p>
+        <p>This is paragraph five.</p>
+    </div>
+
+    <script>
+        // After 300ms, inject a large element at the top of the page,
+        // causing visible content below it to shift down.
+        setTimeout(function() {
+            var el = document.createElement('div');
+            el.id = 'injected';
+            el.textContent = 'This element was injected, causing layout shift!';
+            document.body.insertBefore(el, document.getElementById('content'));
+        }, 300);
+    </script>
+</body>
+</html>
