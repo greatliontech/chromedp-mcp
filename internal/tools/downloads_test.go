@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/collector"
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 // TestDownloadLinkClick verifies that clicking a download link saves the

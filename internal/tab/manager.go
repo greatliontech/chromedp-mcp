@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/id"
+	"github.com/greatliontech/chromedp-mcp/internal/id"
 )
 
 // Manager manages the set of open tabs within a single browser and tracks

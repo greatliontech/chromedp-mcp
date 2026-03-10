@@ -13,7 +13,7 @@ import (
 	"github.com/chromedp/chromedp/kb"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
 // namedKeys maps key names used in the press_key MCP tool to the chromedp

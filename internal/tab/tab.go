@@ -11,7 +11,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/collector"
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 // DefaultConsoleBuffer is the default console log buffer size.

@@ -5,8 +5,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
-	"github.com/thegrumpylion/chromedp-mcp/internal/collector"
+	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 // GetConsoleLogsInput is the input for get_console_logs.

@@ -12,7 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
 // testHarness holds the shared test infrastructure.

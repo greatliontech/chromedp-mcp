@@ -8,8 +8,8 @@ import (
 
 	"github.com/chromedp/chromedp"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/collector"
-	"github.com/thegrumpylion/chromedp-mcp/internal/tab"
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
+	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
 // DefaultDownloadBuffer is the default buffer size for tracking downloads.

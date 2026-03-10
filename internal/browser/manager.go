@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/thegrumpylion/chromedp-mcp/internal/id"
-	"github.com/thegrumpylion/chromedp-mcp/internal/tab"
+	"github.com/greatliontech/chromedp-mcp/internal/id"
+	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
 // Manager manages multiple browser instances and tracks the active one.
