@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -18,6 +20,14 @@ import (
 func main() {
 	downloadDir := flag.String("download-dir", "", "Directory for saving screenshots, PDFs, and downloads")
 	flag.Parse()
+
+	// Expand ~ to the user's home directory since MCP clients pass
+	// args directly without shell expansion.
+	if strings.HasPrefix(*downloadDir, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			*downloadDir = filepath.Join(home, (*downloadDir)[1:])
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

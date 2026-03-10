@@ -47,7 +47,7 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
   "mcpServers": {
     "browser": {
       "command": "chromedp-mcp",
-      "args": ["--download-dir", "/tmp/browser-downloads"]
+      "args": ["--download-dir", "~/Downloads"]
     }
   }
 }
@@ -56,7 +56,7 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 ### Claude Code
 
 ```sh
-claude mcp add browser chromedp-mcp -- --download-dir /tmp/browser-downloads
+claude mcp add browser chromedp-mcp -- --download-dir ~/Downloads
 ```
 
 ### OpenCode
@@ -68,7 +68,7 @@ Add to your `opencode.json` (typically `~/.config/opencode/opencode.json`):
   "mcp": {
     "browser": {
       "type": "local",
-      "command": ["chromedp-mcp", "--download-dir", "/tmp/browser-downloads"]
+      "command": ["chromedp-mcp", "--download-dir", "~/Downloads"]
     }
   }
 }
