@@ -2,17 +2,20 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/profile"
 )
 
 // BrowserLaunchInput is the input for browser_launch.
 type BrowserLaunchInput struct {
-	Headless *bool `json:"headless,omitempty" jsonschema:"Run in headless mode (default true)"`
-	Width    int   `json:"width,omitempty" jsonschema:"Initial viewport width in pixels (default 1920)"`
-	Height   int   `json:"height,omitempty" jsonschema:"Initial viewport height in pixels (default 1080)"`
+	Headless *bool  `json:"headless,omitempty" jsonschema:"Run in headless mode (default true)"`
+	Width    int    `json:"width,omitempty" jsonschema:"Initial viewport width in pixels (default 1920)"`
+	Height   int    `json:"height,omitempty" jsonschema:"Initial viewport height in pixels (default 1080)"`
+	Profile  string `json:"profile,omitempty" jsonschema:"Chrome profile display name to use (e.g. Work). Must be in the allowed profiles list. Use browser_list_profiles to see available profiles."`
 }
 
 // BrowserLaunchOutput is the output for browser_launch.
@@ -64,6 +67,23 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			launchOpts.Height = input.Height
 		}
 		launchOpts.DownloadDir = opts.DownloadDir
+
+		if input.Profile != "" {
+			if opts.allowedSet == nil || !opts.allowedSet[input.Profile] {
+				return nil, BrowserLaunchOutput{}, fmt.Errorf("profile %q is not in the allowed profiles list", input.Profile)
+			}
+			all, err := profile.Discover(opts.userDataDir)
+			if err != nil {
+				return nil, BrowserLaunchOutput{}, fmt.Errorf("discover profiles: %w", err)
+			}
+			p, ok := profile.ResolveByName(all, input.Profile)
+			if !ok {
+				return nil, BrowserLaunchOutput{}, fmt.Errorf("profile %q not found in %s", input.Profile, opts.userDataDir)
+			}
+			launchOpts.UserDataDir = opts.userDataDir
+			launchOpts.ProfileDir = p.Dir
+		}
+
 		b, err := mgr.Launch(launchOpts)
 		if err != nil {
 			return nil, BrowserLaunchOutput{}, err

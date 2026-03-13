@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,6 +20,7 @@ import (
 
 func main() {
 	downloadDir := flag.String("download-dir", "", "Directory for saving screenshots, PDFs, and downloads")
+	allowedProfiles := flag.String("allowed-profiles", "", "Comma-separated list of Chrome profile display names the LLM may use (e.g. \"Work,Personal\")")
 	flag.Parse()
 
 	// Expand ~ to the user's home directory since MCP clients pass
@@ -40,8 +42,19 @@ func main() {
 		Version: "0.1.0",
 	}, nil)
 
+	var profiles []string
+	if *allowedProfiles != "" {
+		for _, p := range strings.Split(*allowedProfiles, ",") {
+			if t := strings.TrimSpace(p); t != "" {
+				profiles = append(profiles, t)
+			}
+		}
+		profiles = slices.Compact(profiles)
+	}
+
 	tools.Register(srv, mgr, &tools.Options{
-		DownloadDir: *downloadDir,
+		DownloadDir:     *downloadDir,
+		AllowedProfiles: profiles,
 	})
 
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {

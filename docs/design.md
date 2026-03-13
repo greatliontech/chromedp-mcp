@@ -23,7 +23,7 @@ stdio only. This is the standard for CLI-integrated MCP servers (Claude Desktop,
 
 ## Browser Lifecycle
 
-The browser lifecycle is entirely tool-driven. There are no CLI flags for browser configuration. The LLM decides when to launch or connect to a browser, and with what settings.
+The browser lifecycle is entirely tool-driven. The LLM decides when to launch or connect to a browser, and with what settings. The only CLI-level configuration that affects browser launches is `--allowed-profiles`, which gates access to real Chrome user profiles (see [User Profile Security](#user-profile-security)).
 
 This means the LLM can:
 - Launch a headless browser for automated testing
@@ -42,10 +42,21 @@ Launch a new Chrome instance managed by the server.
 | `headless` | bool | no | Run in headless mode (default `true`) |
 | `width` | int | no | Initial viewport width (default 1920) |
 | `height` | int | no | Initial viewport height (default 1080) |
+| `profile` | string | no | Chrome profile display name to use (e.g. `"Work"`). Must be in the allowed profiles list. Use `browser_list_profiles` to see available profiles. Requires `--allowed-profiles` to be configured. |
 
 Returns: browser ID.
 
+When `profile` is specified, the browser is launched with `--user-data-dir` and `--profile-directory` pointing to the real Chrome profile. This gives the browser access to the profile's cookies, sessions, extensions, and other stored data. When omitted, a temporary ephemeral profile is used (default behavior).
+
 Closing the server kills any launched browsers.
+
+#### `browser_list_profiles`
+
+List available Chrome/Chromium user profiles that can be used with `browser_launch`. Only registered when `--allowed-profiles` is configured. Returns only profiles that are in the allowed list.
+
+No parameters.
+
+Returns: array of `{name, dir}` objects where `name` is the display name and `dir` is the profile directory name.
 
 #### `browser_connect`
 
@@ -736,6 +747,8 @@ chromedp-mcp/
     tab/
       tab.go            # Tab type: wraps chromedp.Context, owns event collectors
       manager.go        # TabManager: per-browser tab registry, active tab tracking
+    profile/
+      profile.go        # Chrome profile discovery from Local State, platform-specific user data dir detection
     collector/
       collector.go      # Generic RingBuffer[T] with drain/peek/filter
       console.go        # Console log collector (runtime.EventConsoleAPICalled)
@@ -744,6 +757,7 @@ chromedp-mcp/
       performance.go    # Performance timeline collector (LCP, layout shifts)
     tools/
       browser.go        # browser_launch, browser_connect, browser_close, browser_list
+      profile.go        # browser_list_profiles
       tabs.go           # tab_new, tab_list, tab_activate, tab_close
       navigation.go     # navigate, reload, go_back, go_forward, wait_for
       visual.go         # screenshot, pdf, set_viewport
@@ -838,6 +852,7 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 |---------------|----------------|-------------------|------------------|
 | Browser (`browser_launch`, `browser_connect`) | false | false | false |
 | Browser (`browser_list`) | true | false | true |
+| Browser (`browser_list_profiles`) | true | false | true |
 | Browser (`browser_close`) | false | true | false |
 | Tab (`tab_new`) | false | false | false |
 | Tab (`tab_list`) | true | false | true |
@@ -868,17 +883,28 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 
 ## Configuration
 
-All browser configuration is done via tools at runtime. The server accepts one optional flag:
+All browser configuration is done via tools at runtime. The server accepts optional flags:
 
 ```
-chromedp-mcp [--download-dir <path>]
+chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--download-dir` | Directory for saving screenshots, PDFs, and downloads. When set, `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file saving and event tracking via `get_downloads`. Path traversal is blocked — filenames must not contain directory separators. The directory is created automatically if it doesn't exist. |
+| `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). When set, registers the `browser_list_profiles` tool and enables the `profile` parameter on `browser_launch`. Profiles not in this list are never exposed to the LLM. The Chrome/Chromium user data directory is auto-detected from platform defaults. |
 
 When `--download-dir` is not set, the tools return binary data inline only and requesting a `filename` returns an error.
+
+### User Profile Security
+
+> **Warning:** Enabling `--allowed-profiles` gives the LLM access to real Chrome profiles, including saved cookies, active sessions, localStorage, and extension data. The LLM can act as the user on any site they are logged into in that profile. Only expose profiles you understand the implications of, and never expose profiles containing sensitive credentials to untrusted LLM providers.
+
+Profile access is disabled by default. The `--allowed-profiles` flag is the explicit opt-in gate. When not set, the `browser_list_profiles` tool is not registered and the `profile` parameter on `browser_launch` is rejected. Each launched browser gets a fresh temporary profile that is discarded on close.
+
+Profile discovery works by reading Chrome's `Local State` JSON file, which maps profile directory names (`Default`, `Profile 1`, `Profile 2`, etc.) to user-chosen display names. The `--allowed-profiles` flag accepts display names, and only matching profiles are returned by `browser_list_profiles` or accepted by `browser_launch`.
+
+Note that Chrome enforces a singleton lock on user data directories. Only one Chrome process can use a given user data directory at a time. If the user's Chrome is already running, launching a browser with a profile from the same user data directory will fail.
 
 ## Future Features
 

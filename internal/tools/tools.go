@@ -19,6 +19,15 @@ type Options struct {
 	// downloads. When empty, save-to-disk is unavailable and the tools
 	// return binary data inline only.
 	DownloadDir string
+	// AllowedProfiles is the list of Chrome profiles (by display name)
+	// that the LLM is permitted to use. When non-empty, the
+	// browser_list_profiles tool is registered and browser_launch
+	// accepts a profile parameter.
+	AllowedProfiles []string
+
+	// resolved at registration time by registerProfileTools
+	userDataDir string          // auto-detected user data dir path
+	allowedSet  map[string]bool // allowed profile names for fast lookup
 }
 
 // Register registers all tools on the given MCP server.
@@ -27,6 +36,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		opts = &Options{}
 	}
 	registerBrowserTools(s, mgr, opts)
+	registerProfileTools(s, mgr, opts)
 	registerTabTools(s, mgr)
 	registerNavigationTools(s, mgr)
 	registerVisualTools(s, mgr, opts)

@@ -31,12 +31,13 @@ go install github.com/greatliontech/chromedp-mcp/cmd/chromedp-mcp@latest
 chromedp-mcp communicates over stdio, the standard transport for MCP servers integrated with LLM clients.
 
 ```sh
-chromedp-mcp [--download-dir <path>]
+chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>]
 ```
 
-| Flag             | Description                                                                                                                                                                                                                                     |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--download-dir` | Directory for saving screenshots, PDFs, and file downloads. When set, the `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file tracking via `get_downloads`. |
+| Flag                 | Description                                                                                                                                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--download-dir`     | Directory for saving screenshots, PDFs, and file downloads. When set, the `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file tracking via `get_downloads`. |
+| `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). Enables the `browser_list_profiles` tool and the `profile` parameter on `browser_launch`. See [User Profiles](#user-profiles) for details. |
 
 ### Claude Desktop
 
@@ -78,18 +79,43 @@ Add to your `opencode.json` (typically `~/.config/opencode/opencode.json`):
 
 Any MCP client that supports stdio transport can use chromedp-mcp. Point it at the `chromedp-mcp` binary with optional flags.
 
+## User Profiles
+
+> **Security Warning:** Enabling user profiles gives the LLM access to a real Chrome profile, including saved cookies, active sessions, localStorage, and extension data. The LLM can act as you on any site you are logged into in that profile. Only enable profiles you understand the implications of, and never expose profiles containing sensitive credentials to untrusted LLM providers.
+
+By default, chromedp-mcp launches browsers with ephemeral temporary profiles — no user data persists after the browser is closed, and no existing profile data is accessible. This is the safe default.
+
+The `--allowed-profiles` flag opts in to profile access. When set, the LLM gains two capabilities:
+
+1. **`browser_list_profiles`** — Discover which profiles are available (only those in the allowed list).
+2. **`browser_launch` with `profile`** — Launch a browser using a real Chrome profile by its display name.
+
+### How it works
+
+Chrome stores user profiles in a user data directory (e.g. `~/.config/chromium` on Linux). Each profile has a directory (`Default`, `Profile 1`, `Profile 2`, etc.) and a user-chosen display name (e.g. "Work", "Personal"). The `--allowed-profiles` flag accepts display names.
+
+The server reads Chrome's `Local State` file to map display names to profile directories. Only profiles explicitly listed in `--allowed-profiles` are exposed to the LLM.
+
+### Recommendations
+
+- **Create dedicated profiles.** Don't expose your primary browser profile. Create a separate profile in Chrome specifically for LLM use, with only the accounts and extensions needed for the task.
+- **Limit the allowed list.** Only include the profiles the LLM actually needs. One profile per use case is ideal.
+- **Close Chrome first.** Chrome enforces a singleton lock on user data directories. You must close all Chrome instances before the MCP server can launch a browser with a real profile. Alternatively, use a separate Chrome installation or user data directory.
+- **Be aware of what's accessible.** A profile may contain saved passwords, autofill data, cookies for banking/email/social media, and browser extensions with their own permissions. The LLM can access anything the profile can.
+
 ## Tools
 
 chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is entirely tool-driven — the LLM decides when to launch browsers and create tabs.
 
 ### Browser Management
 
-| Tool              | Description                                          |
-| ----------------- | ---------------------------------------------------- |
-| `browser_launch`  | Launch a new Chrome instance (headless by default)   |
-| `browser_connect` | Connect to a running Chrome via remote debugging URL |
-| `browser_close`   | Close a browser (kills process or disconnects)       |
-| `browser_list`    | List all managed browsers                            |
+| Tool                     | Description                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `browser_launch`         | Launch a new Chrome instance (headless by default), optionally with a user profile  |
+| `browser_connect`        | Connect to a running Chrome via remote debugging URL                                |
+| `browser_close`          | Close a browser (kills process or disconnects)                                      |
+| `browser_list`           | List all managed browsers                                                           |
+| `browser_list_profiles`  | List available user profiles (requires `--allowed-profiles`)                        |
 
 ### Tab Management
 

@@ -42,6 +42,15 @@ type LaunchOptions struct {
 	Width       int
 	Height      int
 	DownloadDir string
+	// UserDataDir is the Chrome user data directory (e.g.
+	// ~/.config/chromium). When set together with ProfileDir, the
+	// browser is launched with an existing user profile instead of a
+	// temporary ephemeral one.
+	UserDataDir string
+	// ProfileDir is the profile directory name within UserDataDir
+	// (e.g. "Default", "Profile 2"). Must be set together with
+	// UserDataDir.
+	ProfileDir string
 }
 
 // DefaultLaunchOptions returns the default launch configuration.
@@ -66,6 +75,12 @@ func Launch(parentCtx context.Context, id string, opts LaunchOptions) (*Browser,
 	}
 	if opts.Width > 0 && opts.Height > 0 {
 		allocOpts = append(allocOpts, chromedp.WindowSize(opts.Width, opts.Height))
+	}
+	if opts.UserDataDir != "" && opts.ProfileDir != "" {
+		allocOpts = append(allocOpts,
+			chromedp.UserDataDir(opts.UserDataDir),
+			chromedp.Flag("profile-directory", opts.ProfileDir),
+		)
 	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, allocOpts...)
