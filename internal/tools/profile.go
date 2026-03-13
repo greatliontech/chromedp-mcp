@@ -26,8 +26,11 @@ func registerProfileTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		return
 	}
 
-	// Auto-detect the user data dir once at registration time.
-	userDataDir := profile.DefaultUserDataDir()
+	// Use the explicit user data dir if provided, otherwise auto-detect.
+	userDataDir := opts.UserDataDir
+	if userDataDir == "" {
+		userDataDir = profile.DefaultUserDataDir()
+	}
 
 	// Build the allowed set for fast lookup.
 	allowed := make(map[string]bool, len(opts.AllowedProfiles))

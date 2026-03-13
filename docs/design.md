@@ -23,7 +23,7 @@ stdio only. This is the standard for CLI-integrated MCP servers (Claude Desktop,
 
 ## Browser Lifecycle
 
-The browser lifecycle is entirely tool-driven. The LLM decides when to launch or connect to a browser, and with what settings. The only CLI-level configuration that affects browser launches is `--allowed-profiles`, which gates access to real Chrome user profiles (see [User Profile Security](#user-profile-security)).
+The browser lifecycle is entirely tool-driven. The LLM decides when to launch or connect to a browser, and with what settings. The only CLI-level configuration that affects browser launches is `--allowed-profiles` (which gates access to real Chrome user profiles) and `--user-data-dir` (which overrides where profiles are discovered). See [User Profile Security](#user-profile-security).
 
 This means the LLM can:
 - Launch a headless browser for automated testing
@@ -937,13 +937,14 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 All browser configuration is done via tools at runtime. The server accepts optional flags:
 
 ```
-chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>]
+chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>] [--user-data-dir <path>]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--download-dir` | Directory for saving screenshots, PDFs, and downloads. When set, `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file saving and event tracking via `get_downloads`. Path traversal is blocked — filenames must not contain directory separators. The directory is created automatically if it doesn't exist. |
-| `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). When set, registers the `browser_list_profiles` tool and enables the `profile` parameter on `browser_launch`. Profiles not in this list are never exposed to the LLM. The Chrome/Chromium user data directory is auto-detected from platform defaults. |
+| `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). When set, registers the `browser_list_profiles` tool and enables the `profile` parameter on `browser_launch`. Profiles not in this list are never exposed to the LLM. The Chrome/Chromium user data directory is auto-detected from platform defaults unless `--user-data-dir` is specified. |
+| `--user-data-dir` | Override the Chrome/Chromium user data directory used for profile discovery. When omitted, the default platform location is auto-detected (e.g. `~/.config/google-chrome` on Linux, `~/Library/Application Support/Google/Chrome` on macOS). Only relevant when `--allowed-profiles` is set. Supports `~` expansion. |
 
 When `--download-dir` is not set, the tools return binary data inline only and requesting a `filename` returns an error.
 
@@ -953,7 +954,7 @@ When `--download-dir` is not set, the tools return binary data inline only and r
 
 Profile access is disabled by default. The `--allowed-profiles` flag is the explicit opt-in gate. When not set, the `browser_list_profiles` tool is not registered and the `profile` parameter on `browser_launch` is rejected. Each launched browser gets a fresh temporary profile that is discarded on close.
 
-Profile discovery works by reading Chrome's `Local State` JSON file, which maps profile directory names (`Default`, `Profile 1`, `Profile 2`, etc.) to user-chosen display names. The `--allowed-profiles` flag accepts display names, and only matching profiles are returned by `browser_list_profiles` or accepted by `browser_launch`.
+Profile discovery works by reading Chrome's `Local State` JSON file, which maps profile directory names (`Default`, `Profile 1`, `Profile 2`, etc.) to user-chosen display names. The `--allowed-profiles` flag accepts display names, and only matching profiles are returned by `browser_list_profiles` or accepted by `browser_launch`. The `--user-data-dir` flag overrides the auto-detected user data directory, which is useful for pointing at a different Chrome/Chromium installation.
 
 Note that Chrome enforces a singleton lock on user data directories. Only one Chrome process can use a given user data directory at a time. If the user's Chrome is already running, launching a browser with a profile from the same user data directory will fail.
 

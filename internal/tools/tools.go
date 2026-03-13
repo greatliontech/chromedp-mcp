@@ -24,9 +24,14 @@ type Options struct {
 	// browser_list_profiles tool is registered and browser_launch
 	// accepts a profile parameter.
 	AllowedProfiles []string
+	// UserDataDir overrides the Chrome/Chromium user data directory
+	// used for profile discovery. When empty, the default platform
+	// location is auto-detected (e.g. ~/.config/google-chrome on
+	// Linux). Only relevant when AllowedProfiles is non-empty.
+	UserDataDir string
 
 	// resolved at registration time by registerProfileTools
-	userDataDir string          // auto-detected user data dir path
+	userDataDir string          // effective user data dir (explicit or auto-detected)
 	allowedSet  map[string]bool // allowed profile names for fast lookup
 }
 

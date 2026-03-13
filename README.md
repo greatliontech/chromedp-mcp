@@ -31,13 +31,14 @@ go install github.com/greatliontech/chromedp-mcp/cmd/chromedp-mcp@latest
 chromedp-mcp communicates over stdio, the standard transport for MCP servers integrated with LLM clients.
 
 ```sh
-chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>]
+chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>] [--user-data-dir <path>]
 ```
 
 | Flag                 | Description                                                                                                                                                                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--download-dir`     | Directory for saving screenshots, PDFs, and file downloads. When set, the `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file tracking via `get_downloads`. |
 | `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). Enables the `browser_list_profiles` tool and the `profile` parameter on `browser_launch`. See [User Profiles](#user-profiles) for details. |
+| `--user-data-dir`    | Override the Chrome/Chromium user data directory used for profile discovery. When omitted, the default platform location is auto-detected (e.g. `~/.config/google-chrome` on Linux). Only relevant when `--allowed-profiles` is set. |
 
 ### Claude Desktop
 
@@ -92,9 +93,9 @@ The `--allowed-profiles` flag opts in to profile access. When set, the LLM gains
 
 ### How it works
 
-Chrome stores user profiles in a user data directory (e.g. `~/.config/chromium` on Linux). Each profile has a directory (`Default`, `Profile 1`, `Profile 2`, etc.) and a user-chosen display name (e.g. "Work", "Personal"). The `--allowed-profiles` flag accepts display names.
+Chrome stores user profiles in a user data directory (e.g. `~/.config/google-chrome` on Linux). Each profile has a directory (`Default`, `Profile 1`, `Profile 2`, etc.) and a user-chosen display name (e.g. "Work", "Personal"). The `--allowed-profiles` flag accepts display names.
 
-The server reads Chrome's `Local State` file to map display names to profile directories. Only profiles explicitly listed in `--allowed-profiles` are exposed to the LLM.
+The server reads Chrome's `Local State` file to map display names to profile directories. Only profiles explicitly listed in `--allowed-profiles` are exposed to the LLM. By default, the server auto-detects the platform's Chrome user data directory. Use `--user-data-dir` to override this (e.g. to point at a Chromium installation or a custom Chrome data directory).
 
 ### Recommendations
 

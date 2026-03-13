@@ -21,13 +21,16 @@ import (
 func main() {
 	downloadDir := flag.String("download-dir", "", "Directory for saving screenshots, PDFs, and downloads")
 	allowedProfiles := flag.String("allowed-profiles", "", "Comma-separated list of Chrome profile display names the LLM may use (e.g. \"Work,Personal\")")
+	userDataDir := flag.String("user-data-dir", "", "Chrome/Chromium user data directory for profile discovery (auto-detected if omitted)")
 	flag.Parse()
 
 	// Expand ~ to the user's home directory since MCP clients pass
 	// args directly without shell expansion.
-	if strings.HasPrefix(*downloadDir, "~") {
-		if home, err := os.UserHomeDir(); err == nil {
-			*downloadDir = filepath.Join(home, (*downloadDir)[1:])
+	for _, p := range []*string{downloadDir, userDataDir} {
+		if strings.HasPrefix(*p, "~") {
+			if home, err := os.UserHomeDir(); err == nil {
+				*p = filepath.Join(home, (*p)[1:])
+			}
 		}
 	}
 
@@ -55,6 +58,7 @@ func main() {
 	tools.Register(srv, mgr, &tools.Options{
 		DownloadDir:     *downloadDir,
 		AllowedProfiles: profiles,
+		UserDataDir:     *userDataDir,
 	})
 
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
