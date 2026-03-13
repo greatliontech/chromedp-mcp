@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>SPA Home</title>
+</head>
+<body>
+    <div id="page">Home</div>
+    <button id="go-about" onclick="navigateTo('/about', 'SPA About', 'About')">About</button>
+    <button id="go-contact" onclick="navigateTo('/contact', 'SPA Contact', 'Contact')">Contact</button>
+
+    <script>
+        function navigateTo(path, title, content) {
+            history.pushState({page: content}, title, path);
+            document.title = title;
+            document.getElementById('page').textContent = content;
+        }
+
+        window.addEventListener('popstate', function(event) {
+            if (event.state && event.state.page) {
+                document.title = 'SPA ' + event.state.page;
+                document.getElementById('page').textContent = event.state.page;
+            } else {
+                document.title = 'SPA Home';
+                document.getElementById('page').textContent = 'Home';
+            }
+        });
+    </script>
+</body>
+</html>
