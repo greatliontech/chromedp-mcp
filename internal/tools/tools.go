@@ -128,6 +128,9 @@ func selectorError(parentCtx context.Context, selector string, err error) error 
 		return err
 	}
 	// The selector timed out. Check if the element exists in the DOM.
+	// We use JS document.querySelector here rather than CDP DOM.querySelector
+	// because DOM.getDocument() invalidates chromedp's internal DOM tracking,
+	// which can break subsequent operations on the same tab.
 	var exists bool
 	checkCtx, cancel := context.WithTimeout(parentCtx, 500*time.Millisecond)
 	defer cancel()

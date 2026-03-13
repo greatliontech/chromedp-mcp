@@ -613,7 +613,10 @@ func TestGetNetworkRequestsFilters(t *testing.T) {
 func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 	tabID := navigateToFixture(t, "network.html")
 	defer closeTab(t, tabID)
+	// Wait for both fetch requests to complete so no new entries arrive
+	// between the two peek calls (which would make the count comparison flaky).
 	waitForNetwork(t, tabID, "/api/data")
+	waitForNetwork(t, tabID, "/api/not-found")
 
 	// Peek should not clear the buffer.
 	out1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{

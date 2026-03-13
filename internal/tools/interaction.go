@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -15,6 +16,29 @@ import (
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
+
+// elementCenter returns the viewport-relative center coordinates of an
+// element identified by its cdp.Node. Uses DOM.getContentQuads which
+// returns viewport-relative quads. Must be called inside a
+// chromedp.ActionFunc.
+func elementCenter(ctx context.Context, node *cdp.Node) (x, y float64, err error) {
+	quads, err := dom.GetContentQuads().WithBackendNodeID(node.BackendNodeID).Do(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("getContentQuads: %w", err)
+	}
+	if len(quads) == 0 {
+		return 0, 0, fmt.Errorf("element has no content quads (not laid out)")
+	}
+	// Each quad is 8 floats: [x1,y1, x2,y2, x3,y3, x4,y4].
+	// Compute the center from the first quad.
+	q := quads[0]
+	if len(q) < 8 {
+		return 0, 0, fmt.Errorf("unexpected quad length: %d", len(q))
+	}
+	cx := (q[0] + q[2] + q[4] + q[6]) / 4
+	cy := (q[1] + q[3] + q[5] + q[7]) / 4
+	return cx, cy, nil
+}
 
 // namedKeys maps key names used in the press_key MCP tool to the chromedp
 // kb package rune constants. These runes are then passed to kb.Encode which
@@ -142,9 +166,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 		}
 
-		// For non-standard buttons or click counts, use JS dispatch.
-		// First wait for the element to be visible (same as chromedp.Click),
-		// then dispatch the events via JS.
+		// For non-standard buttons or click counts, use CDP
+		// input.DispatchMouseEvent for proper browser-level mouse events
+		// that trigger :hover/:active pseudo-classes.
 		if inp.Button == "right" || inp.Button == "middle" || inp.ClickCount > 2 {
 			// Wait for visible element.
 			var nodes []*cdp.Node
@@ -152,31 +176,38 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
 			}
 
-			button := 0
+			var button input.MouseButton
 			switch inp.Button {
 			case "right":
-				button = 2
+				button = input.Right
 			case "middle":
-				button = 1
+				button = input.Middle
+			default:
+				button = input.Left
 			}
 			clickCount := inp.ClickCount
 			if clickCount <= 0 {
 				clickCount = 1
 			}
-			js := fmt.Sprintf(`(function() {
-				var el = document.querySelector(%q);
-				if (!el) throw new Error('element not found');
-				var rect = el.getBoundingClientRect();
-				var x = rect.x + rect.width/2, y = rect.y + rect.height/2;
-				for (var i = 0; i < %d; i++) {
-					var detail = i + 1;
-					el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, button:%d, detail:detail, clientX:x, clientY:y}));
-					el.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, button:%d, detail:detail, clientX:x, clientY:y}));
-					el.dispatchEvent(new MouseEvent('click', {bubbles:true, button:%d, detail:detail, clientX:x, clientY:y}));
+
+			if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+				cx, cy, err := elementCenter(ctx, nodes[0])
+				if err != nil {
+					return err
 				}
-			})()`, inp.Selector, clickCount, button, button, button)
-			var res interface{}
-			if err := chromedp.Run(tctx, chromedp.Evaluate(js, &res)); err != nil {
+				for i := 0; i < clickCount; i++ {
+					cc := int64(i + 1)
+					if err := input.DispatchMouseEvent(input.MousePressed, cx, cy).
+						WithButton(button).WithClickCount(cc).Do(ctx); err != nil {
+						return err
+					}
+					if err := input.DispatchMouseEvent(input.MouseReleased, cx, cy).
+						WithButton(button).WithClickCount(cc).Do(ctx); err != nil {
+						return err
+					}
+				}
+				return nil
+			})); err != nil {
 				return nil, struct{}{}, err
 			}
 			return nil, struct{}{}, nil
@@ -370,12 +401,17 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, ScrollOutput{}, err
 		}
 
-		// Report the resulting scroll position.
+		// Report the resulting scroll position via page.GetLayoutMetrics.
 		var out ScrollOutput
-		if err := chromedp.Run(tctx,
-			chromedp.Evaluate("window.scrollX", &out.ScrollX),
-			chromedp.Evaluate("window.scrollY", &out.ScrollY),
-		); err != nil {
+		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			_, _, _, _, cssVisual, _, err := page.GetLayoutMetrics().Do(ctx)
+			if err != nil {
+				return err
+			}
+			out.ScrollX = cssVisual.PageX
+			out.ScrollY = cssVisual.PageY
+			return nil
+		})); err != nil {
 			return nil, ScrollOutput{}, err
 		}
 		return nil, out, nil
@@ -395,9 +431,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 
-		// Use chromedp.MouseClickXY coordinates with CDP Input.dispatchMouseEvent
-		// (mouseMoved) so the browser activates its native :hover CSS state.
-		// JS event dispatch alone does NOT trigger :hover pseudo-class.
+		// Wait for the element, then get its center via CDP
+		// DOM.getContentQuads. Dispatch a CDP mouseMoved event to
+		// trigger the browser's native :hover CSS state.
 		var nodes []*cdp.Node
 		if err := chromedp.Run(sctx, chromedp.Nodes(inp.Selector, &nodes, chromedp.ByQuery)); err != nil {
 			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
@@ -406,21 +442,12 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, fmt.Errorf("selector %q matched no elements", inp.Selector)
 		}
 
-		// Get element center coordinates via JS (getBoundingClientRect).
-		var coords [2]float64
-		js := fmt.Sprintf(`(function() {
-			var el = document.querySelector(%q);
-			var rect = el.getBoundingClientRect();
-			return [rect.x + rect.width/2, rect.y + rect.height/2];
-		})()`, inp.Selector)
-		if err := chromedp.Run(tctx, chromedp.Evaluate(js, &coords)); err != nil {
-			return nil, struct{}{}, err
-		}
-
-		// Dispatch a CDP mouseMoved event to the element center.
-		// This triggers the browser's native :hover state.
 		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			return input.DispatchMouseEvent(input.MouseMoved, coords[0], coords[1]).Do(ctx)
+			cx, cy, err := elementCenter(ctx, nodes[0])
+			if err != nil {
+				return err
+			}
+			return input.DispatchMouseEvent(input.MouseMoved, cx, cy).Do(ctx)
 		})); err != nil {
 			return nil, struct{}{}, err
 		}

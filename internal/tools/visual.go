@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -333,30 +334,28 @@ func elementScreenshot(selector string, format page.CaptureScreenshotFormat, qua
 			return fmt.Errorf("selector %q did not return any nodes", selector)
 		}
 
-		// Get the element's bounding client rect via callFunctionOnNode.
-		// chromedp doesn't export this helper, so we use JavaScript to
-		// compute the same result that ScreenshotNodes uses internally.
-		var rect struct {
-			X      float64 `json:"x"`
-			Y      float64 `json:"y"`
-			Width  float64 `json:"width"`
-			Height float64 `json:"height"`
+		// Get the element's viewport-relative bounding rect via CDP
+		// DOM.getContentQuads, which returns quads as 8 floats
+		// [x1,y1, x2,y2, x3,y3, x4,y4].
+		quads, err := dom.GetContentQuads().WithBackendNodeID(nodes[0].BackendNodeID).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("getting content quads for %q: %w", selector, err)
 		}
-		js := fmt.Sprintf(`(() => {
-			const el = document.querySelector(%q);
-			if (!el) return null;
-			const r = el.getBoundingClientRect();
-			return {x: r.x, y: r.y, width: r.width, height: r.height};
-		})()`, selector)
-		if err := chromedp.Evaluate(js, &rect).Do(ctx); err != nil {
-			return fmt.Errorf("getting bounding rect for %q: %w", selector, err)
+		if len(quads) == 0 || len(quads[0]) < 8 {
+			return fmt.Errorf("element %q has no content quads", selector)
 		}
+		q := quads[0]
+		// Derive bounding rect from the quad corners.
+		minX := math.Min(math.Min(q[0], q[2]), math.Min(q[4], q[6]))
+		minY := math.Min(math.Min(q[1], q[3]), math.Min(q[5], q[7]))
+		maxX := math.Max(math.Max(q[0], q[2]), math.Max(q[4], q[6]))
+		maxY := math.Max(math.Max(q[1], q[3]), math.Max(q[5], q[7]))
 
 		// Round coordinates the same way Puppeteer and chromedp do to
 		// handle fractional dimensions properly.
-		x, y := math.Round(rect.X), math.Round(rect.Y)
-		w := math.Round(rect.Width + rect.X - x)
-		h := math.Round(rect.Height + rect.Y - y)
+		x, y := math.Round(minX), math.Round(minY)
+		w := math.Round(maxX - minX + minX - x)
+		h := math.Round(maxY - minY + minY - y)
 
 		clip := &page.Viewport{
 			X:      x,
@@ -375,14 +374,16 @@ func elementScreenshot(selector string, format page.CaptureScreenshotFormat, qua
 			params = params.WithQuality(quality)
 		}
 
-		var err error
 		*buf, err = params.Do(ctx)
 		return err
-	}, chromedp.NodeVisible)
+	}, chromedp.NodeVisible, chromedp.ByQuery)
 }
 
 // elementScale returns the scale factor needed to fit an element within
 // maxDim pixels. It evaluates the element's bounding rect in the browser.
+// We use JS here rather than CDP DOM.getBoxModel because this function runs
+// outside the QueryAfter callback where the element node isn't yet resolved,
+// and DOM.getDocument() would invalidate chromedp's internal DOM tracking.
 func elementScale(ctx context.Context, selector string, maxDim int) (float64, error) {
 	var w, h float64
 	js := fmt.Sprintf(`(() => {
