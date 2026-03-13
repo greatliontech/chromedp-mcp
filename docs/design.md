@@ -535,6 +535,53 @@ Delete cookies by name, or clear all cookies when name is omitted.
 | `domain` | string | no | Scope deletion to a domain |
 | `path` | string | no | Scope deletion to a path |
 
+### Storage
+
+#### `get_storage`
+
+Read one or all items from localStorage or sessionStorage.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `type` | string | no | `"local"` (default) or `"session"` |
+| `key` | string | no | Key to retrieve. If omitted, returns all key-value pairs. |
+
+Returns: `{value}` when a key is specified (null if not found), or `{entries}` with all key-value pairs when no key is specified.
+
+#### `set_storage`
+
+Write a key-value pair to localStorage or sessionStorage.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `type` | string | no | `"local"` (default) or `"session"` |
+| `key` | string | yes | Key to set |
+| `value` | string | yes | Value to set |
+
+#### `delete_storage`
+
+Delete one or all items from localStorage or sessionStorage.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `type` | string | no | `"local"` (default) or `"session"` |
+| `key` | string | no | Key to delete. If omitted, clears all items. |
+
+#### `get_storage_keys`
+
+List all keys in localStorage or sessionStorage with value sizes. Useful for discovering stored data without retrieving potentially large values.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `type` | string | no | `"local"` (default) or `"session"` |
+| `limit` | int | no | Max keys to return (default all) |
+
+Returns: array of `{key, size}` objects where `size` is the character length of the value.
+
 ### Performance & Diagnostics
 
 #### `get_performance_metrics`
@@ -767,6 +814,7 @@ chromedp-mcp/
       js.go             # evaluate (with optional selector)
       interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, handle_dialog
       cookies.go        # get_cookies, set_cookie, delete_cookies
+      storage.go        # get_storage, set_storage, delete_storage, get_storage_keys
       performance.go    # get_performance_metrics, get_layout_shifts, get_coverage
       emulation.go      # set_geolocation, set_timezone, set_locale, set_user_agent, set_cpu_throttling, set_vision_deficiency, emulate_network, block_urls
 ```
@@ -875,6 +923,9 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Cookies (`get_cookies`) | true | false | true |
 | Cookies (`set_cookie`) | false | false | true |
 | Cookies (`delete_cookies`) | false | true | false |
+| Storage (`get_storage`, `get_storage_keys`) | true | false | true |
+| Storage (`set_storage`) | false | false | false |
+| Storage (`delete_storage`) | false | true | false |
 | Performance (`get_performance_metrics`) | true | false | true |
 | Performance (`get_layout_shifts` drain) | false | false | false |
 | Performance (`get_coverage`) | true | false | true |
@@ -912,7 +963,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 
 ### Storage
 
-- **Local/Session Storage** — Read, write, delete, clear DOM storage items via `domstorage` domain. Useful for debugging state persistence issues.
 - **IndexedDB** — List databases, inspect object stores, read/query data, delete entries via `indexeddb` domain. Useful for debugging offline-first apps.
 - **Cache Storage** — List caches, inspect entries, read cached responses, delete caches via `cachestorage` domain. Useful for debugging service worker caching strategies.
 

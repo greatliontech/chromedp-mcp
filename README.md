@@ -197,6 +197,15 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `set_cookie`     | Set a browser cookie                |
 | `delete_cookies` | Delete cookies by name or clear all |
 
+### Storage
+
+| Tool               | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| `get_storage`      | Read one or all items from localStorage or sessionStorage |
+| `set_storage`      | Write a key-value pair to localStorage or sessionStorage  |
+| `delete_storage`   | Delete one or all items from localStorage or sessionStorage |
+| `get_storage_keys` | List all keys with value sizes                            |
+
 ### Performance
 
 | Tool                      | Description                                              |
