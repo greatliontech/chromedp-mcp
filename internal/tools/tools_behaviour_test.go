@@ -649,7 +649,8 @@ func TestJSErrorsDrainClearsBuffer(t *testing.T) {
 
 	// First drain.
 	out1 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out1.Errors) == 0 {
 		t.Fatal("expected JS errors from errors.html, got none")
@@ -657,7 +658,8 @@ func TestJSErrorsDrainClearsBuffer(t *testing.T) {
 
 	// Second drain — should be empty.
 	out2 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out2.Errors) != 0 {
 		t.Errorf("after drain, expected 0 errors, got %d", len(out2.Errors))
@@ -672,7 +674,7 @@ func TestJSErrorsPeek(t *testing.T) {
 	// Peek should not clear the buffer.
 	out1 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out1.Errors) == 0 {
 		t.Fatal("expected JS errors from errors.html")
@@ -680,7 +682,7 @@ func TestJSErrorsPeek(t *testing.T) {
 
 	out2 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out2.Errors) != len(out1.Errors) {
 		t.Errorf("peek changed buffer: first=%d, second=%d", len(out1.Errors), len(out2.Errors))
@@ -694,7 +696,7 @@ func TestJSErrorsEntryFields(t *testing.T) {
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out.Errors) == 0 {
 		t.Fatal("expected JS errors")
@@ -727,7 +729,7 @@ func TestGetNetworkRequestsTypeFilter(t *testing.T) {
 	// Filter by XHR type.
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 		"type": "XHR",
 	})
 	for _, r := range out.Requests {
@@ -744,7 +746,7 @@ func TestGetNetworkRequestsLimit(t *testing.T) {
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":   tabID,
-		"peek":  true,
+		"mode":  "peek",
 		"limit": 1,
 	})
 	if len(out.Requests) > 1 {
@@ -759,7 +761,7 @@ func TestGetNetworkRequestEntryFields(t *testing.T) {
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
-		"peek":        true,
+		"mode":        "peek",
 		"url_pattern": "/api/data",
 	})
 	if len(out.Requests) == 0 {
@@ -795,7 +797,7 @@ func TestGetResponseBodyBinary(t *testing.T) {
 	// The page loads /image.png. Find its request ID.
 	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
-		"peek":        true,
+		"mode":        "peek",
 		"url_pattern": "/image.png",
 	})
 	var requestID string
@@ -1239,7 +1241,7 @@ func TestConsoleLogsLimit(t *testing.T) {
 	// index.html emits at least 3 console messages (log, warn, error).
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
-		"peek":  true,
+		"mode":  "peek",
 		"limit": 1,
 	})
 	if len(out.Logs) > 1 {
@@ -1254,11 +1256,11 @@ func TestConsoleLogsPeekIdempotence(t *testing.T) {
 
 	out1 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out1.Logs) != len(out2.Logs) {
 		t.Errorf("peek not idempotent: first=%d, second=%d", len(out1.Logs), len(out2.Logs))
@@ -1272,7 +1274,7 @@ func TestConsoleLogEntryFields(t *testing.T) {
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out.Logs) == 0 {
 		t.Fatal("expected console logs")
@@ -1317,7 +1319,8 @@ func TestGetLayoutShiftsEmpty(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	out := callTool[GetLayoutShiftsOutput](t, "get_layout_shifts", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	// Static page should have no/minimal layout shifts.
 	if out.CumulativeLS < 0 {
@@ -1341,7 +1344,7 @@ func TestClearConsoleAlsoClearsJSErrors(t *testing.T) {
 	// Verify JS errors exist.
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out.Errors) == 0 {
 		t.Fatal("expected JS errors before clearing")
@@ -1353,7 +1356,7 @@ func TestClearConsoleAlsoClearsJSErrors(t *testing.T) {
 	// Verify JS errors are cleared.
 	out = callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out.Errors) != 0 {
 		t.Errorf("after clear_console, expected 0 JS errors, got %d", len(out.Errors))

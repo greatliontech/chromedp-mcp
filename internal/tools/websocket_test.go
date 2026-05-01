@@ -46,9 +46,9 @@ func openWebSocket(t *testing.T, tabID, url string) {
 		return 'ready';
 	})()`
 	callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":            tabID,
-		"expression":     js,
-		"await_promise":  true,
+		"tab":           tabID,
+		"expression":    js,
+		"await_promise": true,
 	})
 }
 
@@ -66,7 +66,7 @@ func findWSConnection(t *testing.T, tabID, urlPattern string) collector.NetworkE
 	for time.Now().Before(deadline) {
 		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":         tabID,
-			"peek":        true,
+			"mode":        "peek",
 			"url_pattern": urlPattern,
 			"type":        "websocket",
 		})
@@ -89,7 +89,7 @@ func waitForWSFrameCount(t *testing.T, tabID, requestID string, minSent, minRecv
 	for time.Now().Before(deadline) {
 		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":  tabID,
-			"peek": true,
+			"mode": "peek",
 			"type": "websocket",
 		})
 		for _, r := range out.Requests {
@@ -154,7 +154,7 @@ func TestWebSocketTypeFilterExcludesHTTP(t *testing.T) {
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 		"type": "websocket",
 	})
 	for _, r := range out.Requests {
@@ -194,7 +194,7 @@ func TestGetWebSocketFramesText(t *testing.T) {
 	frames := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
-		"peek":       true,
+		"mode":       "peek",
 	})
 
 	wantSent := []string{"alpha", "beta", "gamma"}
@@ -248,7 +248,7 @@ func TestGetWebSocketFramesBinary(t *testing.T) {
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"direction":  "sent",
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if len(frames.Sent) != 1 {
 		t.Fatalf("Sent len = %d, want 1", len(frames.Sent))
@@ -290,7 +290,7 @@ func TestGetWebSocketFramesDirectionFilter(t *testing.T) {
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"direction":  "sent",
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if len(sentOnly.Sent) == 0 {
 		t.Error("direction=sent returned 0 sent frames")
@@ -303,7 +303,7 @@ func TestGetWebSocketFramesDirectionFilter(t *testing.T) {
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"direction":  "received",
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if len(recvOnly.Received) == 0 {
 		t.Error("direction=received returned 0 received frames")
@@ -332,7 +332,7 @@ func TestGetWebSocketFramesPeekVsDrain(t *testing.T) {
 	peeked := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if len(peeked.Sent) < 2 {
 		t.Fatalf("peek Sent len = %d, want >= 2", len(peeked.Sent))
@@ -341,7 +341,7 @@ func TestGetWebSocketFramesPeekVsDrain(t *testing.T) {
 	peeked2 := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if len(peeked2.Sent) != len(peeked.Sent) {
 		t.Errorf("second peek Sent len = %d, want %d (peek must not drain)", len(peeked2.Sent), len(peeked.Sent))
@@ -351,12 +351,12 @@ func TestGetWebSocketFramesPeekVsDrain(t *testing.T) {
 	_ = callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
-		"peek":       false,
+		"mode":       "drain",
 	})
 	post := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if len(post.Sent) != 0 || len(post.Received) != 0 {
 		t.Errorf("after drain, peek = sent=%d recv=%d, want 0/0", len(post.Sent), len(post.Received))
@@ -372,7 +372,7 @@ func TestGetWebSocketFramesUnknownConnection(t *testing.T) {
 	errText := callToolExpectErr(t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": "no-such-connection",
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if !strings.Contains(errText, "no websocket connection") {
 		t.Errorf("error text = %q, want substring 'no websocket connection'", errText)
@@ -388,7 +388,7 @@ func TestGetWebSocketFramesInvalidDirection(t *testing.T) {
 		"tab":        tabID,
 		"request_id": "anything",
 		"direction":  "sideways",
-		"peek":       true,
+		"mode":       "peek",
 	})
 	if !strings.Contains(errText, "direction must be") {
 		t.Errorf("error text = %q, want substring 'direction must be'", errText)
@@ -420,7 +420,7 @@ func TestWebSocketLimitDoesNotHideConnection(t *testing.T) {
 	// includes type=websocket gives it priority.
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":   tabID,
-		"peek":  true,
+		"mode":  "peek",
 		"limit": 3,
 		"type":  "websocket",
 	})
@@ -449,7 +449,7 @@ func TestWebSocketGetNetworkRequestsDoesNotDrainConnections(t *testing.T) {
 	// Drain (peek=false).
 	out1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": false,
+		"mode": "drain",
 		"type": "websocket",
 	})
 	found1 := false
@@ -466,7 +466,7 @@ func TestWebSocketGetNetworkRequestsDoesNotDrainConnections(t *testing.T) {
 	// Subsequent call should still see it.
 	out2 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": false,
+		"mode": "drain",
 		"type": "websocket",
 	})
 	found2 := false
@@ -480,4 +480,3 @@ func TestWebSocketGetNetworkRequestsDoesNotDrainConnections(t *testing.T) {
 		t.Error("second drain lost ws entry; ws connections must survive non-peek calls")
 	}
 }
-

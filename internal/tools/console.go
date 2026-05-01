@@ -13,7 +13,7 @@ import (
 type GetConsoleLogsInput struct {
 	TabInput
 	Level string `json:"level,omitempty" jsonschema:"Filter by level: log warn error info debug. If omitted returns all."`
-	Peek  bool   `json:"peek,omitempty" jsonschema:"If true do not clear the buffer (default false)"`
+	Mode  string `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the buffer, 'drain' to consume them. Required."`
 	Limit int    `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
 }
 
@@ -25,8 +25,8 @@ type GetConsoleLogsOutput struct {
 // GetJSErrorsInput is the input for get_js_errors.
 type GetJSErrorsInput struct {
 	TabInput
-	Peek  bool `json:"peek,omitempty" jsonschema:"If true do not clear the buffer (default false)"`
-	Limit int  `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
+	Mode  string `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the buffer, 'drain' to consume them. Required."`
+	Limit int    `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
 }
 
 // GetJSErrorsOutput is the output for get_js_errors.
@@ -42,16 +42,20 @@ type ClearConsoleInput struct {
 func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_console_logs",
-		Description: "Get captured console messages (log, warn, error, info, debug). By default drains (returns and clears) the buffer.",
+		Description: "Get captured console messages (log, warn, error, info, debug). 'mode' must be 'peek' (keep entries) or 'drain' (consume entries that match level).",
+		InputSchema: modeSchemaFor[GetConsoleLogsInput](),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetConsoleLogsInput) (*mcp.CallToolResult, GetConsoleLogsOutput, error) {
+		if err := validateMode(input.Mode); err != nil {
+			return nil, GetConsoleLogsOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetConsoleLogsOutput{}, err
 		}
 
 		var logs []collector.ConsoleEntry
-		if input.Peek {
+		if input.Mode == ModePeek {
 			logs = t.Console.Peek(input.Level, input.Limit)
 		} else {
 			logs = t.Console.Drain(input.Level, input.Limit)
@@ -64,16 +68,20 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_js_errors",
-		Description: "Get captured JavaScript exceptions and promise rejections. By default drains (returns and clears) the buffer.",
+		Description: "Get captured JavaScript exceptions and promise rejections. 'mode' must be 'peek' (keep entries) or 'drain' (consume entries).",
+		InputSchema: modeSchemaFor[GetJSErrorsInput](),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetJSErrorsInput) (*mcp.CallToolResult, GetJSErrorsOutput, error) {
+		if err := validateMode(input.Mode); err != nil {
+			return nil, GetJSErrorsOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetJSErrorsOutput{}, err
 		}
 
 		var errors []collector.JSErrorEntry
-		if input.Peek {
+		if input.Mode == ModePeek {
 			errors = t.JSErrors.Peek(input.Limit)
 		} else {
 			errors = t.JSErrors.Drain(input.Limit)

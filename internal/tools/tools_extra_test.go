@@ -551,7 +551,7 @@ func TestGetResponseBody(t *testing.T) {
 	// Get network requests to find the /api/data request.
 	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	var requestID string
 	for _, r := range nout.Requests {
@@ -584,7 +584,7 @@ func TestGetNetworkRequestsFilters(t *testing.T) {
 	// Filter by URL pattern.
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
-		"peek":        true,
+		"mode":        "peek",
 		"url_pattern": "/api/data",
 	})
 	if len(out.Requests) == 0 {
@@ -599,7 +599,7 @@ func TestGetNetworkRequestsFilters(t *testing.T) {
 	// Filter by status range for 404s.
 	out = callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
-		"peek":       true,
+		"mode":       "peek",
 		"status_min": 400,
 		"status_max": 499,
 	})
@@ -621,11 +621,11 @@ func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 	// Peek should not clear the buffer.
 	out1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	out2 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out1.Requests) != len(out2.Requests) {
 		t.Errorf("peek should not change buffer: first=%d, second=%d", len(out1.Requests), len(out2.Requests))
@@ -633,11 +633,12 @@ func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 
 	// Drain should clear the buffer.
 	callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	out3 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out3.Requests) != 0 {
 		t.Errorf("after drain, peek should return 0 requests, got %d", len(out3.Requests))
@@ -993,7 +994,8 @@ func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 
 	// First drain — should return logs.
 	out1 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out1.Logs) == 0 {
 		t.Fatal("expected console logs from index.html, got none")
@@ -1001,7 +1003,8 @@ func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 
 	// Second drain — buffer should be empty now.
 	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out2.Logs) != 0 {
 		t.Errorf("after drain, expected 0 logs, got %d", len(out2.Logs))
@@ -1015,7 +1018,7 @@ func TestConsoleLogsLevelFilter(t *testing.T) {
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
-		"peek":  true,
+		"mode":  "peek",
 		"level": "warning",
 	})
 	for _, log := range out.Logs {

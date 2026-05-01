@@ -29,7 +29,7 @@ func TestDownloadLinkClick(t *testing.T) {
 	for time.Now().Before(deadline) {
 		// Peek so we don't drain the buffer on each check.
 		downloads = callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{
-			"peek": true,
+			"mode": "peek",
 		})
 		if len(downloads.Downloads) > 0 {
 			break
@@ -67,13 +67,13 @@ func TestDownloadLinkClick(t *testing.T) {
 	}
 
 	// Now drain the buffer and verify it's empty after.
-	drained := callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{})
+	drained := callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
 	if len(drained.Downloads) == 0 {
 		t.Fatal("expected downloads in drain result")
 	}
 
 	after := callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(after.Downloads) != 0 {
 		t.Fatalf("expected empty buffer after drain, got %d entries", len(after.Downloads))
@@ -86,7 +86,7 @@ func TestDownloadCSV(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Drain any previous downloads.
-	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{})
+	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
 
 	// Click the CSV download link.
 	callTool[struct{}](t, "click", map[string]any{
@@ -99,7 +99,7 @@ func TestDownloadCSV(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		downloads = callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{
-			"peek": true,
+			"mode": "peek",
 		})
 		if len(downloads.Downloads) > 0 {
 			break
@@ -131,7 +131,7 @@ func TestDownloadBlobJS(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Drain any previous downloads.
-	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{})
+	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
 
 	// Click the blob download button.
 	callTool[struct{}](t, "click", map[string]any{
@@ -144,7 +144,7 @@ func TestDownloadBlobJS(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		downloads = callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{
-			"peek": true,
+			"mode": "peek",
 		})
 		if len(downloads.Downloads) > 0 {
 			break
@@ -177,10 +177,10 @@ func TestDownloadBlobJS(t *testing.T) {
 // results when no downloads have occurred.
 func TestGetDownloadsNoDownloads(t *testing.T) {
 	// Drain to clear any prior state.
-	downloads := callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{})
+	downloads := callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
 	// After drain, peek should be empty.
 	downloads = callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(downloads.Downloads) != 0 {
 		t.Fatalf("expected no downloads, got %d", len(downloads.Downloads))
@@ -197,7 +197,7 @@ func TestDownloadFileRenamed(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Drain any previous downloads.
-	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{})
+	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
 
 	callTool[struct{}](t, "click", map[string]any{
 		"tab":      tabID,
@@ -209,7 +209,7 @@ func TestDownloadFileRenamed(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		downloads = callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{
-			"peek": true,
+			"mode": "peek",
 		})
 		if len(downloads.Downloads) > 0 {
 			break

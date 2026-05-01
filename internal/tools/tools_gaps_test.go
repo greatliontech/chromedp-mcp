@@ -488,7 +488,7 @@ func TestNetworkFailedOnly(t *testing.T) {
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
-		"peek":        true,
+		"mode":        "peek",
 		"failed_only": true,
 	})
 	for _, r := range out.Requests {
@@ -513,7 +513,7 @@ func TestNetworkCombinedFilters(t *testing.T) {
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
-		"peek":        true,
+		"mode":        "peek",
 		"type":        "XHR",
 		"url_pattern": "/api/data",
 		"status_min":  200,
@@ -543,7 +543,7 @@ func TestNetworkStatusMaxOnly(t *testing.T) {
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
-		"peek":       true,
+		"mode":       "peek",
 		"status_max": 299,
 	})
 	for _, r := range out.Requests {
@@ -565,7 +565,7 @@ func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 	// Snapshot what's there to count levels.
 	all := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(all.Logs) == 0 {
 		t.Skip("fixture produced no console logs")
@@ -581,12 +581,13 @@ func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 	_ = callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"level": "warning",
+		"mode":  "drain",
 	})
 
 	// Selective drain: non-warning entries must remain.
 	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out2.Logs) != nonWarning {
 		t.Errorf("after drain with level=warning, remaining = %d, want %d (non-warning entries retained)",
@@ -609,7 +610,7 @@ func TestJSErrorsCleanPage(t *testing.T) {
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if out.Errors == nil {
 		t.Error("errors should be an empty array, not nil")
@@ -1423,7 +1424,7 @@ func TestConsoleBufferOverflowIntegration(t *testing.T) {
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 
 	if len(out.Logs) > 1000 {
@@ -1494,13 +1495,14 @@ func TestNetworkRequestsEmptyArray(t *testing.T) {
 
 	// Drain all existing requests.
 	callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 
 	// Now peek — should return empty array.
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if out.Requests == nil {
 		t.Error("requests should be an empty array, not nil")

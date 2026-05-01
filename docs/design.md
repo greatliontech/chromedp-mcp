@@ -150,9 +150,17 @@ The server registers CDP event listeners per tab that buffer events. These start
 | **Network** | `network.EventRequestWillBeSent`, `network.EventResponseReceived`, `network.EventLoadingFinished`, `network.EventLoadingFailed` | Ring buffer of request/response pairs (default 1000 entries). Response bodies captured lazily on demand. |
 | **Performance Timeline** | `performancetimeline.EventTimelineEventAdded` | Ring buffer, captures LCP and layout shift entries |
 
-Each collector supports two read modes:
-- **Drain**: Return and clear all buffered entries since the last drain. Default mode.
-- **Peek**: Return entries without clearing. Specified via `peek: true` parameter.
+Each collector supports two read modes, selected by the required `mode`
+parameter on the corresponding tool:
+- **`mode: "drain"`**: Return and remove only the entries that match the
+  filter (and are within the limit). Non-matching entries and matches
+  beyond the limit are retained, so successive calls paginate.
+- **`mode: "peek"`**: Return matching entries without modifying the buffer.
+
+`mode` is required at every call site so the destructive vs.
+non-destructive choice is always explicit. WebSocket connections in
+`get_network_requests` are long-lived and always returned by snapshot
+regardless of `mode`.
 
 Collectors also support filtering at read time (e.g., console level, network status code range).
 
@@ -315,7 +323,7 @@ Get captured console messages.
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `level` | string | no | Filter by level: `"log"`, `"warn"`, `"error"`, `"info"`, `"debug"`. If omitted, returns all. |
-| `peek` | bool | no | If `true`, don't clear the buffer (default `false`) |
+| `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume matching entries) |
 | `limit` | int | no | Max entries to return (default all) |
 
 Returns: array of `{level, text, timestamp, source}` objects.
@@ -327,7 +335,7 @@ Get captured JavaScript exceptions.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `peek` | bool | no | If `true`, don't clear the buffer (default `false`) |
+| `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume entries) |
 | `limit` | int | no | Max entries to return (default all) |
 
 Returns: array of `{message, source, line, column, stack_trace, timestamp}` objects.
@@ -349,7 +357,7 @@ Get captured network requests.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `peek` | bool | no | If `true`, don't clear the buffer (default `false`) |
+| `mode` | string | **yes** | `"peek"` (keep entries in HTTP buffer) or `"drain"` (consume matching entries). WebSocket connections are long-lived and always returned by snapshot regardless of mode. |
 | `limit` | int | no | Max entries to return (default all) |
 | `type` | string | no | Filter by resource type: `"document"`, `"stylesheet"`, `"script"`, `"image"`, `"xhr"`, `"fetch"`, `"websocket"`, `"other"` |
 | `status_min` | int | no | Filter by minimum HTTP status code |
@@ -357,7 +365,7 @@ Get captured network requests.
 | `url_pattern` | string | no | Filter by URL substring match |
 | `failed_only` | bool | no | Return only failed requests (default `false`) |
 
-Returns: array of request objects with `{id, url, method, status, type, timing, request_headers, response_headers, size, error}`.
+Returns: array of request objects with `{id, url, method, status, type, timing, request_headers, response_headers, size, error, failed, start_time, end_time, has_request_body, request_body, request_body_base64, request_body_truncated, frames_sent_count, frames_received_count}`. The frame counts are present only on WebSocket entries; the request-body fields are present only on entries that carried a request body.
 
 #### `get_response_body`
 
@@ -369,6 +377,31 @@ Get the response body of a specific network request.
 | `request_id` | string | yes | The request ID from `get_network_requests` |
 
 Returns: the response body as text, or base64 for binary responses.
+
+#### `get_request_body`
+
+Get the full POST/PUT/PATCH/DELETE request body of a specific request. Use when `get_network_requests` reports `has_request_body=true` and the inline `request_body` was empty or truncated.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `request_id` | string | yes | The request ID from `get_network_requests` |
+
+Returns: the request body as text, or base64 for binary bodies.
+
+#### `get_websocket_frames`
+
+Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with `type=websocket` from `get_network_requests`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `request_id` | string | yes | The websocket connection's request ID from `get_network_requests` |
+| `direction` | string | no | `"sent"`, `"received"`, or `"both"` (default `"both"`) |
+| `limit` | int | no | Max frames to return per direction (default all buffered) |
+| `mode` | string | **yes** | `"peek"` (keep frames in the buffer) or `"drain"` (consume them) |
+
+Returns: `{sent, received}` arrays of frame objects with `{opcode, mask, direction, payload, payload_base64, payload_truncated, time}`. Text frames (opcode 1) carry UTF-8 payloads; other opcodes carry base64-encoded binary in `payload`.
 
 ### JavaScript Execution
 
@@ -601,7 +634,7 @@ Get Cumulative Layout Shift (CLS) data.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `peek` | bool | no | If `true`, don't clear the buffer (default `false`) |
+| `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume entries) |
 
 Returns: array of layout shift entries with `{value, sources, timestamp}`.
 
@@ -627,7 +660,7 @@ Get tracked file downloads with their status, progress, and file paths. Shows bo
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `browser` | string | no | Browser ID. Defaults to active browser. |
-| `peek` | bool | no | If true, do not clear the buffer (default `false`) |
+| `mode` | string | **yes** | `"peek"` (keep completed downloads in buffer) or `"drain"` (consume them). The in-progress list is always returned by snapshot. |
 | `limit` | int | no | Max entries to return (default all) |
 
 Returns: `downloads` (completed/canceled entries) and `in_progress` (currently downloading).

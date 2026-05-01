@@ -165,7 +165,8 @@ func TestConsoleLogs(t *testing.T) {
 	waitForConsole(t, tabID)
 
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out.Logs) == 0 {
 		t.Error("expected console logs, got none")
@@ -189,7 +190,8 @@ func TestJSErrors(t *testing.T) {
 	waitForJSErrors(t, tabID)
 
 	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out.Errors) == 0 {
 		t.Error("expected JS errors, got none")
@@ -212,7 +214,8 @@ func TestNetworkRequests(t *testing.T) {
 	waitForNetwork(t, tabID, "/api/data")
 
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
-		"tab": tabID,
+		"tab":  tabID,
+		"mode": "drain",
 	})
 	if len(out.Requests) == 0 {
 		t.Error("expected network requests, got none")
@@ -511,7 +514,7 @@ func TestClearConsole(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Drain first to get any existing logs.
-	callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{"tab": tabID})
+	callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{"tab": tabID, "mode": "drain"})
 
 	// Clear.
 	callTool[struct{}](t, "clear_console", map[string]any{"tab": tabID})
@@ -519,7 +522,7 @@ func TestClearConsole(t *testing.T) {
 	// Should be empty now.
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
-		"peek": true,
+		"mode": "peek",
 	})
 	if len(out.Logs) != 0 {
 		t.Errorf("expected 0 logs after clear, got %d", len(out.Logs))

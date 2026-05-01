@@ -337,7 +337,7 @@ func waitForConsole(t *testing.T, tabID string) {
 	for time.Now().Before(deadline) {
 		out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 			"tab":  tabID,
-			"peek": true,
+			"mode": "peek",
 		})
 		if len(out.Logs) > 0 {
 			return
@@ -355,7 +355,7 @@ func waitForJSErrors(t *testing.T, tabID string) {
 	for time.Now().Before(deadline) {
 		out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
 			"tab":  tabID,
-			"peek": true,
+			"mode": "peek",
 		})
 		if len(out.Errors) > 0 {
 			return
@@ -373,7 +373,7 @@ func waitForNetwork(t *testing.T, tabID, urlPattern string) {
 	for time.Now().Before(deadline) {
 		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":         tabID,
-			"peek":        true,
+			"mode":        "peek",
 			"url_pattern": urlPattern,
 		})
 		if len(out.Requests) > 0 {

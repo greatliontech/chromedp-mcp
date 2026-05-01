@@ -32,7 +32,7 @@ type GetPerformanceMetricsOutput struct {
 // GetLayoutShiftsInput is the input for get_layout_shifts.
 type GetLayoutShiftsInput struct {
 	TabInput
-	Peek bool `json:"peek,omitempty" jsonschema:"If true do not clear the buffer (default false)"`
+	Mode string `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the buffer, 'drain' to consume them. Required."`
 }
 
 // GetLayoutShiftsOutput is the output for get_layout_shifts.
@@ -98,16 +98,20 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_layout_shifts",
-		Description: "Get Cumulative Layout Shift (CLS) data. By default drains the buffer.",
+		Description: "Get Cumulative Layout Shift (CLS) data. 'mode' must be 'peek' (keep entries) or 'drain' (consume them).",
+		InputSchema: modeSchemaFor[GetLayoutShiftsInput](),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetLayoutShiftsInput) (*mcp.CallToolResult, GetLayoutShiftsOutput, error) {
+		if err := validateMode(input.Mode); err != nil {
+			return nil, GetLayoutShiftsOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetLayoutShiftsOutput{}, err
 		}
 
 		var shifts []collector.LayoutShiftEntry
-		if input.Peek {
+		if input.Mode == ModePeek {
 			shifts = t.Performance.PeekLayoutShifts(0)
 		} else {
 			shifts = t.Performance.DrainLayoutShifts(0)

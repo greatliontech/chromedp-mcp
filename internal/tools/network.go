@@ -18,7 +18,7 @@ import (
 // GetNetworkRequestsInput is the input for get_network_requests.
 type GetNetworkRequestsInput struct {
 	TabInput
-	Peek       bool   `json:"peek,omitempty" jsonschema:"If true do not clear the buffer (default false)"`
+	Mode       string `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the HTTP buffer, 'drain' to consume entries that match the filter. Required. WebSocket connections are never drained (long-lived); they are always returned by snapshot."`
 	Limit      int    `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
 	Type       string `json:"type,omitempty" jsonschema:"Filter by resource type: document stylesheet script image xhr fetch websocket other"`
 	StatusMin  int    `json:"status_min,omitempty" jsonschema:"Filter by minimum HTTP status code"`
@@ -62,7 +62,7 @@ type GetWebSocketFramesInput struct {
 	RequestID string `json:"request_id" jsonschema:"The websocket connection's request ID from get_network_requests"`
 	Direction string `json:"direction,omitempty" jsonschema:"Frame direction: sent received or both (default both)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max frames to return per direction (default all buffered)"`
-	Peek      bool   `json:"peek,omitempty" jsonschema:"If true do not clear the frame buffer (default false)"`
+	Mode      string `json:"mode" jsonschema:"Read mode: 'peek' to keep frames in the buffer, 'drain' to consume them. Required."`
 }
 
 // GetWebSocketFramesOutput is the output for get_websocket_frames.
@@ -74,9 +74,13 @@ type GetWebSocketFramesOutput struct {
 func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_network_requests",
-		Description: "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. By default drains the HTTP buffer; WebSocket connections are always peeked since they are long-lived.",
+		Description: "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. 'mode' must be 'peek' (keep entries in the HTTP buffer) or 'drain' (consume entries that match the filter). WebSocket connections are long-lived and always returned by snapshot regardless of mode.",
+		InputSchema: modeSchemaFor[GetNetworkRequestsInput](),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkRequestsInput) (*mcp.CallToolResult, GetNetworkRequestsOutput, error) {
+		if err := validateMode(input.Mode); err != nil {
+			return nil, GetNetworkRequestsOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetNetworkRequestsOutput{}, err
@@ -100,8 +104,8 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		if !strings.EqualFold(input.Type, "websocket") {
 			// type=websocket would filter out every HTTP entry anyway;
 			// skip the work (and avoid touching the HTTP buffer at all
-			// when peek=false).
-			if input.Peek {
+			// when mode=drain).
+			if input.Mode == ModePeek {
 				httpEntries = t.Network.Peek(f, 0)
 			} else {
 				httpEntries = t.Network.Drain(f, 0)
@@ -197,9 +201,13 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_websocket_frames",
-		Description: "Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with type=websocket from get_network_requests. By default drains both directions; pass peek=true to keep frames in the buffer.",
+		Description: "Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with type=websocket from get_network_requests. 'mode' must be 'peek' (keep frames buffered) or 'drain' (consume them).",
+		InputSchema: modeSchemaFor[GetWebSocketFramesInput](),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetWebSocketFramesInput) (*mcp.CallToolResult, GetWebSocketFramesOutput, error) {
+		if err := validateMode(input.Mode); err != nil {
+			return nil, GetWebSocketFramesOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetWebSocketFramesOutput{}, err
@@ -215,13 +223,14 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("direction must be sent, received, or both")
 		}
 
+		peek := input.Mode == ModePeek
 		out := GetWebSocketFramesOutput{
 			Sent:     []collector.WSFrame{},
 			Received: []collector.WSFrame{},
 		}
 		var found bool
 		if direction == "sent" || direction == "both" {
-			frames, ok := t.WebSocket.Frames(input.RequestID, collector.WSDirectionSent, input.Limit, input.Peek)
+			frames, ok := t.WebSocket.Frames(input.RequestID, collector.WSDirectionSent, input.Limit, peek)
 			if ok {
 				found = true
 				if frames != nil {
@@ -230,7 +239,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 		}
 		if direction == "received" || direction == "both" {
-			frames, ok := t.WebSocket.Frames(input.RequestID, collector.WSDirectionReceived, input.Limit, input.Peek)
+			frames, ok := t.WebSocket.Frames(input.RequestID, collector.WSDirectionReceived, input.Limit, peek)
 			if ok {
 				found = true
 				if frames != nil {

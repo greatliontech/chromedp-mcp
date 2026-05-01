@@ -14,7 +14,7 @@ func findRequest(t *testing.T, tabID, urlPattern string) GetNetworkRequestsOutpu
 	waitForNetwork(t, tabID, urlPattern)
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
-		"peek":        true,
+		"mode":        "peek",
 		"url_pattern": urlPattern,
 	})
 	if len(out.Requests) == 0 {

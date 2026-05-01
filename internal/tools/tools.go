@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
@@ -56,6 +57,56 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerDownloadTools(s, mgr)
 	registerConfigTools(s, mgr)
 	registerEmulationTools(s, mgr)
+}
+
+// Buffer-read modes for tools that consume per-tab event buffers
+// (get_console_logs, get_js_errors, get_network_requests,
+// get_websocket_frames, get_layout_shifts, get_downloads).
+//
+// Mode is a required parameter on those tools to make the destructive
+// vs. non-destructive choice explicit at every call site — the previous
+// shape (a single boolean defaulting to drain) silently destroyed data
+// the LLM hadn't intended to consume.
+const (
+	ModePeek  = "peek"
+	ModeDrain = "drain"
+)
+
+// validateMode returns an error when mode is not exactly "peek" or
+// "drain". Empty is rejected so the caller cannot silently default into
+// destructive behavior. This is defense-in-depth — the schema-level
+// rejection (required field + enum, see modeSchemaFor) fires first for
+// well-behaved MCP clients, but validateMode catches handler invocations
+// that bypass schema validation.
+func validateMode(mode string) error {
+	switch mode {
+	case ModePeek, ModeDrain:
+		return nil
+	case "":
+		return fmt.Errorf("mode is required: must be %q or %q", ModePeek, ModeDrain)
+	default:
+		return fmt.Errorf("mode must be %q or %q, got %q", ModePeek, ModeDrain, mode)
+	}
+}
+
+// modeSchemaFor returns the JSON Schema inferred from the input type In
+// with its "mode" property constrained to the enum {"peek", "drain"}.
+// Tools that consume buffered events use this so the LLM sees the valid
+// values at the schema layer, not only via handler error messages.
+//
+// Inference failures are programmer errors and panic at registration
+// time rather than ship a misconfigured tool.
+func modeSchemaFor[In any]() *jsonschema.Schema {
+	s, err := jsonschema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("modeSchemaFor: %v", err))
+	}
+	prop, ok := s.Properties["mode"]
+	if !ok {
+		panic("modeSchemaFor: input type has no 'mode' property")
+	}
+	prop.Enum = []any{ModePeek, ModeDrain}
+	return s
 }
 
 // ptrBool returns a pointer to a bool value.
