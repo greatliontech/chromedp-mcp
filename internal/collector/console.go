@@ -38,11 +38,10 @@ func (c *Console) Handle(ev *runtime.EventConsoleAPICalled) {
 	})
 }
 
-// Drain returns all entries and clears the buffer.
-// If level is non-empty, only entries matching that level are returned.
+// Drain returns up to limit entries matching level, removing only the
+// returned entries from the buffer.
 func (c *Console) Drain(level string, limit int) []ConsoleEntry {
-	entries := c.buf.Drain(levelFilter(level))
-	return applyLimit(entries, limit)
+	return c.buf.Drain(levelFilter(level), limit)
 }
 
 // Peek returns entries without clearing the buffer.

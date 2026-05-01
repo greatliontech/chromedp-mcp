@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
@@ -82,6 +83,34 @@ func TestMain(m *testing.M) {
 		w.Header().Set("Content-Disposition", `attachment; filename="data.csv"`)
 		w.Header().Set("Content-Type", "text/csv")
 		fmt.Fprint(w, "name,value\nalpha,1\nbeta,2\n")
+	})
+
+	// WebSocket echo endpoint: accepts an upgrade, sends one greeting
+	// message on connect, then echoes incoming frames back. Closes
+	// cleanly when the client closes.
+	mux.HandleFunc("/ws-echo", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true, // localhost test server
+		})
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+
+		wctx, wcancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer wcancel()
+
+		_ = c.Write(wctx, websocket.MessageText, []byte("hello-from-server"))
+
+		for {
+			typ, data, err := c.Read(wctx)
+			if err != nil {
+				return
+			}
+			if err := c.Write(wctx, typ, data); err != nil {
+				return
+			}
+		}
 	})
 
 	// Serve a tiny PNG for image tests.

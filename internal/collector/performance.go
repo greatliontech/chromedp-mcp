@@ -96,10 +96,10 @@ func (p *Performance) HandleTimelineEvent(ev *performancetimeline.EventTimelineE
 	}
 }
 
-// DrainLayoutShifts returns all layout shift entries and clears the buffer.
+// DrainLayoutShifts returns up to limit layout shift entries, removing
+// only the returned ones from the buffer.
 func (p *Performance) DrainLayoutShifts(limit int) []LayoutShiftEntry {
-	entries := p.layoutShifts.Drain(nil)
-	return applyLimit(entries, limit)
+	return p.layoutShifts.Drain(nil, limit)
 }
 
 // PeekLayoutShifts returns layout shift entries without clearing the buffer.
@@ -108,10 +108,10 @@ func (p *Performance) PeekLayoutShifts(limit int) []LayoutShiftEntry {
 	return applyLimit(entries, limit)
 }
 
-// DrainLCP returns all LCP entries and clears the buffer.
+// DrainLCP returns up to limit LCP entries, removing only the returned
+// ones from the buffer.
 func (p *Performance) DrainLCP(limit int) []LCPEntry {
-	entries := p.lcpEntries.Drain(nil)
-	return applyLimit(entries, limit)
+	return p.lcpEntries.Drain(nil, limit)
 }
 
 // PeekLCP returns LCP entries without clearing the buffer.

@@ -34,6 +34,7 @@ type Tab struct {
 	Console     *collector.Console
 	JSErrors    *collector.JSErrors
 	Network     *collector.Network
+	WebSocket   *collector.WebSocket
 	Performance *collector.Performance
 }
 
@@ -53,12 +54,17 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 	ctx, cancel := chromedp.NewContext(parentCtx)
 
 	t := &Tab{
-		ID:          id,
-		ctx:         ctx,
-		cancel:      cancel,
-		Console:     collector.NewConsole(DefaultConsoleBuffer),
-		JSErrors:    collector.NewJSErrors(DefaultErrorBuffer),
-		Network:     collector.NewNetwork(DefaultNetworkBuffer),
+		ID:       id,
+		ctx:      ctx,
+		cancel:   cancel,
+		Console:  collector.NewConsole(DefaultConsoleBuffer),
+		JSErrors: collector.NewJSErrors(DefaultErrorBuffer),
+		Network:  collector.NewNetwork(DefaultNetworkBuffer),
+		WebSocket: collector.NewWebSocket(
+			collector.DefaultWSConnections,
+			collector.DefaultWSFramesPerDirection,
+			collector.MaxInlineFramePayload,
+		),
 		Performance: collector.NewPerformance(DefaultPerformanceBuffer, 50),
 	}
 
@@ -84,6 +90,20 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 			t.Network.HandleLoadingFinished(ev)
 		case *network.EventLoadingFailed:
 			t.Network.HandleLoadingFailed(ev)
+		case *network.EventWebSocketCreated:
+			t.WebSocket.HandleCreated(ev)
+		case *network.EventWebSocketWillSendHandshakeRequest:
+			t.WebSocket.HandleHandshakeRequest(ev)
+		case *network.EventWebSocketHandshakeResponseReceived:
+			t.WebSocket.HandleHandshakeResponse(ev)
+		case *network.EventWebSocketFrameSent:
+			t.WebSocket.HandleFrameSent(ev)
+		case *network.EventWebSocketFrameReceived:
+			t.WebSocket.HandleFrameReceived(ev)
+		case *network.EventWebSocketFrameError:
+			t.WebSocket.HandleFrameError(ev)
+		case *network.EventWebSocketClosed:
+			t.WebSocket.HandleClosed(ev)
 		case *performancetimeline.EventTimelineEventAdded:
 			t.Performance.HandleTimelineEvent(ev)
 		case *browser.EventDownloadWillBegin:

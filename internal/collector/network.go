@@ -10,6 +10,33 @@ import (
 	"github.com/chromedp/cdproto/network"
 )
 
+// headersToMap converts CDP Headers (a map[string]any) to a plain
+// string map. CDP delivers most header values as strings but uses []any
+// for headers the wire format permits to repeat (notably Set-Cookie).
+// Multi-value headers are joined with newlines so the LLM sees every
+// value rather than silently losing all but one.
+func headersToMap(h network.Headers) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case []any:
+			parts := make([]string, 0, len(t))
+			for _, item := range t {
+				if s, ok := item.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			out[k] = strings.Join(parts, "\n")
+		}
+	}
+	return out
+}
+
 // MaxInlineRequestBody caps how much of a POST/PUT/PATCH/DELETE body is
 // embedded directly in NetworkEntry.RequestBody. Chrome is asked (via
 // Network.Enable's MaxPostDataSize) to omit Request.PostDataEntries
@@ -53,6 +80,14 @@ type NetworkEntry struct {
 	// MaxInlineRequestBody. Use get_request_body to retrieve the full
 	// payload.
 	RequestBodyTruncated bool `json:"request_body_truncated,omitempty"`
+
+	// FramesSentCount is set on websocket entries; pointer so the field
+	// is omitted entirely from HTTP entries' JSON output. A zero value
+	// (no frames yet) is still serialized when the connection exists.
+	FramesSentCount *int64 `json:"frames_sent_count,omitempty"`
+	// FramesReceivedCount is set on websocket entries; pointer for the
+	// same reason as FramesSentCount.
+	FramesReceivedCount *int64 `json:"frames_received_count,omitempty"`
 }
 
 // TimingInfo contains network timing data.
@@ -82,12 +117,7 @@ func NewNetwork(maxSize int) *Network {
 
 // HandleRequestWillBeSent records a new outgoing request.
 func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
-	headers := make(map[string]string)
-	for k, v := range ev.Request.Headers {
-		if s, ok := v.(string); ok {
-			headers[k] = s
-		}
-	}
+	headers := headersToMap(ev.Request.Headers)
 	entry := &NetworkEntry{
 		ID:             string(ev.RequestID),
 		URL:            ev.Request.URL,
@@ -172,14 +202,7 @@ func (n *Network) HandleResponseReceived(ev *network.EventResponseReceived) {
 	}
 	entry.Status = int64(ev.Response.Status)
 	entry.Type = string(ev.Type)
-
-	respHeaders := make(map[string]string)
-	for k, v := range ev.Response.Headers {
-		if s, ok := v.(string); ok {
-			respHeaders[k] = s
-		}
-	}
-	entry.ResponseHeaders = respHeaders
+	entry.ResponseHeaders = headersToMap(ev.Response.Headers)
 
 	if ev.Response.Timing != nil {
 		t := ev.Response.Timing
@@ -242,10 +265,11 @@ type NetworkFilter struct {
 	FailedOnly bool
 }
 
-// Drain returns all completed entries and clears the buffer.
+// Drain returns up to limit entries matching the filter, removing only
+// the returned entries from the buffer. Entries that don't match the
+// filter or fall beyond the limit are retained.
 func (n *Network) Drain(f *NetworkFilter, limit int) []NetworkEntry {
-	entries := n.buf.Drain(networkFilter(f))
-	return applyLimit(entries, limit)
+	return n.buf.Drain(networkFilter(f), limit)
 }
 
 // Peek returns entries without clearing the buffer.
@@ -267,21 +291,41 @@ func networkFilter(f *NetworkFilter) func(NetworkEntry) bool {
 		return nil
 	}
 	return func(e NetworkEntry) bool {
-		if f.FailedOnly && !e.Failed {
-			return false
-		}
-		if f.Type != "" && !strings.EqualFold(e.Type, f.Type) {
-			return false
-		}
+		return MatchesFilter(f, &e)
+	}
+}
+
+// MatchesFilter reports whether a NetworkEntry passes a NetworkFilter. It
+// is the single source of truth for HTTP and WebSocket entry filtering;
+// callers that build entries outside this package (e.g. WS connections
+// projected into NetworkEntry shape) use it directly.
+//
+// Status filters (StatusMin/StatusMax) apply to HTTP entries unconditionally
+// (HTTP failures arrive with Status==0 and the user expects "status_min=200"
+// to exclude them, matching the historical behavior). For WebSocket entries
+// the filters are skipped while the handshake is pending (Status==0) so
+// in-flight sockets remain visible.
+func MatchesFilter(f *NetworkFilter, e *NetworkEntry) bool {
+	if f == nil {
+		return true
+	}
+	if f.FailedOnly && !e.Failed {
+		return false
+	}
+	if f.Type != "" && !strings.EqualFold(e.Type, f.Type) {
+		return false
+	}
+	skipStatusGate := strings.EqualFold(e.Type, "websocket") && e.Status == 0
+	if !skipStatusGate {
 		if f.StatusMin > 0 && int(e.Status) < f.StatusMin {
 			return false
 		}
 		if f.StatusMax > 0 && int(e.Status) > f.StatusMax {
 			return false
 		}
-		if f.URLPattern != "" && !strings.Contains(e.URL, f.URLPattern) {
-			return false
-		}
-		return true
 	}
+	if f.URLPattern != "" && !strings.Contains(e.URL, f.URLPattern) {
+		return false
+	}
+	return true
 }

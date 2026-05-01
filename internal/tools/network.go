@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	cdpnetwork "github.com/chromedp/cdproto/network"
@@ -54,10 +56,25 @@ type GetRequestBodyOutput struct {
 	Base64Encoded bool   `json:"base64_encoded"`
 }
 
+// GetWebSocketFramesInput is the input for get_websocket_frames.
+type GetWebSocketFramesInput struct {
+	TabInput
+	RequestID string `json:"request_id" jsonschema:"The websocket connection's request ID from get_network_requests"`
+	Direction string `json:"direction,omitempty" jsonschema:"Frame direction: sent received or both (default both)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Max frames to return per direction (default all buffered)"`
+	Peek      bool   `json:"peek,omitempty" jsonschema:"If true do not clear the frame buffer (default false)"`
+}
+
+// GetWebSocketFramesOutput is the output for get_websocket_frames.
+type GetWebSocketFramesOutput struct {
+	Sent     []collector.WSFrame `json:"sent"`
+	Received []collector.WSFrame `json:"received"`
+}
+
 func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_network_requests",
-		Description: "Get captured network requests with their URLs, methods, status codes, timing, and headers. By default drains the buffer.",
+		Description: "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. By default drains the HTTP buffer; WebSocket connections are always peeked since they are long-lived.",
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkRequestsInput) (*mcp.CallToolResult, GetNetworkRequestsOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -73,14 +90,33 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			FailedOnly: input.FailedOnly,
 		}
 
-		var requests []collector.NetworkEntry
-		if input.Peek {
-			requests = t.Network.Peek(f, input.Limit)
-		} else {
-			requests = t.Network.Drain(f, input.Limit)
+		// Merge HTTP and WebSocket entries before applying limit so a
+		// large HTTP buffer cannot starve WS visibility (a small limit
+		// must not silently hide active sockets). The HTTP collector is
+		// asked for everything matching its filter; WS connections are
+		// projected into NetworkEntry shape and run through the same
+		// filter via collector.MatchesFilter so semantics are identical.
+		var httpEntries []collector.NetworkEntry
+		if !strings.EqualFold(input.Type, "websocket") {
+			// type=websocket would filter out every HTTP entry anyway;
+			// skip the work (and avoid touching the HTTP buffer at all
+			// when peek=false).
+			if input.Peek {
+				httpEntries = t.Network.Peek(f, 0)
+			} else {
+				httpEntries = t.Network.Drain(f, 0)
+			}
 		}
-		if requests == nil {
-			requests = []collector.NetworkEntry{}
+		// WebSocket connections are long-lived; always peek so a single
+		// get_network_requests call doesn't lose visibility into open
+		// sockets, regardless of input.Peek.
+		wsEntries := websocketEntries(t.WebSocket.Connections(), f)
+
+		requests := make([]collector.NetworkEntry, 0, len(httpEntries)+len(wsEntries))
+		requests = append(requests, httpEntries...)
+		requests = append(requests, wsEntries...)
+		if input.Limit > 0 && len(requests) > input.Limit {
+			requests = requests[:input.Limit]
 		}
 		return nil, GetNetworkRequestsOutput{Requests: requests}, nil
 	})
@@ -158,6 +194,92 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		return nil, GetRequestBodyOutput{Body: postData, Base64Encoded: false}, nil
 	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_websocket_frames",
+		Description: "Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with type=websocket from get_network_requests. By default drains both directions; pass peek=true to keep frames in the buffer.",
+		Annotations: &mcp.ToolAnnotations{},
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetWebSocketFramesInput) (*mcp.CallToolResult, GetWebSocketFramesOutput, error) {
+		t, err := mgr.ResolveTab("", input.Tab)
+		if err != nil {
+			return nil, GetWebSocketFramesOutput{}, err
+		}
+
+		direction := strings.ToLower(strings.TrimSpace(input.Direction))
+		if direction == "" {
+			direction = "both"
+		}
+		switch direction {
+		case "sent", "received", "both":
+		default:
+			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("direction must be sent, received, or both")
+		}
+
+		out := GetWebSocketFramesOutput{
+			Sent:     []collector.WSFrame{},
+			Received: []collector.WSFrame{},
+		}
+		var found bool
+		if direction == "sent" || direction == "both" {
+			frames, ok := t.WebSocket.Frames(input.RequestID, collector.WSDirectionSent, input.Limit, input.Peek)
+			if ok {
+				found = true
+				if frames != nil {
+					out.Sent = frames
+				}
+			}
+		}
+		if direction == "received" || direction == "both" {
+			frames, ok := t.WebSocket.Frames(input.RequestID, collector.WSDirectionReceived, input.Limit, input.Peek)
+			if ok {
+				found = true
+				if frames != nil {
+					out.Received = frames
+				}
+			}
+		}
+		if !found {
+			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("no websocket connection with request_id %q", input.RequestID)
+		}
+		return nil, out, nil
+	})
+}
+
+// websocketEntries projects WSConnections into NetworkEntry shape so
+// get_network_requests can return a single unified list, then applies the
+// shared collector filter so HTTP and WS entries are filtered identically.
+func websocketEntries(conns []collector.WSConnection, f *collector.NetworkFilter) []collector.NetworkEntry {
+	out := make([]collector.NetworkEntry, 0, len(conns))
+	for _, c := range conns {
+		sent := c.FramesSentCount
+		received := c.FramesReceivedCount
+		// Failed covers two cases: (a) a CDP-reported frame error, or (b)
+		// a handshake that returned any non-101 HTTP status (401, 403,
+		// 404, etc. mean the upgrade was rejected). Status==0 is "still
+		// pending" and not a failure.
+		failed := c.Error != "" ||
+			(c.ResponseStatus != 0 && c.ResponseStatus != 101)
+		entry := collector.NetworkEntry{
+			ID:                  c.ID,
+			URL:                 c.URL,
+			Method:              "GET", // WebSocket upgrades are HTTP GET.
+			Status:              c.ResponseStatus,
+			Type:                "websocket",
+			RequestHeaders:      c.RequestHeaders,
+			ResponseHeaders:     c.ResponseHeaders,
+			StartTime:           c.StartTime,
+			EndTime:             c.EndTime,
+			Failed:              failed,
+			Error:               c.Error,
+			FramesSentCount:     &sent,
+			FramesReceivedCount: &received,
+		}
+		if !collector.MatchesFilter(f, &entry) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // isValidUTF8 checks if a byte slice is valid UTF-8 text.

@@ -48,10 +48,9 @@ func (je *JSErrors) Handle(ev *runtime.EventExceptionThrown) {
 	je.buf.Add(entry)
 }
 
-// Drain returns all entries and clears the buffer.
+// Drain returns up to limit entries, removing only the returned ones.
 func (je *JSErrors) Drain(limit int) []JSErrorEntry {
-	entries := je.buf.Drain(nil)
-	return applyLimit(entries, limit)
+	return je.buf.Drain(nil, limit)
 }
 
 // Peek returns entries without clearing the buffer.

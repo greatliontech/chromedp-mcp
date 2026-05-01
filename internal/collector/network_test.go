@@ -603,6 +603,97 @@ func TestRequestBodyAbsentForGET(t *testing.T) {
 	}
 }
 
+// TestMatchesFilterWSPendingHandshakePasses verifies that a WebSocket
+// connection mid-handshake (Status==0, Type==websocket) is not silently
+// filtered out by status_min/status_max.
+func TestMatchesFilterWSPendingHandshakePasses(t *testing.T) {
+	e := NetworkEntry{URL: "wss://example.com", Type: "websocket", Status: 0}
+	f := &NetworkFilter{StatusMin: 200, StatusMax: 299}
+	if !MatchesFilter(f, &e) {
+		t.Error("WS entry with Status=0 should pass status filters; was rejected")
+	}
+}
+
+// TestMatchesFilterStatusFiltersWhenSet verifies status bounds are
+// enforced once Status is non-zero.
+func TestMatchesFilterStatusFiltersWhenSet(t *testing.T) {
+	e := NetworkEntry{URL: "http://example.com", Status: 404}
+	f := &NetworkFilter{StatusMin: 200, StatusMax: 299}
+	if MatchesFilter(f, &e) {
+		t.Error("entry with Status=404 should be rejected by status_max=299")
+	}
+}
+
+// TestMatchesFilterFailedHTTPRejectedByStatusMin verifies an HTTP entry
+// that failed before getting a response (Status==0, Failed==true) is
+// still rejected by status_min=200, preserving historical semantics.
+// Without the type-gated carve-out for WebSocket, the status-zero skip
+// would over-broadly let connection-phase failures slip through.
+func TestMatchesFilterFailedHTTPRejectedByStatusMin(t *testing.T) {
+	e := NetworkEntry{
+		URL:    "http://example.com",
+		Type:   "Document",
+		Status: 0,
+		Failed: true,
+		Error:  "net::ERR_CONNECTION_REFUSED",
+	}
+	f := &NetworkFilter{StatusMin: 200}
+	if MatchesFilter(f, &e) {
+		t.Error("failed HTTP entry with Status=0 must be excluded by status_min=200")
+	}
+}
+
+// TestHeadersToMapStringValues verifies the common case: single-string
+// values pass through untouched.
+func TestHeadersToMapStringValues(t *testing.T) {
+	in := network.Headers{
+		"Content-Type": "application/json",
+		"X-Custom":     "abc",
+	}
+	out := headersToMap(in)
+	if out["Content-Type"] != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", out["Content-Type"])
+	}
+	if out["X-Custom"] != "abc" {
+		t.Errorf("X-Custom = %q, want abc", out["X-Custom"])
+	}
+}
+
+// TestHeadersToMapArrayValues verifies array-valued headers (e.g.
+// repeated Set-Cookie) are joined with newlines rather than dropped.
+func TestHeadersToMapArrayValues(t *testing.T) {
+	in := network.Headers{
+		"Set-Cookie": []any{"a=1; Path=/", "b=2; Path=/"},
+	}
+	out := headersToMap(in)
+	want := "a=1; Path=/\nb=2; Path=/"
+	if out["Set-Cookie"] != want {
+		t.Errorf("Set-Cookie = %q, want %q", out["Set-Cookie"], want)
+	}
+}
+
+// TestHeadersToMapMixedArrayDropsNonStrings verifies array entries that
+// aren't strings are silently skipped (defensive).
+func TestHeadersToMapMixedArrayDropsNonStrings(t *testing.T) {
+	in := network.Headers{
+		"X-Mixed": []any{"keep", 42, "also-keep"},
+	}
+	out := headersToMap(in)
+	if out["X-Mixed"] != "keep\nalso-keep" {
+		t.Errorf("X-Mixed = %q, want 'keep\\nalso-keep'", out["X-Mixed"])
+	}
+}
+
+// TestHeadersToMapEmpty verifies nil/empty inputs return nil.
+func TestHeadersToMapEmpty(t *testing.T) {
+	if headersToMap(nil) != nil {
+		t.Error("headersToMap(nil) returned non-nil")
+	}
+	if headersToMap(network.Headers{}) != nil {
+		t.Error("headersToMap(empty) returned non-nil")
+	}
+}
+
 // TestNetworkDrainPeekFilter verifies filter and limit work on the Network collector.
 func TestNetworkDrainPeekFilter(t *testing.T) {
 	n := NewNetwork(20)

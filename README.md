@@ -189,6 +189,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `get_network_requests` | Get captured network requests with filtering        |
 | `get_response_body`    | Get the response body of a specific request         |
 | `get_request_body`     | Get the full POST/PUT/PATCH/DELETE request body     |
+| `get_websocket_frames` | Get sent/received WebSocket frames for a connection |
 | `get_downloads`        | Get tracked file downloads with status and progress |
 
 ### Cookies

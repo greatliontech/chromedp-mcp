@@ -14,7 +14,7 @@ func TestRingBufferOverflow(t *testing.T) {
 	if buf.Len() != 10 {
 		t.Fatalf("len = %d, want 10", buf.Len())
 	}
-	entries := buf.Drain(nil)
+	entries := buf.Drain(nil, 0)
 	if len(entries) != 10 {
 		t.Fatalf("drain returned %d entries, want 10", len(entries))
 	}
@@ -66,8 +66,8 @@ func TestRingBufferDrainWithFilter(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		buf.Add(i)
 	}
-	// Drain only even numbers. ALL entries should be cleared regardless.
-	evens := buf.Drain(func(v int) bool { return v%2 == 0 })
+	// Drain only even numbers. Non-matching (odd) entries must be retained.
+	evens := buf.Drain(func(v int) bool { return v%2 == 0 }, 0)
 	if len(evens) != 5 {
 		t.Fatalf("filtered drain returned %d, want 5", len(evens))
 	}
@@ -76,9 +76,57 @@ func TestRingBufferDrainWithFilter(t *testing.T) {
 			t.Errorf("filtered value %d is not even", v)
 		}
 	}
-	// Buffer should be empty after drain (all cleared, not just matched).
-	if buf.Len() != 0 {
-		t.Errorf("after drain, len = %d, want 0", buf.Len())
+	// Buffer should still hold the 5 odd entries.
+	if buf.Len() != 5 {
+		t.Errorf("after selective drain, len = %d, want 5", buf.Len())
+	}
+	remaining := buf.Peek(nil)
+	for _, v := range remaining {
+		if v%2 == 0 {
+			t.Errorf("retained value %d is even, expected only odds left", v)
+		}
+	}
+}
+
+// TestRingBufferDrainWithLimit verifies the limit parameter caps the
+// returned slice and leaves remaining matches in the buffer.
+func TestRingBufferDrainWithLimit(t *testing.T) {
+	buf := NewRingBuffer[int](10)
+	for i := 0; i < 10; i++ {
+		buf.Add(i)
+	}
+	first := buf.Drain(nil, 3)
+	if len(first) != 3 {
+		t.Fatalf("first drain returned %d, want 3", len(first))
+	}
+	if first[0] != 0 || first[1] != 1 || first[2] != 2 {
+		t.Errorf("first drain = %v, want [0,1,2]", first)
+	}
+	// 7 entries should remain.
+	if buf.Len() != 7 {
+		t.Errorf("after partial drain, len = %d, want 7", buf.Len())
+	}
+	// Subsequent drain returns the next 3.
+	second := buf.Drain(nil, 3)
+	if len(second) != 3 || second[0] != 3 {
+		t.Errorf("second drain = %v, want [3,4,5]", second)
+	}
+}
+
+// TestRingBufferDrainFilterAndLimit combines filter and limit.
+func TestRingBufferDrainFilterAndLimit(t *testing.T) {
+	buf := NewRingBuffer[int](10)
+	for i := 0; i < 10; i++ {
+		buf.Add(i)
+	}
+	// First 2 evens.
+	got := buf.Drain(func(v int) bool { return v%2 == 0 }, 2)
+	if len(got) != 2 || got[0] != 0 || got[1] != 2 {
+		t.Errorf("filtered+limit drain = %v, want [0,2]", got)
+	}
+	// 8 entries remain (3 evens + 5 odds).
+	if buf.Len() != 8 {
+		t.Errorf("after filtered+limit drain, len = %d, want 8", buf.Len())
 	}
 }
 
@@ -105,7 +153,7 @@ func TestRingBufferClearIdempotent(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Errorf("after double clear, len = %d, want 0", buf.Len())
 	}
-	result := buf.Drain(nil)
+	result := buf.Drain(nil, 0)
 	if result != nil {
 		t.Errorf("drain on empty = %v, want nil", result)
 	}
@@ -113,7 +161,7 @@ func TestRingBufferClearIdempotent(t *testing.T) {
 
 func TestRingBufferEmptyDrainReturnsNil(t *testing.T) {
 	buf := NewRingBuffer[int](5)
-	if result := buf.Drain(nil); result != nil {
+	if result := buf.Drain(nil, 0); result != nil {
 		t.Errorf("drain on new buffer = %v, want nil", result)
 	}
 }
@@ -145,7 +193,7 @@ func TestRingBufferLargeOverflow(t *testing.T) {
 			if buf.Len() != tc.maxSize {
 				t.Fatalf("len = %d, want %d", buf.Len(), tc.maxSize)
 			}
-			entries := buf.Drain(nil)
+			entries := buf.Drain(nil, 0)
 			if len(entries) != tc.maxSize {
 				t.Fatalf("drain returned %d, want %d", len(entries), tc.maxSize)
 			}
@@ -212,7 +260,7 @@ func TestRingBufferZeroMaxSize(t *testing.T) {
 	if buf.Len() != 1 {
 		t.Errorf("len = %d, want 1 (maxSize clamped to 1)", buf.Len())
 	}
-	entries := buf.Drain(nil)
+	entries := buf.Drain(nil, 0)
 	if len(entries) != 1 || entries[0] != 42 {
 		t.Errorf("drain = %v, want [42]", entries)
 	}
@@ -226,7 +274,7 @@ func TestRingBufferNegativeMaxSize(t *testing.T) {
 	if buf.Len() != 1 {
 		t.Errorf("len = %d, want 1", buf.Len())
 	}
-	entries := buf.Drain(nil)
+	entries := buf.Drain(nil, 0)
 	if len(entries) != 1 || entries[0] != 2 {
 		t.Errorf("drain = %v, want [2]", entries)
 	}
@@ -236,7 +284,7 @@ func TestRingBufferDrainThenAdd(t *testing.T) {
 	buf := NewRingBuffer[int](5)
 	buf.Add(1)
 	buf.Add(2)
-	buf.Drain(nil)
+	buf.Drain(nil, 0)
 	buf.Add(3)
 	buf.Add(4)
 	entries := buf.Peek(nil)

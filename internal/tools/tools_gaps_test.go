@@ -554,29 +554,48 @@ func TestNetworkStatusMaxOnly(t *testing.T) {
 }
 
 // ===========================================================================
-// Console: drain with level filter clears ALL entries
+// Console: drain with level filter retains non-matching entries
 // ===========================================================================
 
-func TestConsoleDrainWithFilterClearsAll(t *testing.T) {
+func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
+	// Snapshot what's there to count levels.
+	all := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+		"tab":  tabID,
+		"peek": true,
+	})
+	if len(all.Logs) == 0 {
+		t.Skip("fixture produced no console logs")
+	}
+	var nonWarning int
+	for _, l := range all.Logs {
+		if l.Level != "warning" {
+			nonWarning++
+		}
+	}
+
 	// Drain only "warning" level.
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	_ = callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"level": "warning",
 	})
-	_ = out // Just ensure no error.
 
-	// After draining with a filter, ALL entries should be cleared
-	// (drain clears everything, filter only affects what's returned).
+	// Selective drain: non-warning entries must remain.
 	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"peek": true,
 	})
-	if len(out2.Logs) != 0 {
-		t.Errorf("after drain with filter, expected 0 remaining logs, got %d", len(out2.Logs))
+	if len(out2.Logs) != nonWarning {
+		t.Errorf("after drain with level=warning, remaining = %d, want %d (non-warning entries retained)",
+			len(out2.Logs), nonWarning)
+	}
+	for _, l := range out2.Logs {
+		if l.Level == "warning" {
+			t.Errorf("warning entry %q survived drain; selective drain should have removed it", l.Text)
+		}
 	}
 }
 

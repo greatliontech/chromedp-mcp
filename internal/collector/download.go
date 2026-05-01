@@ -116,10 +116,10 @@ func (d *Download) HandleDownloadProgress(ev *browser.EventDownloadProgress) {
 	d.buf.Add(*entry)
 }
 
-// Drain returns all completed/canceled entries and clears the buffer.
+// Drain returns up to limit completed/canceled entries, removing only
+// the returned ones from the buffer.
 func (d *Download) Drain(limit int) []DownloadEntry {
-	entries := d.buf.Drain(nil)
-	return applyLimit(entries, limit)
+	return d.buf.Drain(nil, limit)
 }
 
 // Peek returns entries without clearing the buffer.

@@ -40,29 +40,44 @@ func (rb *RingBuffer[T]) Add(entry T) {
 	}
 }
 
-// Drain returns all entries and clears the buffer. The optional filter
-// function, if non-nil, selects which entries to return (but all entries
-// are removed regardless).
-func (rb *RingBuffer[T]) Drain(filter func(T) bool) []T {
+// Drain returns up to limit entries matching the filter and removes only
+// the returned entries from the buffer. Entries that don't match the
+// filter are retained. Entries that match the filter beyond the limit
+// are also retained, so successive Drain calls paginate. limit <= 0
+// means no limit.
+//
+// When nothing matches (filter rejects all entries), the underlying
+// buffer is left intact and no allocation occurs, so a "drain matching X"
+// call against a buffer of all-non-X is a single O(N) scan.
+func (rb *RingBuffer[T]) Drain(filter func(T) bool, limit int) []T {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	if len(rb.entries) == 0 {
 		return nil
 	}
-	var result []T
-	if filter != nil {
-		result = make([]T, 0, len(rb.entries))
-		for _, e := range rb.entries {
-			if filter(e) {
-				result = append(result, e)
-			}
+	// First pass: count matches subject to limit. Lets us allocate the
+	// taken/keep slices with exactly the right capacity and fast-path
+	// when there are zero matches.
+	var matches int
+	for _, e := range rb.entries {
+		if (filter == nil || filter(e)) && (limit <= 0 || matches < limit) {
+			matches++
 		}
-	} else {
-		result = make([]T, len(rb.entries))
-		copy(result, rb.entries)
 	}
-	rb.entries = rb.entries[:0]
-	return result
+	if matches == 0 {
+		return nil
+	}
+	taken := make([]T, 0, matches)
+	keep := make([]T, 0, len(rb.entries)-matches)
+	for _, e := range rb.entries {
+		if (filter == nil || filter(e)) && len(taken) < matches {
+			taken = append(taken, e)
+		} else {
+			keep = append(keep, e)
+		}
+	}
+	rb.entries = keep
+	return taken
 }
 
 // Peek returns entries without clearing the buffer. The optional filter
