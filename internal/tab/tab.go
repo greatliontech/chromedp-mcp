@@ -113,6 +113,15 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 		}).Do(ctx); err != nil {
 			return err
 		}
+		// Re-enable Network with MaxPostDataSize so requestWillBeSent
+		// carries POST bodies up to the inline cap. chromedp also calls
+		// Network.enable internally; the latest call wins, and the
+		// parameter does not affect already-fired events.
+		if err := network.Enable().
+			WithMaxPostDataSize(int64(collector.MaxInlineRequestBody)).
+			Do(ctx); err != nil {
+			return err
+		}
 		// Enable downloads per-tab if a download directory is configured.
 		// SetDownloadBehavior is session-scoped — it must be called on
 		// each tab's context for events to be delivered to that tab.

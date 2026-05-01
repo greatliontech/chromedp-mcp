@@ -1,12 +1,23 @@
 package collector
 
 import (
+	"encoding/base64"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/network"
 )
+
+// MaxInlineRequestBody caps how much of a POST/PUT/PATCH/DELETE body is
+// embedded directly in NetworkEntry.RequestBody. Chrome is asked (via
+// Network.Enable's MaxPostDataSize) to omit Request.PostDataEntries
+// entirely when the body exceeds this cap — Chrome gates on size, it does
+// not slice. So in practice decode receives either the full body or none
+// of it; for the latter the caller falls back to get_request_body, which
+// re-fetches via Network.getRequestPostData.
+const MaxInlineRequestBody = 4096
 
 // NetworkEntry represents a captured network request/response pair.
 type NetworkEntry struct {
@@ -24,6 +35,24 @@ type NetworkEntry struct {
 	EndTime         time.Time         `json:"end_time,omitempty"`
 	Completed       bool              `json:"-"`
 	Failed          bool              `json:"failed,omitempty"`
+
+	// HasRequestBody is true when the request carried a body. It mirrors
+	// CDP's Request.hasPostData and is set even when no inline body was
+	// captured, so the caller knows it can fetch the full body via
+	// get_request_body.
+	HasRequestBody bool `json:"has_request_body,omitempty"`
+	// RequestBody is the request body inlined up to MaxInlineRequestBody
+	// bytes. Empty when the request has no body, or when the body is
+	// larger than CDP's MaxPostDataSize and was not delivered with the
+	// requestWillBeSent event.
+	RequestBody string `json:"request_body,omitempty"`
+	// RequestBodyBase64 is true when RequestBody contains base64-encoded
+	// binary data (the body is not valid UTF-8 text).
+	RequestBodyBase64 bool `json:"request_body_base64,omitempty"`
+	// RequestBodyTruncated is true when the inline body was cut at
+	// MaxInlineRequestBody. Use get_request_body to retrieve the full
+	// payload.
+	RequestBodyTruncated bool `json:"request_body_truncated,omitempty"`
 }
 
 // TimingInfo contains network timing data.
@@ -66,10 +95,71 @@ func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 		Type:           string(ev.Type),
 		RequestHeaders: headers,
 		StartTime:      ev.Timestamp.Time(),
+		HasRequestBody: ev.Request.HasPostData,
+	}
+	if ev.Request.HasPostData || len(ev.Request.PostDataEntries) > 0 {
+		body, base64Encoded, truncated := decodePostDataEntries(ev.Request.PostDataEntries, MaxInlineRequestBody)
+		entry.RequestBody = body
+		entry.RequestBodyBase64 = base64Encoded
+		entry.RequestBodyTruncated = truncated
 	}
 	n.mu.Lock()
 	n.pending[ev.RequestID] = entry
 	n.mu.Unlock()
+}
+
+// decodePostDataEntries concatenates CDP PostDataEntries (each Bytes field
+// is base64-encoded binary), trims the result to maxBytes, and reports the
+// inline body in either UTF-8 string form or base64 form.
+//
+// Returns body, base64Encoded, truncated. body is empty when entries are
+// missing or empty (which can happen when CDP omits PostData because the
+// body exceeds MaxPostDataSize — caller should fall back to has_request_body
+// + get_request_body).
+func decodePostDataEntries(entries []*network.PostDataEntry, maxBytes int) (string, bool, bool) {
+	if len(entries) == 0 {
+		return "", false, false
+	}
+	var buf []byte
+	for _, e := range entries {
+		if e == nil || e.Bytes == "" {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(e.Bytes)
+		if err != nil {
+			// CDP serializes Bytes as base64. A decode failure means the
+			// event is malformed; rather than guess (raw bytes? literal
+			// base64-looking text?), surface nothing inline. The caller
+			// still sees has_request_body=true and can fetch the full
+			// body via get_request_body.
+			return "", false, false
+		}
+		buf = append(buf, decoded...)
+	}
+	if len(buf) == 0 {
+		return "", false, false
+	}
+	// Classify text vs binary on the *full* body so a UTF-8 string cut
+	// mid-codepoint doesn't get misreported as binary after truncation.
+	isText := utf8.Valid(buf)
+	truncated := false
+	if len(buf) > maxBytes {
+		// Defensive: in current Chrome behavior MaxPostDataSize gates
+		// the entire entries array, so decoded bodies arrive either
+		// complete or absent. Still, if a future Chrome ever delivers
+		// an oversized body, we cap and flag.
+		buf = buf[:maxBytes]
+		truncated = true
+	}
+	if isText {
+		// Trim trailing bytes that fall inside a partial rune. UTF-8
+		// runes are at most 4 bytes, so this loop runs at most 3 times.
+		for len(buf) > 0 && !utf8.Valid(buf) {
+			buf = buf[:len(buf)-1]
+		}
+		return string(buf), false, truncated
+	}
+	return base64.StdEncoding.EncodeToString(buf), true, truncated
 }
 
 // HandleResponseReceived records a response for a pending request.

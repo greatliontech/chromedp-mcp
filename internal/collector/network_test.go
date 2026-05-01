@@ -1,10 +1,13 @@
 package collector
 
 import (
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
@@ -359,6 +362,244 @@ func TestDownloadProgressUnknownState(t *testing.T) {
 	entries = d.Drain(0)
 	if len(entries) != 1 {
 		t.Errorf("after real completion, expected 1 entry, got %d", len(entries))
+	}
+}
+
+// b64 returns the base64 encoding of s, the wire shape of CDP's
+// PostDataEntry.Bytes field.
+func b64(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+// postEntries builds CDP PostDataEntries from raw byte chunks.
+func postEntries(chunks ...string) []*network.PostDataEntry {
+	out := make([]*network.PostDataEntry, len(chunks))
+	for i, c := range chunks {
+		out[i] = &network.PostDataEntry{Bytes: b64(c)}
+	}
+	return out
+}
+
+// captureRequest sends a synthetic requestWillBeSent and returns the entry
+// stored in the pending map (where it lives until response/finished).
+func captureRequest(t *testing.T, n *Network, req *network.Request) *NetworkEntry {
+	t.Helper()
+	reqID := network.RequestID("req-test")
+	n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+		RequestID: reqID,
+		Request:   req,
+		Type:      "XHR",
+		Timestamp: monoTime(time.Now()),
+	})
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	e, ok := n.pending[reqID]
+	if !ok {
+		t.Fatal("no pending entry after HandleRequestWillBeSent")
+	}
+	return e
+}
+
+// TestRequestBodyInlineUTF8 verifies a small JSON body is captured inline
+// as a UTF-8 string with no truncation flag.
+func TestRequestBodyInlineUTF8(t *testing.T) {
+	n := NewNetwork(10)
+	body := `{"hello":"world"}`
+	e := captureRequest(t, n, &network.Request{
+		URL:             "http://example.com/api",
+		Method:          "POST",
+		Headers:         network.Headers{"Content-Type": "application/json"},
+		HasPostData:     true,
+		PostDataEntries: postEntries(body),
+	})
+
+	if !e.HasRequestBody {
+		t.Error("HasRequestBody = false, want true")
+	}
+	if e.RequestBody != body {
+		t.Errorf("RequestBody = %q, want %q", e.RequestBody, body)
+	}
+	if e.RequestBodyBase64 {
+		t.Error("RequestBodyBase64 = true, want false for UTF-8 body")
+	}
+	if e.RequestBodyTruncated {
+		t.Error("RequestBodyTruncated = true, want false for small body")
+	}
+}
+
+// TestRequestBodyInlineMultipleEntries verifies that several PostDataEntries
+// (Chrome can split a body across chunks) are concatenated in order.
+func TestRequestBodyInlineMultipleEntries(t *testing.T) {
+	n := NewNetwork(10)
+	e := captureRequest(t, n, &network.Request{
+		URL:             "http://example.com/api",
+		Method:          "POST",
+		Headers:         network.Headers{},
+		HasPostData:     true,
+		PostDataEntries: postEntries("foo=", "bar&", "baz=qux"),
+	})
+	want := "foo=bar&baz=qux"
+	if e.RequestBody != want {
+		t.Errorf("RequestBody = %q, want %q", e.RequestBody, want)
+	}
+}
+
+// TestRequestBodyInlineBinary verifies non-UTF8 bodies are base64-encoded
+// and flagged.
+func TestRequestBodyInlineBinary(t *testing.T) {
+	n := NewNetwork(10)
+	binary := []byte{0xff, 0xfe, 0xfd, 0x00, 0x01, 0x02}
+	e := captureRequest(t, n, &network.Request{
+		URL:    "http://example.com/upload",
+		Method: "POST",
+		Headers: network.Headers{
+			"Content-Type": "application/octet-stream",
+		},
+		HasPostData: true,
+		PostDataEntries: []*network.PostDataEntry{
+			{Bytes: base64.StdEncoding.EncodeToString(binary)},
+		},
+	})
+
+	if !e.RequestBodyBase64 {
+		t.Error("RequestBodyBase64 = false, want true for binary body")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(e.RequestBody)
+	if err != nil {
+		t.Fatalf("RequestBody is not base64: %v", err)
+	}
+	if string(decoded) != string(binary) {
+		t.Errorf("decoded body = %v, want %v", decoded, binary)
+	}
+	if e.RequestBodyTruncated {
+		t.Error("RequestBodyTruncated = true, want false")
+	}
+}
+
+// TestRequestBodyInlineTruncated verifies bodies larger than the inline cap
+// are cut and flagged.
+func TestRequestBodyInlineTruncated(t *testing.T) {
+	n := NewNetwork(10)
+	big := strings.Repeat("A", MaxInlineRequestBody+512)
+	e := captureRequest(t, n, &network.Request{
+		URL:             "http://example.com/api",
+		Method:          "POST",
+		Headers:         network.Headers{},
+		HasPostData:     true,
+		PostDataEntries: postEntries(big),
+	})
+
+	if !e.RequestBodyTruncated {
+		t.Error("RequestBodyTruncated = false, want true")
+	}
+	if len(e.RequestBody) != MaxInlineRequestBody {
+		t.Errorf("RequestBody length = %d, want %d", len(e.RequestBody), MaxInlineRequestBody)
+	}
+}
+
+// TestRequestBodyTruncatedMidUTF8 verifies that a UTF-8 body whose
+// truncation point lands inside a multibyte rune is still returned as a
+// string (trimmed to the last valid rune boundary), not base64-encoded as
+// "binary". A 4-byte 🌍 emoji at the cap exercises the trim-back path.
+func TestRequestBodyTruncatedMidUTF8(t *testing.T) {
+	n := NewNetwork(10)
+	// Build a body that's exactly MaxInlineRequestBody-1 ASCII bytes
+	// followed by a 4-byte 🌍 (total = MaxInlineRequestBody+3). Truncation
+	// to MaxInlineRequestBody lands 1 byte into the emoji.
+	body := strings.Repeat("A", MaxInlineRequestBody-1) + "🌍"
+	e := captureRequest(t, n, &network.Request{
+		URL:             "http://example.com/api",
+		Method:          "POST",
+		Headers:         network.Headers{},
+		HasPostData:     true,
+		PostDataEntries: postEntries(body),
+	})
+
+	if !e.RequestBodyTruncated {
+		t.Fatal("RequestBodyTruncated = false, want true")
+	}
+	if e.RequestBodyBase64 {
+		t.Errorf("RequestBodyBase64 = true on UTF-8 body cut mid-rune; want false (got %q)", e.RequestBody[:min(40, len(e.RequestBody))])
+	}
+	if !utf8.ValidString(e.RequestBody) {
+		t.Error("RequestBody is not valid UTF-8")
+	}
+	// The trim-back drops the partial emoji bytes, so length should be
+	// MaxInlineRequestBody-1 (the ASCII portion) — emoji's first 1-3
+	// bytes are stripped.
+	if len(e.RequestBody) != MaxInlineRequestBody-1 {
+		t.Errorf("RequestBody length = %d, want %d (ASCII portion only)",
+			len(e.RequestBody), MaxInlineRequestBody-1)
+	}
+}
+
+// TestRequestBodyHasButNoEntries verifies the case where Chrome reports
+// HasPostData=true but omits PostDataEntries (body too large for the
+// configured MaxPostDataSize). The flag should still be set so the LLM
+// knows to call get_request_body.
+func TestRequestBodyHasButNoEntries(t *testing.T) {
+	n := NewNetwork(10)
+	e := captureRequest(t, n, &network.Request{
+		URL:         "http://example.com/api",
+		Method:      "POST",
+		Headers:     network.Headers{},
+		HasPostData: true,
+		// No PostDataEntries.
+	})
+
+	if !e.HasRequestBody {
+		t.Error("HasRequestBody = false, want true")
+	}
+	if e.RequestBody != "" {
+		t.Errorf("RequestBody = %q, want empty", e.RequestBody)
+	}
+	if e.RequestBodyTruncated {
+		t.Error("RequestBodyTruncated = true, want false (nothing to truncate)")
+	}
+}
+
+// TestRequestBodyMalformedBase64 verifies that a PostDataEntry whose Bytes
+// field is not valid base64 (a CDP protocol violation) does not produce a
+// mangled inline body. The entry should be flagged as having a body but
+// the inline body is empty so the LLM falls back to get_request_body.
+func TestRequestBodyMalformedBase64(t *testing.T) {
+	n := NewNetwork(10)
+	e := captureRequest(t, n, &network.Request{
+		URL:         "http://example.com/api",
+		Method:      "POST",
+		Headers:     network.Headers{},
+		HasPostData: true,
+		// "!!!" is not valid base64 (padding/charset).
+		PostDataEntries: []*network.PostDataEntry{
+			{Bytes: "!!!"},
+		},
+	})
+
+	if !e.HasRequestBody {
+		t.Error("HasRequestBody = false, want true")
+	}
+	if e.RequestBody != "" {
+		t.Errorf("RequestBody = %q, want empty for malformed base64", e.RequestBody)
+	}
+	if e.RequestBodyTruncated {
+		t.Error("RequestBodyTruncated = true, want false")
+	}
+}
+
+// TestRequestBodyAbsentForGET verifies GET requests have no body fields set.
+func TestRequestBodyAbsentForGET(t *testing.T) {
+	n := NewNetwork(10)
+	e := captureRequest(t, n, &network.Request{
+		URL:     "http://example.com",
+		Method:  "GET",
+		Headers: network.Headers{},
+	})
+
+	if e.HasRequestBody {
+		t.Error("HasRequestBody = true on GET, want false")
+	}
+	if e.RequestBody != "" {
+		t.Errorf("RequestBody = %q on GET, want empty", e.RequestBody)
 	}
 }
 

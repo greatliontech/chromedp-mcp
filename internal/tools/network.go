@@ -42,6 +42,18 @@ type GetResponseBodyOutput struct {
 	Base64Encoded bool   `json:"base64_encoded"`
 }
 
+// GetRequestBodyInput is the input for get_request_body.
+type GetRequestBodyInput struct {
+	TabInput
+	RequestID string `json:"request_id" jsonschema:"The request ID from get_network_requests"`
+}
+
+// GetRequestBodyOutput is the output for get_request_body.
+type GetRequestBodyOutput struct {
+	Body          string `json:"body"`
+	Base64Encoded bool   `json:"base64_encoded"`
+}
+
 func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_network_requests",
@@ -107,6 +119,44 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			}, nil
 		}
 		return nil, GetResponseBodyOutput{Body: body, Base64Encoded: false}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_request_body",
+		Description: "Get the full request body (POST/PUT/PATCH/DELETE payload) of a specific network request by its request ID. Use when get_network_requests returned has_request_body=true and the inline request_body was empty or truncated.",
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetRequestBodyInput) (*mcp.CallToolResult, GetRequestBodyOutput, error) {
+		t, err := mgr.ResolveTab("", input.Tab)
+		if err != nil {
+			return nil, GetRequestBodyOutput{}, err
+		}
+
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		var postData string
+		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			var err error
+			postData, err = cdpnetwork.GetRequestPostData(cdpnetwork.RequestID(input.RequestID)).Do(ctx)
+			return err
+		}))
+		if err != nil {
+			return nil, GetRequestBodyOutput{}, err
+		}
+
+		// CDP returns postData as a string. Multipart form uploads with
+		// binary parts (files) are excluded by Chrome — see CDP docs:
+		// "Request body string, omitting files from multipart requests".
+		// Detect non-UTF8 anyway for safety.
+		if !isValidUTF8(postData) {
+			return nil, GetRequestBodyOutput{
+				Body:          base64.StdEncoding.EncodeToString([]byte(postData)),
+				Base64Encoded: true,
+			}, nil
+		}
+		return nil, GetRequestBodyOutput{Body: postData, Base64Encoded: false}, nil
 	})
 }
 
