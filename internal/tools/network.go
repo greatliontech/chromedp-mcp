@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -386,10 +387,7 @@ func projectEntries(entries []collector.NetworkEntry, fields []string) ([]map[st
 	for _, f := range fields {
 		allowed[f] = struct{}{}
 	}
-	knownFields, err := networkEntryFieldSet()
-	if err != nil {
-		return nil, err
-	}
+	knownFields := networkEntryFieldSet()
 	for f := range allowed {
 		if _, ok := knownFields[f]; !ok {
 			return nil, fmt.Errorf("unknown field %q in fields list; available: %v",
@@ -419,9 +417,12 @@ func projectEntries(entries []collector.NetworkEntry, fields []string) ([]map[st
 
 // networkEntryFieldSet returns the set of JSON keys producible by a
 // NetworkEntry's serialization, used to validate caller-supplied field
-// names. Computed once from a probe entry whose every field is set to
-// a non-zero value so omitempty doesn't drop keys from the set.
-func networkEntryFieldSet() (map[string]struct{}, error) {
+// names. Computed once at first call from a probe entry whose every
+// field is set to a non-zero value so omitempty doesn't drop keys from
+// the set, then cached. The probe is pure and deterministic — recomputing
+// per request is wasted work in a path explicitly designed to handle
+// many entries cheaply.
+var networkEntryFieldSet = sync.OnceValue(func() map[string]struct{} {
 	one := int64(1)
 	probe := collector.NetworkEntry{
 		ID:                   "x",
@@ -446,18 +447,20 @@ func networkEntryFieldSet() (map[string]struct{}, error) {
 	}
 	blob, err := json.Marshal(probe)
 	if err != nil {
-		return nil, err
+		// json.Marshal of a struct with no funky types is infallible;
+		// if this ever fires it's a programmer error worth crashing on.
+		panic(fmt.Sprintf("networkEntryFieldSet: probe marshal: %v", err))
 	}
 	var m map[string]any
 	if err := json.Unmarshal(blob, &m); err != nil {
-		return nil, err
+		panic(fmt.Sprintf("networkEntryFieldSet: probe unmarshal: %v", err))
 	}
 	out := make(map[string]struct{}, len(m))
 	for k := range m {
 		out[k] = struct{}{}
 	}
-	return out, nil
-}
+	return out
+})
 
 // sortedKeys returns the keys of a set in stable order for predictable
 // error messages.
