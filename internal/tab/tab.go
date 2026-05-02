@@ -7,6 +7,7 @@ import (
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/performancetimeline"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -26,6 +27,50 @@ const DefaultNetworkBuffer = 1000
 // DefaultPerformanceBuffer is the default performance timeline buffer size.
 const DefaultPerformanceBuffer = 200
 
+// DefaultURLChangesBuffer is the default URL change buffer size. Each
+// entry is a small {from, to, kind, timestamp} record so 100 covers a
+// long session without bloating memory.
+const DefaultURLChangesBuffer = 100
+
+// domMutationObserverScript is installed via Page.addScriptToEvaluateOnNewDocument
+// so every new document immediately attaches a MutationObserver that
+// pushes timestamps (page-relative via performance.now()) into a bounded
+// JS-side ring buffer. observe_activity reads the buffer to count
+// mutations in a window.
+//
+// Only childList mutations are observed. Attribute and characterData
+// mutations are noisy on real pages — focus state changes,
+// CSS-driven attribute toggles, lazy-loaded resources, framework
+// re-renders all fire dozens of irrelevant attribute/text mutations
+// even on quiescent pages. childList (added/removed nodes) is the
+// signal that maps to "the click changed what's on the page".
+//
+// The cap (10000) bounds memory; older entries are dropped on
+// overflow, which under-counts but doesn't break the "zero vs nonzero"
+// signal observe_activity actually cares about.
+const domMutationObserverScript = `
+(function() {
+  if (window.__mcpMutationObserverInstalled) return;
+  window.__mcpMutationObserverInstalled = true;
+  window.__mcpMutationCap = 10000;
+  window.__mcpMutationTimestamps = [];
+  var obs = new MutationObserver(function(mutations) {
+    var now = performance.now();
+    for (var i = 0; i < mutations.length; i++) {
+      window.__mcpMutationTimestamps.push(now);
+    }
+    var over = window.__mcpMutationTimestamps.length - window.__mcpMutationCap;
+    if (over > 0) {
+      window.__mcpMutationTimestamps.splice(0, over);
+    }
+  });
+  obs.observe(document, {
+    subtree: true,
+    childList: true,
+  });
+})();
+`
+
 // Tab represents a single browser tab with its event collectors.
 type Tab struct {
 	ID          string
@@ -35,6 +80,7 @@ type Tab struct {
 	JSErrors    *collector.JSErrors
 	Network     *collector.Network
 	WebSocket   *collector.WebSocket
+	URLChanges  *collector.URLChanges
 	Performance *collector.Performance
 }
 
@@ -65,6 +111,7 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 			collector.DefaultWSFramesPerDirection,
 			collector.MaxInlineFramePayload,
 		),
+		URLChanges:  collector.NewURLChanges(DefaultURLChangesBuffer),
 		Performance: collector.NewPerformance(DefaultPerformanceBuffer, 50),
 	}
 
@@ -104,6 +151,10 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 			t.WebSocket.HandleFrameError(ev)
 		case *network.EventWebSocketClosed:
 			t.WebSocket.HandleClosed(ev)
+		case *page.EventFrameNavigated:
+			t.URLChanges.HandleFrameNavigated(ev)
+		case *page.EventNavigatedWithinDocument:
+			t.URLChanges.HandleNavigatedWithinDocument(ev)
 		case *performancetimeline.EventTimelineEventAdded:
 			t.Performance.HandleTimelineEvent(ev)
 		case *browser.EventDownloadWillBegin:
@@ -140,6 +191,27 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 		if err := network.Enable().
 			WithMaxPostDataSize(int64(collector.MaxInlineRequestBody)).
 			Do(ctx); err != nil {
+			return err
+		}
+		// Page.enable so frameNavigated and navigatedWithinDocument
+		// events deliver to the tab's listener for the URL change
+		// collector.
+		if err := page.Enable().Do(ctx); err != nil {
+			return err
+		}
+		// Register the DOM mutation observer for every new document.
+		// observe_activity reads the timestamps the observer pushes
+		// into a per-document JS-side ring buffer.
+		if _, err := page.AddScriptToEvaluateOnNewDocument(domMutationObserverScript).Do(ctx); err != nil {
+			return err
+		}
+		// Also evaluate on the current document so observe_activity
+		// works on tabs that already have a document loaded — e.g.,
+		// browser_connect attaches to a Chrome that already has tabs
+		// open. The script's `if (window.__mcpMutationObserverInstalled)
+		// return;` guard makes the eval a no-op when the script also
+		// runs via addScriptToEvaluateOnNewDocument on a fresh document.
+		if err := chromedp.Evaluate(domMutationObserverScript, nil).Do(ctx); err != nil {
 			return err
 		}
 		// Enable downloads per-tab if a download directory is configured.

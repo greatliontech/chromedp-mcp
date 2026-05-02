@@ -839,6 +839,26 @@ Block URLs matching patterns. Supports `*` wildcards.
 | `tab` | string | no | Tab ID |
 | `patterns` | []string | yes | URL patterns to block. Pass empty array to clear. |
 
+### Observation
+
+#### `observe_activity`
+
+Measure observable browser activity in a time window: how many network requests, DOM mutations (childList only), console messages, and JS errors occurred, and whether the top-frame URL changed. Useful after dispatching an action (click, type, submit_form, etc.) to detect a silent no-op — `has_any_effect=false` with all counts at zero is a strong signal that the action did nothing observable.
+
+Always waits the full `wait_ms`; does not return early on first activity. Use `wait_for` for predicate-style "block until X is true" semantics.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `wait_ms` | int | **yes** | How many milliseconds to observe forward from the call |
+| `since_ms` | int | no | Lookback in milliseconds (default 50). Catches fast events that fired before observe_activity ran (cached XHRs, sync handlers). Set to a larger value (e.g. 500) when called after a slow tool whose dispatch took longer than the default. |
+
+Returns: `{window_ms, network_requests, dom_mutations, url_changed, console_messages, js_errors, has_any_effect}`.
+
+`has_any_effect` is the disjunction of `network_requests > 0 || url_changed || console_messages > 0 || js_errors > 0`. **DOM mutations are intentionally excluded** because real pages produce ambient `childList` mutations (parser-driven on fresh navigations, framework re-renders on SPAs, async resource insertion). The `dom_mutations` count is reported so the caller can interpret it relative to expectation, but is not part of the "did anything happen" disjunction.
+
+The MutationObserver only watches `childList` (added/removed nodes), not `attributes` or `characterData`, because those are too noisy on real pages (focus state changes, CSS-driven attribute toggles, lazy-loaded resources, framework re-renders all fire dozens of irrelevant mutations even on quiescent pages).
+
 ## Internal Architecture
 
 ### Package Structure

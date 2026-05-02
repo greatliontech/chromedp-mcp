@@ -15,6 +15,11 @@ type JSErrorEntry struct {
 	Column     int64     `json:"column,omitempty"`
 	StackTrace string    `json:"stack_trace,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
+	// ReceivedAt is the wall-clock time the event was processed by the
+	// Go-side collector. Used by observe_activity for time-window
+	// filtering — Timestamp is from CDP's MonotonicTime which drifts
+	// vs. time.Now(). JSON-hidden.
+	ReceivedAt time.Time `json:"-"`
 }
 
 // JSErrors collects uncaught JavaScript exceptions and promise rejections.
@@ -31,8 +36,9 @@ func NewJSErrors(maxSize int) *JSErrors {
 func (je *JSErrors) Handle(ev *runtime.EventExceptionThrown) {
 	details := ev.ExceptionDetails
 	entry := JSErrorEntry{
-		Message:   details.Text,
-		Timestamp: ev.Timestamp.Time(),
+		Message:    details.Text,
+		Timestamp:  ev.Timestamp.Time(),
+		ReceivedAt: time.Now(),
 	}
 	if details.Exception != nil && details.Exception.Description != "" {
 		entry.Message = details.Exception.Description

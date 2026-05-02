@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Observation Test</title>
+    <!-- Suppress Chrome's auto-request for /favicon.ico so observation
+         tests can assert "zero network requests" on no-op clicks
+         without flakiness from the favicon fetch racing the wait. -->
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <h1>Observation Fixture</h1>
+
+    <!-- A button whose click handler does literally nothing observable.
+         observe_activity should report zero counts and has_any_effect=false. -->
+    <button id="noop-btn">No-op</button>
+
+    <!-- A button that fires a fetch on click. -->
+    <button id="fetch-btn">Fetch</button>
+
+    <!-- A button that mutates the DOM (appends a <li>). -->
+    <button id="dom-btn">Mutate DOM</button>
+    <ul id="dom-target"></ul>
+
+    <!-- A button that pushes a same-document URL (History API). -->
+    <button id="pushstate-btn">PushState</button>
+
+    <!-- A button that logs to console. -->
+    <button id="console-btn">Console</button>
+
+    <!-- A button that throws a JS error (uncaught). -->
+    <button id="throw-btn">Throw</button>
+
+    <script>
+        // No handler at all on noop-btn — clicking it dispatches the
+        // event but no JS runs, so no observable activity should occur.
+        // (We also do NOT addEventListener, so even the attribute path
+        // is silent.)
+
+        document.getElementById('fetch-btn').addEventListener('click', function() {
+            fetch('/api/data');
+        });
+
+        document.getElementById('dom-btn').addEventListener('click', function() {
+            var li = document.createElement('li');
+            li.textContent = 'item ' + Date.now();
+            document.getElementById('dom-target').appendChild(li);
+        });
+
+        document.getElementById('pushstate-btn').addEventListener('click', function() {
+            history.pushState({}, '', '/observation.html?pushed=1');
+        });
+
+        document.getElementById('console-btn').addEventListener('click', function() {
+            console.log('observation-console-log');
+        });
+
+        document.getElementById('throw-btn').addEventListener('click', function() {
+            // Unhandled exception so it lands in JSErrors collector.
+            setTimeout(function() {
+                throw new Error('observation-thrown-error');
+            }, 0);
+        });
+    </script>
+</body>
+</html>

@@ -60,8 +60,15 @@ type NetworkEntry struct {
 	Error           string            `json:"error,omitempty"`
 	StartTime       time.Time         `json:"start_time"`
 	EndTime         time.Time         `json:"end_time,omitempty"`
-	Completed       bool              `json:"-"`
-	Failed          bool              `json:"failed,omitempty"`
+	// ReceivedAt is the wall-clock time the request-will-be-sent event
+	// was processed by the Go-side collector. Used by observe_activity
+	// for time-window filtering — StartTime is converted from CDP's
+	// MonotonicTime which drifts vs. time.Now() (sysutil.BootTime can
+	// be hours off). JSON-hidden because it duplicates StartTime for
+	// consumers that just want "when did this happen".
+	ReceivedAt time.Time `json:"-"`
+	Completed  bool      `json:"-"`
+	Failed     bool      `json:"failed,omitempty"`
 
 	// HasRequestBody is true when the request carried a body. It mirrors
 	// CDP's Request.hasPostData and is set even when no inline body was
@@ -125,6 +132,7 @@ func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 		Type:           string(ev.Type),
 		RequestHeaders: headers,
 		StartTime:      ev.Timestamp.Time(),
+		ReceivedAt:     time.Now(),
 		HasRequestBody: ev.Request.HasPostData,
 	}
 	if ev.Request.HasPostData || len(ev.Request.PostDataEntries) > 0 {
@@ -276,6 +284,40 @@ func (n *Network) Drain(f *NetworkFilter, limit int) []NetworkEntry {
 func (n *Network) Peek(f *NetworkFilter, limit int) []NetworkEntry {
 	entries := n.buf.Peek(networkFilter(f))
 	return applyLimit(entries, limit)
+}
+
+// CountStartedSince returns the number of requests whose ReceivedAt
+// (the wall-clock time HandleRequestWillBeSent ran) is at or after t.
+// Walks both the completed buffer and the pending map so a request
+// that started in the window but hasn't completed yet is still counted
+// — observe_activity uses this to avoid silently missing slow XHRs.
+//
+// Walks pending FIRST (recording each ID it counts), then walks the
+// completed buffer and skips IDs already counted from pending. This
+// prevents both double-counting and miss-counting when an entry
+// transitions pending→buf concurrently with the walk: an entry that
+// moves between the two snapshots is counted once via pending and
+// skipped via the seen-set when we reach buf.
+func (n *Network) CountStartedSince(t time.Time) int {
+	seen := make(map[string]struct{})
+	count := 0
+	n.mu.Lock()
+	for id, e := range n.pending {
+		if !e.ReceivedAt.Before(t) {
+			seen[string(id)] = struct{}{}
+			count++
+		}
+	}
+	n.mu.Unlock()
+	for _, e := range n.buf.Peek(nil) {
+		if _, dup := seen[e.ID]; dup {
+			continue
+		}
+		if !e.ReceivedAt.Before(t) {
+			count++
+		}
+	}
+	return count
 }
 
 // Clear removes all entries from both the pending map and completed buffer.

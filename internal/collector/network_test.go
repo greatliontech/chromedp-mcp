@@ -694,6 +694,63 @@ func TestHeadersToMapEmpty(t *testing.T) {
 	}
 }
 
+// TestNetworkEntryReceivedAtAlwaysSet verifies every entry that lands
+// in the buffer (or stays in pending) has a non-zero ReceivedAt.
+// observe_activity uses ReceivedAt for window filtering — a zero
+// ReceivedAt sorts before any sinceTime and would silently exclude
+// the entry from observation counts. This guards against future
+// collector changes that introduce a new entry-construction path
+// missing the ReceivedAt = time.Now() assignment.
+func TestNetworkEntryReceivedAtAlwaysSet(t *testing.T) {
+	n := NewNetwork(10)
+	now := time.Now()
+	rid := network.RequestID("req-1")
+	n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+		RequestID: rid,
+		Request:   &network.Request{URL: "http://example.com", Method: "GET", Headers: network.Headers{}},
+		Type:      "Document",
+		Timestamp: monoTime(now),
+	})
+
+	// Pending entry must have ReceivedAt set.
+	n.mu.Lock()
+	pending := n.pending[rid]
+	n.mu.Unlock()
+	if pending == nil {
+		t.Fatal("expected pending entry")
+	}
+	if pending.ReceivedAt.IsZero() {
+		t.Error("pending entry has zero ReceivedAt")
+	}
+
+	// Once completed, the buffered entry must also have ReceivedAt set
+	// (it's the same struct value moved into the buffer).
+	n.HandleResponseReceived(&network.EventResponseReceived{
+		RequestID: rid,
+		Type:      "Document",
+		Response:  &network.Response{Status: 200, Headers: network.Headers{}},
+	})
+	n.HandleLoadingFinished(&network.EventLoadingFinished{
+		RequestID: rid,
+		Timestamp: monoTime(now.Add(50 * time.Millisecond)),
+	})
+	for _, e := range n.Peek(nil, 0) {
+		if e.ReceivedAt.IsZero() {
+			t.Errorf("buffered entry has zero ReceivedAt: %+v", e)
+		}
+	}
+
+	// CountStartedSince must return entries whose ReceivedAt is at or
+	// after the cutoff — using a cutoff before now should include this
+	// entry, after should exclude.
+	if got := n.CountStartedSince(now.Add(-time.Second)); got < 1 {
+		t.Errorf("CountStartedSince(past) = %d, want >= 1", got)
+	}
+	if got := n.CountStartedSince(now.Add(time.Hour)); got != 0 {
+		t.Errorf("CountStartedSince(future) = %d, want 0", got)
+	}
+}
+
 // TestNetworkDrainPeekFilter verifies filter and limit work on the Network collector.
 func TestNetworkDrainPeekFilter(t *testing.T) {
 	n := NewNetwork(20)

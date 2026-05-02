@@ -13,6 +13,11 @@ type ConsoleEntry struct {
 	Level     string    `json:"level"`
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
+	// ReceivedAt is the wall-clock time the event was processed by the
+	// Go-side collector. Used by observe_activity for time-window
+	// filtering — Timestamp is converted from CDP's MonotonicTime which
+	// drifts vs. time.Now(). JSON-hidden.
+	ReceivedAt time.Time `json:"-"`
 }
 
 // Console collects console.log/warn/error/info/debug messages.
@@ -32,9 +37,10 @@ func (c *Console) Handle(ev *runtime.EventConsoleAPICalled) {
 		parts = append(parts, remoteObjectToString(arg))
 	}
 	c.buf.Add(ConsoleEntry{
-		Level:     string(ev.Type),
-		Text:      strings.Join(parts, " "),
-		Timestamp: ev.Timestamp.Time(),
+		Level:      string(ev.Type),
+		Text:       strings.Join(parts, " "),
+		Timestamp:  ev.Timestamp.Time(),
+		ReceivedAt: time.Now(),
 	})
 }
 

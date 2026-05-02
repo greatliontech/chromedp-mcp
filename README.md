@@ -235,6 +235,12 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `emulate_network`               | Emulate network conditions (offline, latency, throttling)     |
 | `block_urls`                    | Block URLs matching wildcard patterns                         |
 
+### Observation
+
+| Tool               | Description                                                                    |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `observe_activity` | Measure browser activity in a time window (network, DOM, URL, console, errors) |
+
 For full parameter documentation, see [docs/design.md](docs/design.md).
 
 ## How It Works
