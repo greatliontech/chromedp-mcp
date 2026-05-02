@@ -183,6 +183,7 @@ func TestTypeWithDelay(t *testing.T) {
 		"selector": "#type-target",
 		"text":     "abc",
 		"delay":    50,
+		"mode":     "replace",
 	})
 	elapsed := time.Since(start)
 
@@ -1119,6 +1120,7 @@ func TestSubmitFormFromInputElement(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#name",
 		"text":     "Bob",
+		"mode":     "replace",
 	})
 
 	// Submit using the input element (not the form), tests the .closest('form') path.

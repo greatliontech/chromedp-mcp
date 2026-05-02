@@ -72,31 +72,40 @@ const (
 	ModeDrain = "drain"
 )
 
-// validateMode returns an error when mode is not exactly "peek" or
-// "drain". Empty is rejected so the caller cannot silently default into
+// Type-tool modes (used by the `type` tool only). Required for the same
+// reason: the previous shape (`clear: bool`, default false) silently
+// concatenated typed text onto whatever was already in the field.
+const (
+	TypeModeReplace = "replace"
+	TypeModeAppend  = "append"
+)
+
+// validateMode returns an error when mode is not in the allowed set.
+// Empty is rejected so the caller cannot silently default into
 // destructive behavior. This is defense-in-depth — the schema-level
 // rejection (required field + enum, see modeSchemaFor) fires first for
 // well-behaved MCP clients, but validateMode catches handler invocations
 // that bypass schema validation.
-func validateMode(mode string) error {
-	switch mode {
-	case ModePeek, ModeDrain:
-		return nil
-	case "":
-		return fmt.Errorf("mode is required: must be %q or %q", ModePeek, ModeDrain)
-	default:
-		return fmt.Errorf("mode must be %q or %q, got %q", ModePeek, ModeDrain, mode)
+func validateMode(mode string, allowed ...string) error {
+	for _, a := range allowed {
+		if mode == a {
+			return nil
+		}
 	}
+	if mode == "" {
+		return fmt.Errorf("mode is required: must be one of %v", allowed)
+	}
+	return fmt.Errorf("mode must be one of %v, got %q", allowed, mode)
 }
 
 // modeSchemaFor returns the JSON Schema inferred from the input type In
-// with its "mode" property constrained to the enum {"peek", "drain"}.
-// Tools that consume buffered events use this so the LLM sees the valid
-// values at the schema layer, not only via handler error messages.
+// with its "mode" property constrained to the given enum values. Tools
+// that take a "mode" parameter use this so the LLM sees the valid values
+// at the schema layer, not only via handler error messages.
 //
 // Inference failures are programmer errors and panic at registration
 // time rather than ship a misconfigured tool.
-func modeSchemaFor[In any]() *jsonschema.Schema {
+func modeSchemaFor[In any](allowed ...string) *jsonschema.Schema {
 	s, err := jsonschema.For[In](nil)
 	if err != nil {
 		panic(fmt.Sprintf("modeSchemaFor: %v", err))
@@ -105,7 +114,11 @@ func modeSchemaFor[In any]() *jsonschema.Schema {
 	if !ok {
 		panic("modeSchemaFor: input type has no 'mode' property")
 	}
-	prop.Enum = []any{ModePeek, ModeDrain}
+	enum := make([]any, len(allowed))
+	for i, v := range allowed {
+		enum[i] = v
+	}
+	prop.Enum = enum
 	return s
 }
 

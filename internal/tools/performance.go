@@ -99,10 +99,10 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_layout_shifts",
 		Description: "Get Cumulative Layout Shift (CLS) data. 'mode' must be 'peek' (keep entries) or 'drain' (consume them).",
-		InputSchema: modeSchemaFor[GetLayoutShiftsInput](),
+		InputSchema: modeSchemaFor[GetLayoutShiftsInput](ModePeek, ModeDrain),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetLayoutShiftsInput) (*mcp.CallToolResult, GetLayoutShiftsOutput, error) {
-		if err := validateMode(input.Mode); err != nil {
+		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetLayoutShiftsOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", input.Tab)

@@ -27,6 +27,7 @@ func TestTypeIntoTextarea(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#textarea-target",
 		"text":     "multi\nline\ntext",
+		"mode":     "replace",
 	})
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -51,6 +52,7 @@ func TestTypeEmptyText(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#textarea-target",
 		"text":     "",
+		"mode":     "replace",
 	})
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{

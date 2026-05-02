@@ -287,6 +287,7 @@ func TestClickAndType(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "hello world",
+		"mode":     "replace",
 	})
 
 	// Verify typed text.
@@ -308,6 +309,7 @@ func TestFormInteraction(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#name",
 		"text":     "Alice",
+		"mode":     "replace",
 	})
 
 	// Select an option.

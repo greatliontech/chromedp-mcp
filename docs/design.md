@@ -441,7 +441,7 @@ Type text into an element matching a selector.
 | `tab` | string | no | Tab ID |
 | `selector` | string | yes | CSS selector of the input element |
 | `text` | string | yes | Text to type |
-| `clear` | bool | no | Clear the field before typing (default `false`) |
+| `mode` | string | **yes** | `"replace"` (clear field first, common case) or `"append"` (type after existing value, e.g. contenteditable mid-composition) |
 | `delay` | int | no | Delay between keystrokes in milliseconds (default 0) |
 
 #### `select_option`

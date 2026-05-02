@@ -329,6 +329,7 @@ func TestTypeWithClear(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "initial",
+		"mode":     "replace",
 	})
 
 	// Type again with clear.
@@ -336,7 +337,7 @@ func TestTypeWithClear(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "replaced",
-		"clear":    true,
+		"mode":     "replace",
 	})
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -348,6 +349,37 @@ func TestTypeWithClear(t *testing.T) {
 	}
 	if strings.Contains(string(out.Result), "initial") {
 		t.Errorf("typed text = %s, should not contain 'initial' after clear", out.Result)
+	}
+}
+
+// TestTypeAppendPreservesExisting verifies mode=append concatenates
+// onto the field's current value instead of clearing it. Without this,
+// the only test coverage of the append branch was the validateMode
+// table — a refactor that inverted the mode check would silently change
+// behaviour but still pass the existing suite.
+func TestTypeAppendPreservesExisting(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "abc",
+		"mode":     "replace",
+	})
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "def",
+		"mode":     "append",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if string(out.Result) != `"abcdef"` {
+		t.Errorf("after append, value = %s, want \"abcdef\"", out.Result)
 	}
 }
 
@@ -755,8 +787,8 @@ func TestTypeMissingSelector(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	selectorTimeout(t, tabID, "type",
-		map[string]any{"text": "hello"},                               // invalid
-		map[string]any{"selector": "#type-target", "text": "test123"}, // valid
+		map[string]any{"text": "hello", "mode": "replace"},                               // invalid
+		map[string]any{"selector": "#type-target", "text": "test123", "mode": "replace"}, // valid
 	)
 
 	// Verify the valid type actually worked.
@@ -774,8 +806,8 @@ func TestTypeWithClearMissingSelector(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	selectorTimeout(t, tabID, "type",
-		map[string]any{"text": "hello", "clear": true},                               // invalid
-		map[string]any{"selector": "#type-target", "text": "cleared", "clear": true}, // valid
+		map[string]any{"text": "hello", "mode": "replace"},                               // invalid
+		map[string]any{"selector": "#type-target", "text": "cleared", "mode": "replace"}, // valid
 	)
 }
 

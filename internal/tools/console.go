@@ -43,10 +43,10 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_console_logs",
 		Description: "Get captured console messages (log, warn, error, info, debug). 'mode' must be 'peek' (keep entries) or 'drain' (consume entries that match level).",
-		InputSchema: modeSchemaFor[GetConsoleLogsInput](),
+		InputSchema: modeSchemaFor[GetConsoleLogsInput](ModePeek, ModeDrain),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetConsoleLogsInput) (*mcp.CallToolResult, GetConsoleLogsOutput, error) {
-		if err := validateMode(input.Mode); err != nil {
+		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetConsoleLogsOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -69,10 +69,10 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_js_errors",
 		Description: "Get captured JavaScript exceptions and promise rejections. 'mode' must be 'peek' (keep entries) or 'drain' (consume entries).",
-		InputSchema: modeSchemaFor[GetJSErrorsInput](),
+		InputSchema: modeSchemaFor[GetJSErrorsInput](ModePeek, ModeDrain),
 		Annotations: &mcp.ToolAnnotations{},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetJSErrorsInput) (*mcp.CallToolResult, GetJSErrorsOutput, error) {
-		if err := validateMode(input.Mode); err != nil {
+		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetJSErrorsOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", input.Tab)

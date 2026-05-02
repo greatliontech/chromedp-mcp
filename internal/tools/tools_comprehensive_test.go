@@ -428,7 +428,7 @@ func TestTypeWithClearOnEmptyField(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "fresh",
-		"clear":    true,
+		"mode":     "replace",
 	})
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -1746,6 +1746,7 @@ func TestTypeUnicodeCharacters(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "café",
+		"mode":     "replace",
 	})
 
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -1770,6 +1771,7 @@ func TestTypeWithDelayAndClear(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "old",
+		"mode":     "replace",
 	})
 
 	// Type with delay + clear.
@@ -1777,7 +1779,7 @@ func TestTypeWithDelayAndClear(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "new",
-		"clear":    true,
+		"mode":     "replace",
 		"delay":    20,
 	})
 

@@ -80,7 +80,7 @@ type TypeInput struct {
 	SelectorInput
 	Selector string `json:"selector" jsonschema:"CSS selector of the input element"`
 	Text     string `json:"text" jsonschema:"Text to type"`
-	Clear    bool   `json:"clear,omitempty" jsonschema:"Clear the field before typing (default false)"`
+	Mode     string `json:"mode" jsonschema:"How to combine the typed text with the field's existing value: 'replace' clears the field first, 'append' types after the existing value. Required."`
 	Delay    int    `json:"delay,omitempty" jsonschema:"Delay between keystrokes in milliseconds (default 0)"`
 }
 
@@ -219,8 +219,12 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type",
-		Description: "Type text into an element matching a CSS selector.",
+		Description: "Type text into an element matching a CSS selector. 'mode' must be 'replace' (clear the field first — the correct choice for almost every form interaction, since real pages pre-populate fields with placeholders, geocoded defaults, or previous values) or 'append' (type after the existing value — rare; e.g. for contenteditable mid-composition).",
+		InputSchema: modeSchemaFor[TypeInput](TypeModeReplace, TypeModeAppend),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp TypeInput) (*mcp.CallToolResult, struct{}, error) {
+		if err := validateMode(inp.Mode, TypeModeReplace, TypeModeAppend); err != nil {
+			return nil, struct{}{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -230,7 +234,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		defer tcancel()
 
 		var actions chromedp.Tasks
-		if inp.Clear {
+		if inp.Mode == TypeModeReplace {
 			// Use JS to clear the field value. chromedp.Clear only
 			// resets the HTML attribute, not the JS property, which
 			// means typed text may not actually be removed.

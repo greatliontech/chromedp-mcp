@@ -566,6 +566,7 @@ func TestPressEnterSubmitsForm(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#search-input",
 		"text":     "test query",
+		"mode":     "replace",
 	})
 
 	// Press Enter — should trigger form submission.
@@ -778,6 +779,7 @@ func TestGoBackThenInteract(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#type-target",
 		"text":     "after-goback",
+		"mode":     "replace",
 	})
 
 	// Read the value back.
