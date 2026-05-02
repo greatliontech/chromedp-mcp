@@ -17,6 +17,82 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
+// probeClickTarget reads the click-relevant state of an element via JS:
+// disabled (via the :disabled pseudo-class so <fieldset disabled> and
+// <optgroup disabled> propagation are caught — the IDL `el.disabled`
+// property only reflects the element's own attribute), aria-disabled,
+// computed pointer-events, and a visibility heuristic.
+//
+// `document.querySelector` returns the first match — the same first-match
+// semantics chromedp.Click uses via dom.QuerySelector, so the probed node
+// is the same node the dispatch will target unless the DOM mutates
+// between calls.
+//
+// Selector is JSON-quoted via Go's %q (which produces a valid JS string
+// literal too, since JSON ⊂ JS) to avoid string injection.
+func probeClickTarget(ctx context.Context, selector string) (ClickOutput, error) {
+	js := fmt.Sprintf(`(function() {
+		var el = document.querySelector(%q);
+		if (!el) return null;
+		var cs = window.getComputedStyle(el);
+		var rect = el.getBoundingClientRect();
+		return {
+			disabled: el.matches(':disabled'),
+			aria_disabled: el.getAttribute('aria-disabled') === 'true',
+			pointer_events: cs.pointerEvents,
+			visible: cs.display !== 'none' &&
+				cs.visibility !== 'hidden' &&
+				rect.width > 0 && rect.height > 0,
+		};
+	})()`, selector)
+
+	var raw struct {
+		Disabled      bool   `json:"disabled"`
+		AriaDisabled  bool   `json:"aria_disabled"`
+		PointerEvents string `json:"pointer_events"`
+		Visible       bool   `json:"visible"`
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &raw)); err != nil {
+		return ClickOutput{}, fmt.Errorf("probe %q: %w", selector, err)
+	}
+	return ClickOutput{
+		Disabled:      raw.Disabled,
+		AriaDisabled:  raw.AriaDisabled,
+		PointerEvents: raw.PointerEvents,
+		Visible:       raw.Visible,
+	}, nil
+}
+
+// annotateClickWarning attaches a Warning string to the output when the
+// click was dispatched but the target's state suggests the event was
+// likely swallowed (CSS pointer-events:none, hidden element). Disabled
+// and aria-disabled are reported as errors before reaching this point.
+func annotateClickWarning(state *ClickOutput) {
+	switch {
+	case state.PointerEvents == "none":
+		state.Warning = "element has pointer-events: none; the click was dispatched but the browser will not deliver mouse events to it"
+	case !state.Visible:
+		state.Warning = "element is not visible (display:none, visibility:hidden, or zero-size); the click was dispatched but no handler is likely to fire"
+	}
+}
+
+// finalizeClickState re-probes the target after dispatch so visible /
+// pointer_events / disabled flags reflect the post-click state, then
+// attaches the warning. This avoids false-positive warnings from a
+// pre-click probe taken before layout settled — and surfaces post-click
+// state changes (e.g. a button that disabled itself in its handler).
+// If the re-probe fails, fall back to the pre-click state we already
+// have so the caller still gets useful diagnostics.
+func finalizeClickState(ctx context.Context, selector string, pre ClickOutput) ClickOutput {
+	post, err := probeClickTarget(ctx, selector)
+	if err != nil {
+		annotateClickWarning(&pre)
+		return pre
+	}
+	annotateClickWarning(&post)
+	return post
+}
+
 // elementCenter returns the viewport-relative center coordinates of an
 // element identified by its cdp.Node. Uses DOM.getContentQuads which
 // returns viewport-relative quads. Must be called inside a
@@ -73,6 +149,22 @@ type ClickInput struct {
 	Selector   string `json:"selector" jsonschema:"CSS selector of the element to click"`
 	Button     string `json:"button,omitempty" jsonschema:"Mouse button: left (default) right middle"`
 	ClickCount int    `json:"click_count,omitempty" jsonschema:"Number of clicks (default 1 use 2 for double-click)"`
+}
+
+// ClickOutput reports the post-resolution state of the click target so the
+// LLM can detect cases where the click was dispatched but had no observable
+// effect (display:none, pointer-events:none, off-screen). When `disabled`
+// or `aria-disabled="true"` is set, click() returns an error instead of
+// dispatching — see the click handler.
+type ClickOutput struct {
+	Disabled      bool   `json:"disabled"`
+	AriaDisabled  bool   `json:"aria_disabled"`
+	PointerEvents string `json:"pointer_events"`
+	Visible       bool   `json:"visible"`
+	// Warning is non-empty when the click likely had no effect (e.g.
+	// pointer-events:none or visible=false). disabled/aria-disabled
+	// produce errors rather than warnings, so they never appear here.
+	Warning string `json:"warning,omitempty"`
 }
 
 // TypeInput is the input for type.
@@ -149,11 +241,11 @@ type HandleDialogInput struct {
 func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "click",
-		Description: "Click an element by CSS selector.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ClickInput) (*mcp.CallToolResult, struct{}, error) {
+		Description: "Click an element by CSS selector. Returns the post-resolution state of the target (disabled, aria_disabled, pointer_events, visible) plus a warning string when the click likely had no observable effect (e.g. pointer-events:none, hidden). Errors out before dispatching when the target has the 'disabled' attribute or aria-disabled='true', since clicking a disabled element is almost always a bug in the caller's plan.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ClickInput) (*mcp.CallToolResult, ClickOutput, error) {
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ClickOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -161,9 +253,29 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 
+		// Wait for the selector to appear and probe the target's state
+		// before dispatching. The probe covers all click code paths so
+		// the disabled-error and warning-on-no-effect contracts are
+		// uniform across left/right/middle/double clicks.
+		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, ClickOutput{}, selectorError(tctx, inp.Selector, err)
+		}
+		state, err := probeClickTarget(tctx, inp.Selector)
+		if err != nil {
+			return nil, ClickOutput{}, err
+		}
+		if state.Disabled {
+			return nil, state, fmt.Errorf("element %q is disabled; click was not dispatched", inp.Selector)
+		}
+		if state.AriaDisabled {
+			return nil, state, fmt.Errorf("element %q has aria-disabled=\"true\"; click was not dispatched", inp.Selector)
+		}
+
 		if inp.ClickCount == 2 {
-			err := chromedp.Run(sctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery))
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+			if err := chromedp.Run(sctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery)); err != nil {
+				return nil, state, selectorError(tctx, inp.Selector, err)
+			}
+			return nil, finalizeClickState(tctx, inp.Selector, state), nil
 		}
 
 		// For non-standard buttons or click counts, use CDP
@@ -173,7 +285,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			// Wait for visible element.
 			var nodes []*cdp.Node
 			if err := chromedp.Run(sctx, chromedp.Nodes(inp.Selector, &nodes, chromedp.ByQuery, chromedp.NodeVisible)); err != nil {
-				return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+				return nil, state, selectorError(tctx, inp.Selector, err)
 			}
 
 			var button input.MouseButton
@@ -208,13 +320,15 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				}
 				return nil
 			})); err != nil {
-				return nil, struct{}{}, err
+				return nil, state, err
 			}
-			return nil, struct{}{}, nil
+			return nil, finalizeClickState(tctx, inp.Selector, state), nil
 		}
 
-		err = chromedp.Run(sctx, chromedp.Click(inp.Selector, chromedp.ByQuery))
-		return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+		if err := chromedp.Run(sctx, chromedp.Click(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, state, selectorError(tctx, inp.Selector, err)
+		}
+		return nil, finalizeClickState(tctx, inp.Selector, state), nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

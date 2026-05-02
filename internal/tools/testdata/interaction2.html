@@ -20,6 +20,34 @@
     <button id="disabled-btn" disabled>Disabled</button>
     <div id="disabled-output"></div>
 
+    <!-- aria-disabled button (visually disabled but DOM is clickable) -->
+    <button id="aria-disabled-btn" aria-disabled="true">Aria-Disabled</button>
+    <div id="aria-disabled-output"></div>
+
+    <!-- pointer-events:none button (click reaches DOM but events don't deliver) -->
+    <button id="pointer-events-none-btn" style="pointer-events: none;">No Pointer Events</button>
+    <div id="pointer-events-none-output"></div>
+
+    <!-- Hidden button (display:none — element exists but is not rendered) -->
+    <button id="hidden-btn" style="display: none;">Hidden</button>
+    <div id="hidden-output"></div>
+
+    <!-- Invisible-but-laid-out button (visibility:hidden — has a box,
+         click() can dispatch, but the user cannot see or interact with
+         it). Exercises the visible=false warning path that display:none
+         can't reach (display:none times out chromedp's WaitVisible). -->
+    <button id="invisible-btn" style="visibility: hidden;">Invisible</button>
+    <div id="invisible-output"></div>
+
+    <!-- Input nested inside <fieldset disabled> — the input itself has
+         no `disabled` attribute, but per HTML spec it inherits the
+         disabled state from the fieldset and matches :disabled. The
+         pre-click probe must catch this. -->
+    <fieldset disabled>
+        <input id="fieldset-input" type="text" value="">
+    </fieldset>
+    <div id="fieldset-input-output"></div>
+
     <!-- Link that navigates -->
     <a id="nav-link" href="/page2.html">Go to Page 2</a>
 
@@ -96,6 +124,34 @@
         // Disabled button click listener (should NOT fire due to disabled attribute).
         document.getElementById('disabled-btn').addEventListener('click', function() {
             document.getElementById('disabled-output').textContent = 'clicked-disabled';
+        });
+
+        // aria-disabled button click listener (this DOES fire — aria-disabled is
+        // an accessibility hint, not a behavioural block, which is precisely
+        // why click() must reject it pre-dispatch).
+        document.getElementById('aria-disabled-btn').addEventListener('click', function() {
+            document.getElementById('aria-disabled-output').textContent = 'clicked-aria-disabled';
+        });
+
+        // pointer-events:none button — click() will dispatch but the browser
+        // won't deliver the event to this element, so the handler never fires.
+        document.getElementById('pointer-events-none-btn').addEventListener('click', function() {
+            document.getElementById('pointer-events-none-output').textContent = 'clicked-pointer-events-none';
+        });
+
+        // Hidden button — same shape as pointer-events:none from the LLM's POV.
+        document.getElementById('hidden-btn').addEventListener('click', function() {
+            document.getElementById('hidden-output').textContent = 'clicked-hidden';
+        });
+
+        // visibility:hidden button — has a box, click() can dispatch.
+        document.getElementById('invisible-btn').addEventListener('click', function() {
+            document.getElementById('invisible-output').textContent = 'clicked-invisible';
+        });
+
+        // Fieldset-disabled input click handler.
+        document.getElementById('fieldset-input').addEventListener('click', function() {
+            document.getElementById('fieldset-input-output').textContent = 'clicked-fieldset-input';
         });
 
         // Select change tracking.

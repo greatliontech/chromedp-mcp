@@ -65,27 +65,32 @@ func TestTypeEmptyText(t *testing.T) {
 }
 
 // ===========================================================================
-// Interaction: click on disabled button (chromedp still clicks, but event
-// should NOT fire per browser spec)
+// Interaction: clicking a disabled button errors before dispatch and the
+// click event does not fire on the page.
 // ===========================================================================
 
 func TestClickDisabledButton(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tabID)
 
-	// Click disabled button — chromedp will click but browser should block the event.
-	callTool[struct{}](t, "click", map[string]any{
+	// Click on a disabled button must error rather than silently
+	// dispatching into the void — that was the bug surfaced by issue 005.
+	errText := callToolExpectErr(t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#disabled-btn",
 	})
+	if !strings.Contains(errText, "disabled") {
+		t.Errorf("click on disabled button: error %q should mention 'disabled'", errText)
+	}
 
+	// And the page-side handler must not have fired (defense against an
+	// implementation that errored after dispatching).
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('disabled-output').textContent",
 	})
-	// The click event should NOT have fired on a disabled button.
 	if strings.Contains(string(out.Result), "clicked-disabled") {
-		t.Error("click event should not fire on disabled button")
+		t.Error("click event fired despite the pre-click error")
 	}
 }
 

@@ -423,7 +423,9 @@ Returns: the evaluation result as JSON, or an error description if the evaluatio
 
 #### `click`
 
-Click an element.
+Click an element. Probes the target's interactive state before dispatching:
+- Errors out (no click is sent) when the element has the `disabled` attribute or `aria-disabled="true"`. Both are almost always a bug in the caller's plan.
+- Returns the post-resolution state plus an optional warning when the click was dispatched but likely had no effect (`pointer-events: none`, hidden, zero-size).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -431,6 +433,8 @@ Click an element.
 | `selector` | string | yes | CSS selector of the element to click |
 | `button` | string | no | Mouse button: `"left"` (default), `"right"`, `"middle"` |
 | `click_count` | int | no | Number of clicks (default 1, use 2 for double-click) |
+
+Returns: `{disabled, aria_disabled, pointer_events, visible, warning}`. `warning` is empty on a clean click and non-empty when the dispatch likely had no effect.
 
 #### `type`
 
