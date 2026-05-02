@@ -216,6 +216,21 @@ Wait for a condition to be met.
 
 Exactly one of `selector` or `expression` must be provided.
 
+The expression is wrapped in `Promise.resolve(EXPR).then(Boolean)`
+server-side before polling. This means:
+
+- A predicate whose terminal value is a non-primitive (e.g. an
+  optional-chained DOM query that returns an element or DOMRect) is
+  coerced to truthy/falsy rather than failing with CDP's "Object
+  reference chain is too long".
+- A predicate that evaluates to a Promise (`fetch(...).then(...)`,
+  `(async () => ...)()`) is awaited; the resolved value drives
+  termination. A bare `Boolean(somePromise)` would always be truthy
+  without awaiting — `Promise.resolve(...).then(Boolean)` defends
+  against that.
+- A trailing line comment in the expression (`// note`) doesn't break
+  the wrap because `EXPR` is sandwiched between newlines.
+
 ### Visual Feedback
 
 #### `screenshot`

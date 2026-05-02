@@ -245,8 +245,28 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		if input.Selector != "" {
 			err = chromedp.Run(tctx, chromedp.WaitVisible(input.Selector, chromedp.ByQuery))
 		} else {
+			// Coerce the predicate to a Promise<boolean> before sending
+			// to CDP. Without this, expressions that evaluate to a
+			// non-primitive (e.g. an optional-chained DOM query whose
+			// intermediate returns a complex object) fail with CDP
+			// error "Object reference chain is too long" because Poll
+			// tries to serialize the result via returnByValue.
+			//
+			// The wrap is `Promise.resolve(EXPR).then(Boolean)`, not a
+			// bare `Boolean(EXPR)`, because chromedp.Poll's predicate
+			// JS does `await predicate(...)` — a bare `Boolean(somePromise)`
+			// returns true synchronously without awaiting the Promise,
+			// silently breaking async predicates like
+			// `fetch('/x').then(r => r.ok)`. `Promise.resolve` is
+			// idempotent on Promises and lifts plain values, so both
+			// sync and async expressions are handled uniformly.
+			//
+			// EXPR is wrapped between newlines so a trailing line
+			// comment in the user's expression doesn't swallow the
+			// closing `).then(Boolean)`.
+			coerced := "Promise.resolve(\n" + input.Expression + "\n).then(Boolean)"
 			var result interface{}
-			err = chromedp.Run(tctx, chromedp.Poll(input.Expression, &result))
+			err = chromedp.Run(tctx, chromedp.Poll(coerced, &result))
 		}
 		if err != nil {
 			return nil, struct{}{}, err
