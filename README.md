@@ -244,6 +244,49 @@ For full parameter documentation, see [docs/design.md](docs/design.md).
 - **Background event collectors.** Console logs, JS errors, network requests, and performance data are captured automatically per tab in ring buffers, available on demand via drain (read + clear) or peek (read only) modes.
 - **MCP request cancellation.** All tool handlers respect client disconnection — if the MCP client drops the connection, in-flight CDP operations terminate immediately.
 
+## Security
+
+This MCP gives the connected LLM a real Chrome session — including its
+cookies, `Authorization` headers, `localStorage`, and any logged-in
+state. Tools return that data verbatim. There is no built-in redaction.
+Plan deployments accordingly.
+
+**Threat model.** Anything the browser session can see, the LLM can see,
+and anything the LLM sees can land in:
+
+- the conversation transcript (typically stored by the MCP host),
+- spilled tool-result files written to disk by the host when responses
+  exceed token budgets (e.g.
+  `~/.claude/projects/.../tool-results/*.txt`),
+- any host-side telemetry or logging the operator has enabled.
+
+Concretely:
+
+- `get_cookies` returns cookie values verbatim.
+- `get_network_requests` returns request and response headers verbatim,
+  including `Authorization` and `Cookie`.
+- `get_response_body` and `get_request_body` return raw payloads, which
+  routinely contain bearer tokens and refresh tokens.
+- `set_extra_headers` accepts auth tokens that are then sent on every
+  request from the tab.
+
+**Recommended deployment.**
+
+- Use a dedicated Chrome user data directory for MCP-driven sessions.
+  Don't point `--user-data-dir` (or the default profile path) at the
+  same profile you use for personal browsing.
+- Don't allowlist (`--allowed-profiles`) profiles that are signed into
+  high-value accounts (banking, primary email, password managers).
+- Treat the MCP host's transcript and any spill files as containing
+  whatever credentials the browser session held during the conversation.
+- For workflows that must touch a logged-in production account, prefer
+  short-lived test credentials over your own session cookies.
+
+If your deployment can't accept this posture (e.g. multi-tenant LLM
+service, untrusted operator), don't run chromedp-mcp against a
+sensitive browser session — the tool surface is not designed to
+sanitize output.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
