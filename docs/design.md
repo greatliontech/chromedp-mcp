@@ -364,6 +364,7 @@ Get captured network requests.
 | `status_max` | int | no | Filter by maximum HTTP status code |
 | `url_pattern` | string | no | Filter by URL substring match |
 | `failed_only` | bool | no | Return only failed requests (default `false`) |
+| `fields` | []string | no | Project each entry to this set of JSON keys (e.g. `["id","method","url","status"]`). When omitted or empty, every field is returned. Useful to keep responses tiny when listing many entries. Unknown field names produce an error. |
 
 Returns: array of request objects with `{id, url, method, status, type, timing, request_headers, response_headers, size, error, failed, start_time, end_time, has_request_body, request_body, request_body_base64, request_body_truncated, frames_sent_count, frames_received_count}`. The frame counts are present only on WebSocket entries; the request-body fields are present only on entries that carried a request body.
 
@@ -375,8 +376,10 @@ Get the response body of a specific network request.
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `request_id` | string | yes | The request ID from `get_network_requests` |
+| `range_start` | int | no | Inclusive byte offset to start from (default 0). Negative is treated as 0. |
+| `range_end` | int | no | Exclusive byte offset to stop at (default 0 = end of body). Past-the-end is clamped. |
 
-Returns: the response body as text, or base64 for binary responses.
+Returns: `{body, base64_encoded, total_bytes, truncated}`. `total_bytes` is the full body size so the caller can plan paging; `truncated` is true when the returned body is a strict subset of the full body.
 
 #### `get_request_body`
 
@@ -386,8 +389,10 @@ Get the full POST/PUT/PATCH/DELETE request body of a specific request. Use when 
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `request_id` | string | yes | The request ID from `get_network_requests` |
+| `range_start` | int | no | Inclusive byte offset to start from (default 0). |
+| `range_end` | int | no | Exclusive byte offset to stop at (default 0 = end of body). |
 
-Returns: the request body as text, or base64 for binary bodies.
+Returns: `{body, base64_encoded, total_bytes, truncated}`.
 
 #### `get_websocket_frames`
 
@@ -416,6 +421,9 @@ Execute JavaScript in the page context. When a selector is provided, the first m
 | `selector` | string | no | CSS selector. If provided, the first matched element is available as `el` in the expression. |
 | `timeout` | int | no | Max time in milliseconds to wait for selector (default 5000). Only used when `selector` is set. |
 | `await_promise` | bool | no | If the expression returns a Promise, wait for it to resolve (default `true`) |
+| `max_result_bytes` | int | no | Cap the serialized result at this many bytes. When the JSON encoding exceeds the cap, `result` is replaced with the truncated prefix as a JSON string and `truncated`/`total_bytes` describe the cut. Default 0 (no cap). |
+
+Returns: `{result, truncated, total_bytes}`. `result` is the JSON-encoded value the expression produced, or — when truncated — a JSON string of the truncated prefix.
 
 Returns: the evaluation result as JSON, or an error description if the evaluation threw.
 
