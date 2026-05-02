@@ -209,6 +209,49 @@ func TestAddScriptEvaluateNowAwaitsPromiseRejection(t *testing.T) {
 	})
 }
 
+// TestAddScriptParseErrorRejectsEarly verifies a syntactically invalid
+// script is rejected before the new-document registration is committed.
+// Without the up-front compileScript check, the registration would be
+// silently created and every subsequent navigation would throw — the
+// LLM would see a clean identifier and (for evaluate_now=true) a
+// runtime warning that misrepresents the future-doc behaviour.
+func TestAddScriptParseErrorRejectsEarly(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Unclosed string literal — guaranteed parse error in V8.
+	for _, evalNow := range []bool{false, true} {
+		errText := callToolExpectErr(t, "add_script", map[string]any{
+			"tab":          tabID,
+			"source":       "var x = 'unterminated;",
+			"evaluate_now": evalNow,
+		})
+		if !strings.Contains(strings.ToLower(errText), "parse") &&
+			!strings.Contains(errText, "SyntaxError") {
+			t.Errorf("evaluate_now=%v: error %q should mention 'parse' or 'SyntaxError'", evalNow, errText)
+		}
+	}
+
+	// And no orphan registration was created — if a future navigation
+	// fires no script, this assertion holds (any throw on the new doc
+	// would be visible via window.onerror or console). We rely on the
+	// up-front compileScript check; if a regression skipped the check
+	// the registration would exist and surface as a JS error post-nav.
+	callTool[struct{}](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("page2.html"),
+	})
+	logs := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+		"tab":  tabID,
+		"mode": "drain",
+	})
+	for _, e := range logs.Errors {
+		if strings.Contains(e.Message, "unterminated") || strings.Contains(e.Message, "SyntaxError") {
+			t.Errorf("orphan registration ran on new doc: %s", e.Message)
+		}
+	}
+}
+
 // TestAddScriptMissingEvaluateNow verifies the schema rejects calls that
 // omit the required evaluate_now field. Established by issues 003/004 as
 // the boundary contract for required parameters.

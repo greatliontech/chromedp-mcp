@@ -8,6 +8,7 @@ import (
 	"github.com/chromedp/cdproto/emulation"
 	cdpnetwork "github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/security"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -93,6 +94,26 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
+
+		// Validate the script parses before doing anything observable.
+		// addScriptToEvaluateOnNewDocument doesn't reject syntactically
+		// invalid sources at registration — it just throws on every
+		// future navigation. Running compileScript first catches parse
+		// errors up-front so we never commit a registration that's
+		// guaranteed to fail forever, and so the LLM gets a clean error
+		// rather than a misleading "registration committed" warning.
+		var compileExc *runtime.ExceptionDetails
+		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+			_, exc, err := runtime.CompileScript(input.Source, "add_script", false).Do(ctx)
+			compileExc = exc
+			return err
+		})); err != nil {
+			return nil, AddScriptOutput{}, fmt.Errorf("compile script: %w", err)
+		}
+		if compileExc != nil {
+			return nil, AddScriptOutput{}, fmt.Errorf("script does not parse: %s", compileExc.Error())
+		}
+
 		// Register on new documents first. If this fails the registration
 		// is not committed and there's nothing to roll back, so we surface
 		// the error directly.
