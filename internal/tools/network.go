@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -387,11 +386,10 @@ func projectEntries(entries []collector.NetworkEntry, fields []string) ([]map[st
 	for _, f := range fields {
 		allowed[f] = struct{}{}
 	}
-	knownFields := networkEntryFieldSet()
 	for f := range allowed {
-		if _, ok := knownFields[f]; !ok {
+		if _, ok := networkEntryFieldSet[f]; !ok {
 			return nil, fmt.Errorf("unknown field %q in fields list; available: %v",
-				f, sortedKeys(knownFields))
+				f, sortedKeys(networkEntryFieldSet))
 		}
 	}
 
@@ -415,14 +413,17 @@ func projectEntries(entries []collector.NetworkEntry, fields []string) ([]map[st
 	return out, nil
 }
 
-// networkEntryFieldSet returns the set of JSON keys producible by a
+// networkEntryFieldSet is the set of JSON keys producible by a
 // NetworkEntry's serialization, used to validate caller-supplied field
-// names. Computed once at first call from a probe entry whose every
-// field is set to a non-zero value so omitempty doesn't drop keys from
-// the set, then cached. The probe is pure and deterministic — recomputing
-// per request is wasted work in a path explicitly designed to handle
-// many entries cheaply.
-var networkEntryFieldSet = sync.OnceValue(func() map[string]struct{} {
+// names. Computed eagerly at package init from a probe entry whose
+// every field is set to a non-zero value so omitempty doesn't drop
+// keys from the set. Eager (rather than lazy via sync.OnceValue) so a
+// future struct change introducing an unmarshalable type fails the
+// server at startup rather than mid-LLM-session — a successful binary
+// startup proves the probe serializes cleanly.
+var networkEntryFieldSet = buildNetworkEntryFieldSet()
+
+func buildNetworkEntryFieldSet() map[string]struct{} {
 	one := int64(1)
 	probe := collector.NetworkEntry{
 		ID:                   "x",
@@ -448,19 +449,20 @@ var networkEntryFieldSet = sync.OnceValue(func() map[string]struct{} {
 	blob, err := json.Marshal(probe)
 	if err != nil {
 		// json.Marshal of a struct with no funky types is infallible;
-		// if this ever fires it's a programmer error worth crashing on.
-		panic(fmt.Sprintf("networkEntryFieldSet: probe marshal: %v", err))
+		// if this ever fires it's a programmer error and crashing at
+		// init() is exactly the signal we want.
+		panic(fmt.Sprintf("buildNetworkEntryFieldSet: probe marshal: %v", err))
 	}
 	var m map[string]any
 	if err := json.Unmarshal(blob, &m); err != nil {
-		panic(fmt.Sprintf("networkEntryFieldSet: probe unmarshal: %v", err))
+		panic(fmt.Sprintf("buildNetworkEntryFieldSet: probe unmarshal: %v", err))
 	}
 	out := make(map[string]struct{}, len(m))
 	for k := range m {
 		out[k] = struct{}{}
 	}
 	return out
-})
+}
 
 // sortedKeys returns the keys of a set in stable order for predictable
 // error messages.
