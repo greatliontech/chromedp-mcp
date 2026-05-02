@@ -6,18 +6,39 @@ import (
 )
 
 // TestAddAndRemoveScript verifies that add_script injects JS that runs on
-// subsequent navigations and remove_script stops it.
+// subsequent navigations and remove_script stops it. evaluate_now=false
+// is the canonical "future loads only" mode.
 func TestAddAndRemoveScript(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	// Add a script that sets a global variable.
+	// Add a script that sets a global variable. evaluate_now=false so we
+	// can verify the new-document registration works in isolation —
+	// before navigation, the variable should be unset; after, set.
 	out := callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab":    tabID,
-		"source": "window.__injected = 'hello from injected script';",
+		"tab":          tabID,
+		"source":       "window.__injected = 'hello from injected script';",
+		"evaluate_now": false,
 	})
 	if out.Identifier == "" {
 		t.Fatal("expected non-empty script identifier")
+	}
+	if out.Warning != "" {
+		t.Errorf("Warning = %q, want empty for evaluate_now=false", out.Warning)
+	}
+
+	// Pre-navigation: window.__injected must not exist on the current
+	// document. Confirms evaluate_now=false really did skip the
+	// current-doc evaluation.
+	type evalResult struct {
+		Result string `json:"result"`
+	}
+	pre := callTool[evalResult](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.__injected || 'not set'",
+	})
+	if pre.Result != "not set" {
+		t.Fatalf("evaluate_now=false should not run on current doc; got %q", pre.Result)
 	}
 
 	// Navigate to trigger the script.
@@ -27,9 +48,6 @@ func TestAddAndRemoveScript(t *testing.T) {
 	})
 
 	// Check the injected variable exists.
-	type evalResult struct {
-		Result string `json:"result"`
-	}
 	result := callTool[evalResult](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.__injected || 'not set'",
@@ -56,6 +74,154 @@ func TestAddAndRemoveScript(t *testing.T) {
 	})
 	if result.Result != "not set" {
 		t.Fatalf("expected script removed, but got %q", result.Result)
+	}
+}
+
+// TestAddScriptEvaluateNowRunsOnCurrentDoc verifies evaluate_now=true
+// executes the script once on the document already loaded in the tab —
+// the original issue 006 footgun (registration happens but current doc
+// is left alone) must be gone.
+func TestAddScriptEvaluateNowRunsOnCurrentDoc(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[AddScriptOutput](t, "add_script", map[string]any{
+		"tab":          tabID,
+		"source":       "window.__pingedAt = Date.now();",
+		"evaluate_now": true,
+	})
+	if out.Identifier == "" {
+		t.Fatal("expected non-empty script identifier")
+	}
+	if out.Warning != "" {
+		t.Errorf("Warning = %q, want empty for clean evaluate_now success", out.Warning)
+	}
+
+	// Without navigating, the current document should now have the
+	// global variable.
+	type evalResult struct {
+		Result string `json:"result"`
+	}
+	res := callTool[evalResult](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "typeof window.__pingedAt === 'number' ? 'set' : 'not set'",
+	})
+	if res.Result != "set" {
+		t.Errorf("evaluate_now=true should run on current doc; got %q", res.Result)
+	}
+
+	// Cleanup so subsequent tests aren't affected by the registration.
+	callTool[struct{}](t, "remove_script", map[string]any{
+		"tab":        tabID,
+		"identifier": out.Identifier,
+	})
+}
+
+// TestAddScriptEvaluateNowFailureKeepsRegistration verifies that a
+// runtime error in the current-document evaluation does not roll back
+// the new-document registration. The script throws on the current page
+// (where document.title differs from what it expects) but completes
+// cleanly on the navigation target. After navigating, the global it
+// sets must be present — proving the registration survived the
+// current-doc failure.
+func TestAddScriptEvaluateNowFailureKeepsRegistration(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Script throws on any document whose pathname doesn't contain
+	// "page2". location.pathname is set to the navigation target before
+	// the registered script runs (unlike document.title, which is only
+	// populated once HTML parsing reaches the <title> element). On the
+	// current document (index.html, pathname="/"), throws → warning.
+	// On Page 2 (after navigation), the registration runs the script
+	// against pathname="/page2.html" and the global is set cleanly.
+	src := `
+		if (location.pathname.indexOf('page2') === -1) {
+			throw new Error('not page2: ' + location.pathname);
+		}
+		window.__landedOnPage2 = true;
+	`
+	out := callTool[AddScriptOutput](t, "add_script", map[string]any{
+		"tab":          tabID,
+		"source":       src,
+		"evaluate_now": true,
+	})
+	if out.Identifier == "" {
+		t.Fatal("registration should not be rolled back on current-doc eval failure")
+	}
+	if out.Warning == "" {
+		t.Error("Warning must be set when current-doc evaluation fails")
+	}
+
+	// Navigate to Page 2. The new-doc registration must fire there; the
+	// script's gate condition is now satisfied so the global is set.
+	callTool[struct{}](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": fixtureURL("page2.html"),
+	})
+
+	type evalResult struct {
+		Result string `json:"result"`
+	}
+	res := callTool[evalResult](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.__landedOnPage2 === true ? 'set' : 'not set'",
+	})
+	if res.Result != "set" {
+		t.Errorf("after navigation, registration should have run on Page 2; got %q", res.Result)
+	}
+
+	callTool[struct{}](t, "remove_script", map[string]any{
+		"tab":        tabID,
+		"identifier": out.Identifier,
+	})
+}
+
+// TestAddScriptEvaluateNowAwaitsPromiseRejection verifies that an async
+// failure (rejected Promise) in the current-document script body is
+// surfaced as a warning, not silently swallowed. Without WithAwaitPromise,
+// Runtime.evaluate would return the Promise object unevaluated and
+// chromedp would report no error.
+func TestAddScriptEvaluateNowAwaitsPromiseRejection(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// IIFE returning a Promise.reject. Without awaitPromise, chromedp
+	// sees this as a successful evaluation that produced a Promise.
+	out := callTool[AddScriptOutput](t, "add_script", map[string]any{
+		"tab":          tabID,
+		"source":       "(async () => { throw new Error('async-failure'); })()",
+		"evaluate_now": true,
+	})
+	if out.Identifier == "" {
+		t.Fatal("registration should not be rolled back on async failure")
+	}
+	if out.Warning == "" {
+		t.Fatal("async Promise rejection in current-doc script must surface as a warning")
+	}
+	if !strings.Contains(out.Warning, "async-failure") {
+		t.Errorf("Warning %q should reference the rejection message", out.Warning)
+	}
+
+	callTool[struct{}](t, "remove_script", map[string]any{
+		"tab":        tabID,
+		"identifier": out.Identifier,
+	})
+}
+
+// TestAddScriptMissingEvaluateNow verifies the schema rejects calls that
+// omit the required evaluate_now field. Established by issues 003/004 as
+// the boundary contract for required parameters.
+func TestAddScriptMissingEvaluateNow(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "add_script", map[string]any{
+		"tab":    tabID,
+		"source": "window.__noop = 1;",
+	})
+	if !strings.Contains(errText, "evaluate_now") {
+		t.Errorf("error %q should reference 'evaluate_now'", errText)
 	}
 }
 

@@ -679,8 +679,9 @@ Inject JavaScript to run on every new document before any page scripts. Useful f
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `source` | string | yes | JavaScript source code to evaluate on every new document |
+| `evaluate_now` | bool | **yes** | If `true`, also runs the script once on the currently loaded document. If `false`, only future navigations install it. Use `evaluate` for one-shot execution on the current document only. |
 
-Returns: `identifier` (string) for use with `remove_script`.
+Returns: `{identifier, warning}`. `identifier` removes the new-document registration via `remove_script`; current-document side effects from `evaluate_now=true` cannot be undone via `remove_script`. `warning` is non-empty when `evaluate_now=true` was requested but the current-document evaluation failed (the new-document registration stays committed).
 
 #### `remove_script`
 

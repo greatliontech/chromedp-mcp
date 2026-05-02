@@ -19,11 +19,23 @@ import (
 type AddScriptInput struct {
 	TabInput
 	Source string `json:"source" jsonschema:"JavaScript source code to evaluate on every new document."`
+	// EvaluateNow controls whether the script also runs once on the
+	// document currently loaded in the tab. Required so the LLM declares
+	// intent — silently defaulting either way creates real footguns:
+	// false misses the common 'instrument now and future' case and
+	// caused issue 006; true would silently double-execute side-effecting
+	// scripts (window.fetch wrappers etc.) on the current page.
+	EvaluateNow bool `json:"evaluate_now" jsonschema:"If true, also evaluate the script once on the currently loaded document via Runtime.evaluate. The returned identifier removes only the new-document registration; current-document side effects cannot be undone via remove_script. Required."`
 }
 
-// AddScriptOutput is the output for add_script.
+// AddScriptOutput is the output for add_script. The identifier always
+// refers to the new-document registration (Page.addScriptToEvaluateOnNewDocument).
+// Warning is non-empty when evaluate_now=true was requested but the
+// current-document evaluation failed — the new-document registration
+// stays committed so subsequent loads still install the script.
 type AddScriptOutput struct {
 	Identifier string `json:"identifier"`
+	Warning    string `json:"warning,omitempty"`
 }
 
 // RemoveScriptInput is the input for remove_script.
@@ -68,10 +80,11 @@ type SetIgnoreCertErrorsInput struct {
 func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "add_script",
-		Description: "Inject JavaScript to run on every new document before any page scripts. Useful for test fixtures, polyfills, disabling animations, or intercepting APIs. Returns an identifier for removal.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Description: "Inject JavaScript to run on every new document before any page scripts. Useful for test fixtures, polyfills, disabling animations, or intercepting APIs. The 'evaluate_now' parameter controls whether the script also runs once on the currently loaded document — set true for the common 'instrument now and future loads' case, false to register only for future navigations. Use the 'evaluate' tool if you only want one-shot execution on the current document. Caveat for evaluate_now=true: scripts that wrap globals (window.fetch, XMLHttpRequest.prototype.send, console.log) will run once on top of any existing wrapper and again on every future navigation; guard side-effecting code with `if (window.__myInstalled) return; window.__myInstalled = true;` to keep installation idempotent.",
+		// IdempotentHint is intentionally omitted: with evaluate_now=true,
+		// successive calls produce additive current-document side effects.
+		// Returning the original identifier-only contract as idempotent
+		// would be misleading.
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input AddScriptInput) (*mcp.CallToolResult, AddScriptOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -80,6 +93,16 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
+		// Register on new documents first. If this fails the registration
+		// is not committed and there's nothing to roll back, so we surface
+		// the error directly.
+		//
+		// Note: between this Run and the evaluate_now Run below the page
+		// can navigate. If it does, the new-document registration fires
+		// on the navigation and the subsequent Runtime.evaluate then
+		// re-runs the script on the post-navigation document, producing
+		// a double-run. Rare; flagged here so future readers know the
+		// pair is not atomic.
 		var identifier page.ScriptIdentifier
 		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			var e error
@@ -89,7 +112,25 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, AddScriptOutput{}, err
 		}
-		return nil, AddScriptOutput{Identifier: string(identifier)}, nil
+
+		out := AddScriptOutput{Identifier: string(identifier)}
+		if !input.EvaluateNow {
+			return nil, out, nil
+		}
+
+		// Run the script once on the currently loaded document. Wait for
+		// any returned Promise so async failures (Promise.reject, async
+		// functions that throw) surface as eval errors rather than
+		// silently "succeeding" with an unawaited rejected promise.
+		// If this fails, keep the new-document registration committed
+		// and surface a warning so the LLM knows the current-doc side of
+		// the request didn't take.
+		evalErr := chromedp.Run(tctx, chromedp.Evaluate(input.Source, nil, evalAwaitPromise))
+		if evalErr != nil {
+			out.Warning = fmt.Sprintf("evaluate_now=true: current-document evaluation failed: %v. The new-document registration (identifier %s) is still active; remove with remove_script if not wanted.",
+				evalErr, identifier)
+		}
+		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
