@@ -444,6 +444,8 @@ Returns: the evaluation result as JSON, or an error description if the evaluatio
 
 ### Interaction
 
+The nine action tools in this section — `click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files` — accept an optional `observe_window_ms` parameter (`handle_dialog` does not). When it is greater than zero, the tool observes browser activity across the action and returns the counts in an `observed` object on its result. See [Observation](#observation) for the semantics of that object and why observation is inline rather than a standalone tool.
+
 #### `click`
 
 Click an element. Probes the target's interactive state before dispatching:
@@ -456,8 +458,11 @@ Click an element. Probes the target's interactive state before dispatching:
 | `selector` | string | yes | CSS selector of the element to click |
 | `button` | string | no | Mouse button: `"left"` (default), `"right"`, `"middle"` |
 | `click_count` | int | no | Number of clicks (default 1, use 2 for double-click) |
+| `observe_window_ms` | int | no | Observe activity for this many ms after dispatch (default 0 = no observation) |
 
-Returns: `{disabled, aria_disabled, pointer_events, visible, warning}`. `warning` is empty on a clean click and non-empty when the dispatch likely had no effect.
+Returns: `{disabled, aria_disabled, pointer_events, visible, warning, observed}`. `warning` is empty on a clean click and non-empty when the dispatch likely had no effect. `observed` is present only when `observe_window_ms > 0`.
+
+The `warning` and `observed` fields answer different questions and are complementary: `warning` is a *pre-dispatch* prediction from the element's computed state ("this click probably won't do anything"), while `observed` is a *post-dispatch* measurement ("this click in fact did/didn't do anything"). A click can warn and still have an effect, or look clean and silently no-op.
 
 #### `type`
 
@@ -470,6 +475,9 @@ Type text into an element matching a selector.
 | `text` | string | yes | Text to type |
 | `mode` | string | **yes** | `"replace"` (clear field first, common case) or `"append"` (type after existing value, e.g. contenteditable mid-composition) |
 | `delay` | int | no | Delay between keystrokes in milliseconds (default 0) |
+| `observe_window_ms` | int | no | Observe activity for this many ms after typing (default 0). Catches autocomplete/typeahead requests. |
+
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
 #### `select_option`
 
@@ -482,17 +490,25 @@ Select an option from a `<select>` element.
 | `value` | string | no | Option value to select |
 | `label` | string | no | Option visible text to select |
 | `index` | int | no | Option index to select |
+| `observe_window_ms` | int | no | Observe activity for this many ms after the `change` event fires (default 0). Catches cascading dropdown loads. |
 
 Exactly one of `value`, `label`, or `index` must be provided. For `<select multiple>` elements, each call adds to the selection (does not deselect existing options).
 
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
+
 #### `submit_form`
 
-Submit a form.
+Submit a form. Uses `requestSubmit()`, so the `submit` event fires and JS handlers can intercept it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `selector` | string | yes | CSS selector of the form or an element within the form |
+| `observe_window_ms` | int | no | Observe activity for this many ms after submit (default 0) |
+
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
+
+Observation is worth more here than on any other action. A form whose submit handler short-circuits — HTML5 constraint validation, a JS validation guard, a framework interceptor — fires the event and returns cleanly, so the tool reports success while nothing happened. `observed.has_any_effect = false` is the only signal that distinguishes a landed submit from a swallowed one.
 
 #### `scroll`
 
@@ -504,8 +520,11 @@ Scroll the page or an element.
 | `selector` | string | no | CSS selector to scroll into view. If omitted, scrolls the page. |
 | `x` | int | no | Horizontal scroll offset in pixels (when `selector` is omitted) |
 | `y` | int | no | Vertical scroll offset in pixels (when `selector` is omitted) |
+| `observe_window_ms` | int | no | Observe activity for this many ms after scrolling (default 0). Catches lazy-load and infinite-scroll fetches. |
 
 If `selector` is provided, scrolls the element into view. If omitted, scrolls the page by the specified offsets.
+
+Returns: `{scroll_x, scroll_y, observed}`. `observed` is present only when `observe_window_ms > 0`.
 
 #### `hover`
 
@@ -515,6 +534,9 @@ Hover over an element. Moves the CDP mouse cursor to the element's center, which
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `selector` | string | yes | CSS selector of the element to hover over |
+| `observe_window_ms` | int | no | Observe activity for this many ms after the hover (default 0). Catches tooltip/menu reveals. |
+
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
 #### `focus`
 
@@ -524,6 +546,9 @@ Focus an element.
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `selector` | string | yes | CSS selector of the element to focus |
+| `observe_window_ms` | int | no | Observe activity for this many ms after focusing (default 0). Catches validation reveal and autofill. |
+
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
 #### `press_key`
 
@@ -534,6 +559,9 @@ Press a keyboard key.
 | `tab` | string | no | Tab ID |
 | `key` | string | yes | Key to press (e.g., `"Enter"`, `"Tab"`, `"Escape"`, `"ArrowDown"`) |
 | `modifiers` | []string | no | Modifier keys: `"ctrl"`, `"shift"`, `"alt"`, `"meta"` |
+| `observe_window_ms` | int | no | Observe activity for this many ms after the key event (default 0). Catches Enter-submit, Escape-dismiss, arrow navigation. |
+
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
 #### `upload_files`
 
@@ -544,6 +572,9 @@ Set files on a file input element.
 | `tab` | string | no | Tab ID |
 | `selector` | string | yes | CSS selector of the file input element |
 | `paths` | []string | yes | Absolute file paths to set |
+| `observe_window_ms` | int | no | Observe activity for this many ms after `input.files` changes (default 0). Catches the upload XHR an `onchange` handler typically fires. |
+
+Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
 #### `handle_dialog`
 
@@ -841,23 +872,57 @@ Block URLs matching patterns. Supports `*` wildcards.
 
 ### Observation
 
-#### `observe_activity`
+Observation detects a **silent no-op**: an action that dispatches cleanly and reports success while the page does nothing. A click lands on a live element whose handler early-returns; a form submit is swallowed by a validation guard. The tool result looks identical in both cases, so without observation the caller can only find out by polling afterwards and guessing.
 
-Measure observable browser activity in a time window: how many network requests, DOM mutations (childList only), console messages, and JS errors occurred, and whether the top-frame URL changed. Useful after dispatching an action (click, type, submit_form, etc.) to detect a silent no-op — `has_any_effect=false` with all counts at zero is a strong signal that the action did nothing observable.
+Observation is **not a standalone tool**. It is an `observe_window_ms` parameter on each action tool in [Interaction](#interaction), measured inline inside that tool's handler. This is the load-bearing design decision, and it is forced by latency: an LLM-driven caller has 1–10 seconds of dead time between consecutive tool calls (model thinking, token streaming, MCP transit). A separate `observe` call therefore always arrives *after* the interesting window has closed, and no amount of lookback tuning fixes it — the caller cannot know how long its own turnaround took. Observing inline sidesteps the problem: the handler timestamps the window immediately before it dispatches, so there is no gap to compensate for.
 
-Always waits the full `wait_ms`; does not return early on first activity. Use `wait_for` for predicate-style "block until X is true" semantics.
+#### Window boundaries
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `wait_ms` | int | **yes** | How many milliseconds to observe forward from the call |
-| `since_ms` | int | no | Lookback in milliseconds (default 50). Catches fast events that fired before observe_activity ran (cached XHRs, sync handlers). Set to a larger value (e.g. 500) when called after a slow tool whose dispatch took longer than the default. |
+The window **opens after the tool has waited for its target element, immediately before the dispatch**, and closes `observe_window_ms` after the dispatch returns. The two halves of that sentence are both load-bearing:
 
-Returns: `{window_ms, network_requests, dom_mutations, url_changed, console_messages, js_errors, has_any_effect}`.
+- **After the element wait.** Every selector-based action waits for its target to exist (bounded by `timeout`, 5s by default). That wait must stay *outside* the window. A page that is still bootstrapping fires requests while the element materializes, and counting them would attribute activity to an action that had not been dispatched yet — a false positive on the one signal the feature exists to provide, on precisely the slow, async pages it is for.
+- **Before the dispatch.** Synchronous handler effects and microtasks fire during the dispatch itself, so a window that opened afterwards would miss them.
 
-`has_any_effect` is the disjunction of `network_requests > 0 || url_changed || console_messages > 0 || js_errors > 0`. **DOM mutations are intentionally excluded** because real pages produce ambient `childList` mutations (parser-driven on fresh navigations, framework re-renders on SPAs, async resource insertion). The `dom_mutations` count is reported so the caller can interpret it relative to expectation, but is not part of the "did anything happen" disjunction.
+`window_ms` reports the true elapsed span (dispatch duration + the requested wait), not the requested wait echoed back — that is what lets a caller tell "nothing happened" apart from "I didn't wait long enough".
 
-The MutationObserver only watches `childList` (added/removed nodes), not `attributes` or `characterData`, because those are too noisy on real pages (focus state changes, CSS-driven attribute toggles, lazy-loaded resources, framework re-renders all fire dozens of irrelevant mutations even on quiescent pages).
+The DOM-mutation half of the window is anchored in **the page's own clock** (`performance.now()`, read before dispatch), not in a Go-side elapsed time. A Go-side threshold would land one CDP round trip late — the same round trip the dispatch itself costs — and would drop the synchronous mutations of single-round-trip dispatches like `select_option` and `submit_form` roughly half the time. The anchor is taken per frame, and each is pinned to that frame's execution context by CDP's *system-unique* context ID. Since those IDs are never reused, a navigation destroys the context and the stale anchor becomes unusable rather than silently wrong: the read fails instead of applying the old document's threshold to the new document's clock (which resets to zero) and sweeping up its parser-driven mutations.
+
+`observe_window_ms` is capped at **30000**. The window is a blocking wait inside the handler, so an unbounded value would let one call pin an MCP request open indefinitely. Suggested values: **200 ms** catches synchronous handlers and microtasks; **500–1000 ms** catches most network responses.
+
+Observation always waits its full window and never returns early on first activity. For predicate-style "block until X is true" semantics, use `wait_for`.
+
+#### The `observed` object
+
+```
+{window_ms, network_requests, dom_mutations, url_changed, console_messages, js_errors,
+ has_any_effect, truncated?, dom_mutations_unavailable?, dom_mutations_partial?}
+```
+
+Present on an action's result only when that action was called with `observe_window_ms > 0`; omitted entirely otherwise, so callers that don't want observation pay no schema cost.
+
+`has_any_effect` is the disjunction of `network_requests > 0 || url_changed || console_messages > 0 || js_errors > 0` — the signals that are unambiguous.
+
+**DOM mutations are intentionally excluded from that disjunction**, though the count is still reported. Real pages produce ambient `childList` mutations constantly (parser-driven on fresh navigations, framework re-renders on SPAs, async resource insertion), so folding them in would make `has_any_effect` true almost everywhere and destroy its value as a no-op signal. The caller gets `dom_mutations` as a count and compares it against expectation instead of treating any non-zero value as proof the action worked.
+
+The MutationObserver behind that count watches `childList` (added/removed nodes) only — not `attributes` or `characterData`, which are far noisier still: focus-state changes, CSS-driven attribute toggles, and framework re-renders fire dozens of irrelevant mutations on an otherwise quiescent page.
+
+`dom_mutations` counts **every frame we can reach**, iframes included. The observer script is injected into each document, so each frame accumulates its own buffer in its own `window`; observation evaluates in each frame's own JavaScript execution context and sums. Reading only the top frame would report a confident `0` for an action whose entire effect landed inside an iframe.
+
+Some frames cannot be reached. A **cross-origin iframe is out-of-process**: its JavaScript runs on a separate CDP session that this server is not attached to, so its mutation buffer is simply unreachable. That covers most third-party ads, embeds, and payment frames. We can still *see that such a frame exists* — it announces itself with a `frameAttached` before it swaps out of our process (`Page.getFrameTree` does **not** list it afterwards) — so rather than pretend its mutations are zero, the count is flagged as a lower bound via `dom_mutations_partial`. The same flag covers a frame born during the window (never anchored) and a subframe replaced mid-window (its buffer died with it).
+
+Only the **top** frame being replaced makes the whole count meaningless, since that means the page itself is gone; that is `dom_mutations_unavailable`. A replaced *subframe* is not that: the page is intact and every other frame still counts honestly, so the count stands and is marked partial.
+
+Network counts include requests that are still **in flight**. A request that starts inside the window but completes after it closes is counted, because the alternative — counting only requests the collector has seen finish — would report zero for exactly the case observation exists to catch: an action that fires a slow XHR.
+
+Observation never turns a successful action into an error: the action has already succeeded by the time the window closes, and failing the call because a *measurement* came back partial would hand the caller an error it cannot act on. Partial measurements are reported instead, via two flags:
+
+| Flag | Meaning |
+|------|---------|
+| `truncated` | The window was cut short: the tab closed, or the client disconnected, before it elapsed. (A navigation does *not* truncate — it leaves the tab's context live.) The counts are partial, and **a false `has_any_effect` is not evidence the action did nothing**. |
+| `dom_mutations_unavailable` | The mutation count could not be attributed to the action, because the **top-frame** document was replaced during the window (or the page could not be read). `dom_mutations` is 0 and carries no information; use `url_changed` instead. |
+| `dom_mutations_partial` | `dom_mutations` is a **lower bound**: some frame's mutations could not be seen — a cross-origin (out-of-process) iframe, a frame created during the window, or a subframe replaced mid-window. The count is honest for the frames we could see. A zero here does **not** mean the DOM did not change. |
+
+All are omitted when false. `dom_mutations_unavailable` exists because the mutation buffer is per-document: when the page navigates, the buffer the window anchored against is gone, and the new document's parser-driven mutations are not the action's doing.
 
 ## Internal Architecture
 
@@ -883,6 +948,7 @@ chromedp-mcp/
       errors.go         # JS error collector (runtime.EventExceptionThrown)
       network.go        # Network request/response collector (request lifecycle events)
       performance.go    # Performance timeline collector (LCP, layout shifts)
+      execcontext.go    # Per-frame main-world JS execution contexts (for cross-frame DOM mutation counts)
     tools/
       browser.go        # browser_launch, browser_connect, browser_close, browser_list
       profile.go        # browser_list_profiles

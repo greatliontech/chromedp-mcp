@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Observation Frame</title>
+    <link rel="icon" href="data:,">
+</head>
+<body>
+    <!-- Loaded as an iframe by observation.html. The DOM mutation
+         observer is injected into every document, so this frame keeps its
+         own mutation buffer in its own window. A mutation made here is
+         invisible to a count read from the top frame alone. -->
+    <p id="frame-content">frame</p>
+</body>
+</html>

@@ -237,9 +237,31 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 
 ### Observation
 
-| Tool               | Description                                                                    |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `observe_activity` | Measure browser activity in a time window (network, DOM, URL, console, errors) |
+Observation is not a separate tool — it is an `observe_window_ms` parameter on every action tool (`click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files`).
+
+Pass it a value in milliseconds (max 30000) and the tool measures what the page actually did in response to the action, returning an `observed` object alongside its normal result:
+
+```json
+{
+  "window_ms": 512,
+  "network_requests": 2,
+  "dom_mutations": 7,
+  "url_changed": false,
+  "console_messages": 0,
+  "js_errors": 0,
+  "has_any_effect": true
+}
+```
+
+This catches the **silent no-op** — an action that dispatches cleanly and reports success while the page ignores it (a click whose handler early-returns, a form submit swallowed by a validation guard). `has_any_effect: false` says the action landed but nothing happened, which is otherwise invisible to the caller.
+
+Measuring inline rather than in a follow-up call is what makes it reliable: the window opens inside the handler — after the tool has waited for its target element, immediately before dispatch — so there is no gap for effects to escape through while an LLM decides what to call next, and no credit taken for activity that happened while the page was still producing the element.
+
+Three flags mark a measurement the caller must not over-read, all omitted when false:
+
+- `truncated` — the tab closed or the client disconnected before the window elapsed, so the counts are partial and a false `has_any_effect` proves nothing.
+- `dom_mutations_unavailable` — the top-frame document was replaced mid-window, so `dom_mutations` carries no information; use `url_changed`.
+- `dom_mutations_partial` — `dom_mutations` is a lower bound. Some frame could not be seen: a cross-origin iframe runs out-of-process on a CDP session we are not attached to, so its DOM is unreachable. A zero here does not mean the DOM didn't change.
 
 For full parameter documentation, see [docs/design.md](docs/design.md).
 

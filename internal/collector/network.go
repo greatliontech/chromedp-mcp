@@ -61,8 +61,8 @@ type NetworkEntry struct {
 	StartTime       time.Time         `json:"start_time"`
 	EndTime         time.Time         `json:"end_time,omitempty"`
 	// ReceivedAt is the wall-clock time the request-will-be-sent event
-	// was processed by the Go-side collector. Used by observe_activity
-	// for time-window filtering — StartTime is converted from CDP's
+	// was processed by the Go-side collector. Used by activity
+	// observation for time-window filtering — StartTime is converted from CDP's
 	// MonotonicTime which drifts vs. time.Now() (sysutil.BootTime can
 	// be hours off). JSON-hidden because it duplicates StartTime for
 	// consumers that just want "when did this happen".
@@ -290,7 +290,9 @@ func (n *Network) Peek(f *NetworkFilter, limit int) []NetworkEntry {
 // (the wall-clock time HandleRequestWillBeSent ran) is at or after t.
 // Walks both the completed buffer and the pending map so a request
 // that started in the window but hasn't completed yet is still counted
-// — observe_activity uses this to avoid silently missing slow XHRs.
+// — activity observation relies on this to avoid silently missing slow
+// XHRs, which is exactly the case it exists to catch: an action fires a
+// request that outlives the observation window.
 //
 // Walks pending FIRST (recording each ID it counts), then walks the
 // completed buffer and skips IDs already counted from pending. This

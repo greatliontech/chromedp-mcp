@@ -35,8 +35,21 @@ const DefaultURLChangesBuffer = 100
 // domMutationObserverScript is installed via Page.addScriptToEvaluateOnNewDocument
 // so every new document immediately attaches a MutationObserver that
 // pushes timestamps (page-relative via performance.now()) into a bounded
-// JS-side ring buffer. observe_activity reads the buffer to count
-// mutations in a window.
+// JS-side ring buffer. Action tools called with observe_window_ms > 0
+// read the buffer to count mutations inside their observation window.
+//
+// The script runs in EVERY document, iframes included, so each frame
+// accumulates its own buffer in its own `window`. Reading only the top
+// frame's buffer would silently ignore all iframe mutations; observation
+// therefore evaluates in each frame's own execution context (see
+// collector.ExecContexts).
+//
+// The buffer holds raw performance.now() values, which are
+// document-relative and reset to zero on navigation. That is safe only
+// because an observation window pins the frame's execution context by its
+// system-unique ID: a navigation destroys that context, so a threshold
+// from the old document can never be applied to the new one — the read
+// fails instead of silently counting the wrong document's mutations.
 //
 // Only childList mutations are observed. Attribute and characterData
 // mutations are noisy on real pages — focus state changes,
@@ -47,7 +60,7 @@ const DefaultURLChangesBuffer = 100
 //
 // The cap (10000) bounds memory; older entries are dropped on
 // overflow, which under-counts but doesn't break the "zero vs nonzero"
-// signal observe_activity actually cares about.
+// signal the observation window actually cares about.
 const domMutationObserverScript = `
 (function() {
   if (window.__mcpMutationObserverInstalled) return;
@@ -82,6 +95,9 @@ type Tab struct {
 	WebSocket   *collector.WebSocket
 	URLChanges  *collector.URLChanges
 	Performance *collector.Performance
+	// ExecContexts tracks each frame's main-world JS execution context, so
+	// activity observation can read the per-frame DOM mutation buffers.
+	ExecContexts *collector.ExecContexts
 }
 
 // TabOptions configures optional per-tab behavior.
@@ -111,8 +127,9 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 			collector.DefaultWSFramesPerDirection,
 			collector.MaxInlineFramePayload,
 		),
-		URLChanges:  collector.NewURLChanges(DefaultURLChangesBuffer),
-		Performance: collector.NewPerformance(DefaultPerformanceBuffer, 50),
+		URLChanges:   collector.NewURLChanges(DefaultURLChangesBuffer),
+		Performance:  collector.NewPerformance(DefaultPerformanceBuffer, 50),
+		ExecContexts: collector.NewExecContexts(),
 	}
 
 	// Resolve optional download collector.
@@ -153,8 +170,19 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 			t.WebSocket.HandleClosed(ev)
 		case *page.EventFrameNavigated:
 			t.URLChanges.HandleFrameNavigated(ev)
+			t.ExecContexts.HandleFrameNavigated(ev)
+		case *page.EventFrameAttached:
+			t.ExecContexts.HandleFrameAttached(ev)
+		case *page.EventFrameDetached:
+			t.ExecContexts.HandleFrameDetached(ev)
 		case *page.EventNavigatedWithinDocument:
 			t.URLChanges.HandleNavigatedWithinDocument(ev)
+		case *runtime.EventExecutionContextCreated:
+			t.ExecContexts.HandleExecutionContextCreated(ev)
+		case *runtime.EventExecutionContextDestroyed:
+			t.ExecContexts.HandleExecutionContextDestroyed(ev)
+		case *runtime.EventExecutionContextsCleared:
+			t.ExecContexts.HandleExecutionContextsCleared()
 		case *performancetimeline.EventTimelineEventAdded:
 			t.Performance.HandleTimelineEvent(ev)
 		case *browser.EventDownloadWillBegin:
@@ -200,19 +228,42 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 			return err
 		}
 		// Register the DOM mutation observer for every new document.
-		// observe_activity reads the timestamps the observer pushes
+		// Activity observation reads the timestamps the observer pushes
 		// into a per-document JS-side ring buffer.
 		if _, err := page.AddScriptToEvaluateOnNewDocument(domMutationObserverScript).Do(ctx); err != nil {
 			return err
 		}
-		// Also evaluate on the current document so observe_activity
-		// works on tabs that already have a document loaded — e.g.,
+		// Also evaluate on the current document so observation works
+		// on tabs that already have a document loaded — e.g.,
 		// browser_connect attaches to a Chrome that already has tabs
 		// open. The script's `if (window.__mcpMutationObserverInstalled)
 		// return;` guard makes the eval a no-op when the script also
 		// runs via addScriptToEvaluateOnNewDocument on a fresh document.
 		if err := chromedp.Evaluate(domMutationObserverScript, nil).Do(ctx); err != nil {
 			return err
+		}
+		// Seed the frame registry so the main frame is known before any
+		// navigation. Without it a tab left on about:blank has no main
+		// frame, and every DOM mutation count on it reports "unavailable".
+		//
+		// A seed only: Page.getFrameTree does NOT list out-of-process
+		// (cross-origin) iframes. Those are learned solely from the
+		// frameAttached event stream, which is why ExecContexts keeps a
+		// frame that merely swapped away rather than dropping it.
+		if tree, err := page.GetFrameTree().Do(ctx); err == nil && tree != nil && tree.Frame != nil {
+			var ids []string
+			var walk func(*page.FrameTree)
+			walk = func(n *page.FrameTree) {
+				if n == nil || n.Frame == nil {
+					return
+				}
+				ids = append(ids, string(n.Frame.ID))
+				for _, c := range n.ChildFrames {
+					walk(c)
+				}
+			}
+			walk(tree)
+			t.ExecContexts.SeedFrameTree(string(tree.Frame.ID), ids)
 		}
 		// Enable downloads per-tab if a download directory is configured.
 		// SetDownloadBehavior is session-scoped — it must be called on

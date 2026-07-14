@@ -16,7 +16,7 @@ type JSErrorEntry struct {
 	StackTrace string    `json:"stack_trace,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
 	// ReceivedAt is the wall-clock time the event was processed by the
-	// Go-side collector. Used by observe_activity for time-window
+	// Go-side collector. Used by activity observation for time-window
 	// filtering — Timestamp is from CDP's MonotonicTime which drifts
 	// vs. time.Now(). JSON-hidden.
 	ReceivedAt time.Time `json:"-"`

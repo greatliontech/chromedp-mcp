@@ -14,7 +14,7 @@ type ConsoleEntry struct {
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 	// ReceivedAt is the wall-clock time the event was processed by the
-	// Go-side collector. Used by observe_activity for time-window
+	// Go-side collector. Used by activity observation for time-window
 	// filtering — Timestamp is converted from CDP's MonotonicTime which
 	// drifts vs. time.Now(). JSON-hidden.
 	ReceivedAt time.Time `json:"-"`

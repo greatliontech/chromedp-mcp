@@ -437,4 +437,3 @@ func TestWSConcurrentHandlers(t *testing.T) {
 	}
 	wg.Wait()
 }
-

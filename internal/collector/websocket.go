@@ -383,5 +383,3 @@ func truncateBase64(b64 string, maxBytes int) (string, bool) {
 	}
 	return base64.StdEncoding.EncodeToString(raw[:maxBytes]), true
 }
-
-

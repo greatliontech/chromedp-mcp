@@ -12,7 +12,7 @@
     <h1>Observation Fixture</h1>
 
     <!-- A button whose click handler does literally nothing observable.
-         observe_activity should report zero counts and has_any_effect=false. -->
+         Observation should report zero counts and has_any_effect=false. -->
     <button id="noop-btn">No-op</button>
 
     <!-- A button that fires a fetch on click. -->
@@ -30,6 +30,31 @@
 
     <!-- A button that throws a JS error (uncaught). -->
     <button id="throw-btn">Throw</button>
+
+    <!-- A button that performs a real cross-document navigation. The
+         mutation buffer and performance.now() are per-document, so an
+         observation window spanning this click cannot attribute a DOM
+         mutation count to it. -->
+    <button id="nav-btn">Navigate</button>
+
+    <!-- Fires a fetch, and only later makes its targets actionable. An
+         action tool aimed at #late-input (does not exist yet) or
+         #late-visible-btn (exists but is display:none) must spend that
+         time WAITING, and must NOT count the fetch: it happened before
+         the action was dispatched, so it is not the action's effect.
+
+         #late-visible-btn is the click case specifically: it is present
+         at parse time, so a pre-wait that only waits for existence
+         returns immediately and leaves the visibility wait — which
+         chromedp.Click performs internally — inside the window. -->
+    <button id="late-btn">Late targets</button>
+    <button id="late-visible-btn" style="display:none">Late visible</button>
+
+    <!-- Mutates the DOM *inside* the iframe, leaving the top frame's own
+         DOM untouched. Each frame keeps its own mutation buffer, so a
+         count read only from the top frame reports zero here. -->
+    <button id="iframe-mutate-btn">Mutate iframe</button>
+    <iframe id="frame" src="/observation_frame.html"></iframe>
 
     <script>
         // No handler at all on noop-btn — clicking it dispatches the
@@ -60,6 +85,34 @@
             setTimeout(function() {
                 throw new Error('observation-thrown-error');
             }, 0);
+        });
+
+        document.getElementById('nav-btn').addEventListener('click', function() {
+            location.href = '/observation.html?navigated=1';
+        });
+
+        document.getElementById('iframe-mutate-btn').addEventListener('click', function() {
+            // Same-origin, so the parent can reach into the frame's
+            // document directly. The mutation lands in the FRAME's
+            // observer buffer, not the top frame's.
+            var doc = document.getElementById('frame').contentDocument;
+            doc.body.appendChild(doc.createElement('p'));
+        });
+
+        document.getElementById('late-btn').addEventListener('click', function() {
+            // Network activity that happens WHILE a caller waits for its
+            // target to become actionable — i.e. before its action
+            // dispatches. The 400ms delay leaves a wide margin: a test
+            // asserting this fetch is NOT counted would pass vacuously if
+            // the fetch could land before the observing tool even starts.
+            setTimeout(function() { fetch('/api/data'); }, 400);
+            // The targets become actionable only well after that fetch.
+            setTimeout(function() {
+                var el = document.createElement('input');
+                el.id = 'late-input';
+                document.body.appendChild(el);
+                document.getElementById('late-visible-btn').style.display = '';
+            }, 900);
         });
     </script>
 </body>

@@ -146,9 +146,10 @@ func init() {
 // ClickInput is the input for click.
 type ClickInput struct {
 	SelectorInput
-	Selector   string `json:"selector" jsonschema:"CSS selector of the element to click"`
-	Button     string `json:"button,omitempty" jsonschema:"Mouse button: left (default) right middle"`
-	ClickCount int    `json:"click_count,omitempty" jsonschema:"Number of clicks (default 1 use 2 for double-click)"`
+	Selector        string `json:"selector" jsonschema:"CSS selector of the element to click"`
+	Button          string `json:"button,omitempty" jsonschema:"Mouse button: left (default) right middle"`
+	ClickCount      int    `json:"click_count,omitempty" jsonschema:"Number of clicks (default 1 use 2 for double-click)"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity (network requests, DOM mutations, URL changes, console, JS errors) for this many ms after dispatch and return counts in 'observed'. Use to detect whether the click had any observable effect — has_any_effect=false means the page didn't react. Typical values: 200 to catch sync handlers + microtasks, 500–1000 to catch most network responses. Default 0 (no observation). Max 30000."`
 }
 
 // ClickOutput reports the post-resolution state of the click target so the
@@ -165,70 +166,91 @@ type ClickOutput struct {
 	// pointer-events:none or visible=false). disabled/aria-disabled
 	// produce errors rather than warnings, so they never appear here.
 	Warning string `json:"warning,omitempty"`
+	// Observed is populated when the caller passed observe_window_ms > 0.
+	// Reports activity counts in the window starting at click dispatch.
+	Observed *ObservedActivity `json:"observed,omitempty"`
 }
 
 // TypeInput is the input for type.
 type TypeInput struct {
 	SelectorInput
-	Selector string `json:"selector" jsonschema:"CSS selector of the input element"`
-	Text     string `json:"text" jsonschema:"Text to type"`
-	Mode     string `json:"mode" jsonschema:"How to combine the typed text with the field's existing value: 'replace' clears the field first, 'append' types after the existing value. Required."`
-	Delay    int    `json:"delay,omitempty" jsonschema:"Delay between keystrokes in milliseconds (default 0)"`
+	Selector        string `json:"selector" jsonschema:"CSS selector of the input element"`
+	Text            string `json:"text" jsonschema:"Text to type"`
+	Mode            string `json:"mode" jsonschema:"How to combine the typed text with the field's existing value: 'replace' clears the field first, 'append' types after the existing value. Required."`
+	Delay           int    `json:"delay,omitempty" jsonschema:"Delay between keystrokes in milliseconds (default 0)"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after typing and return counts in 'observed'. Useful when typing triggers autocomplete / typeahead network requests. Default 0 (no observation). Max 30000."`
+}
+
+// ActionOutput carries the optional inline observation result from an
+// action tool that doesn't otherwise return a typed value (type,
+// press_key, submit_form, select_option, hover, focus, upload_files).
+// Only Observed is populated when observe_window_ms > 0; otherwise the
+// output is an empty object.
+type ActionOutput struct {
+	Observed *ObservedActivity `json:"observed,omitempty"`
 }
 
 // SelectOptionInput is the input for select_option.
 type SelectOptionInput struct {
 	SelectorInput
-	Selector string  `json:"selector" jsonschema:"CSS selector of the select element"`
-	Value    *string `json:"value,omitempty" jsonschema:"Option value to select"`
-	Label    string  `json:"label,omitempty" jsonschema:"Option visible text to select"`
-	Index    *int    `json:"index,omitempty" jsonschema:"Option index to select"`
+	Selector        string  `json:"selector" jsonschema:"CSS selector of the select element"`
+	Value           *string `json:"value,omitempty" jsonschema:"Option value to select"`
+	Label           string  `json:"label,omitempty" jsonschema:"Option visible text to select"`
+	Index           *int    `json:"index,omitempty" jsonschema:"Option index to select"`
+	ObserveWindowMs int     `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the selection change fires and return counts in 'observed'. Useful when select onchange triggers cascading dropdown loads or form-level network requests. Default 0 (no observation). Max 30000."`
 }
 
 // SubmitFormInput is the input for submit_form.
 type SubmitFormInput struct {
 	SelectorInput
-	Selector string `json:"selector" jsonschema:"CSS selector of the form or an element within the form"`
+	Selector        string `json:"selector" jsonschema:"CSS selector of the form or an element within the form"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after submit and return counts in 'observed'. Strongly recommended on submit_form: a form whose submit handler short-circuits (HTML5 validation, JS-side validation, framework guards) silently does nothing — non-zero observed counts confirm the submit landed. Default 0. Max 30000."`
 }
 
 // ScrollInput is the input for scroll.
 type ScrollInput struct {
 	SelectorInput
-	Selector string `json:"selector,omitempty" jsonschema:"CSS selector to scroll into view. If omitted scrolls the page."`
-	X        int    `json:"x,omitempty" jsonschema:"Horizontal scroll offset in pixels"`
-	Y        int    `json:"y,omitempty" jsonschema:"Vertical scroll offset in pixels"`
+	Selector        string `json:"selector,omitempty" jsonschema:"CSS selector to scroll into view. If omitted scrolls the page."`
+	X               int    `json:"x,omitempty" jsonschema:"Horizontal scroll offset in pixels"`
+	Y               int    `json:"y,omitempty" jsonschema:"Vertical scroll offset in pixels"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after scrolling and return counts in 'observed'. Useful for lazy-load and infinite-scroll detection. Default 0 (no observation). Max 30000."`
 }
 
 // ScrollOutput is the output for scroll, reporting the resulting scroll position.
 type ScrollOutput struct {
-	ScrollX float64 `json:"scroll_x"`
-	ScrollY float64 `json:"scroll_y"`
+	ScrollX  float64           `json:"scroll_x"`
+	ScrollY  float64           `json:"scroll_y"`
+	Observed *ObservedActivity `json:"observed,omitempty"`
 }
 
 // HoverInput is the input for hover.
 type HoverInput struct {
 	SelectorInput
-	Selector string `json:"selector" jsonschema:"CSS selector of the element to hover over"`
+	Selector        string `json:"selector" jsonschema:"CSS selector of the element to hover over"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the hover dispatch and return counts in 'observed'. Useful for tooltip/menu reveal detection. Default 0 (no observation). Max 30000."`
 }
 
 // FocusInput is the input for focus.
 type FocusInput struct {
 	SelectorInput
-	Selector string `json:"selector" jsonschema:"CSS selector of the element to focus"`
+	Selector        string `json:"selector" jsonschema:"CSS selector of the element to focus"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after focusing and return counts in 'observed'. Useful when focus triggers validation reveal or autofill. Default 0. Max 30000."`
 }
 
 // PressKeyInput is the input for press_key.
 type PressKeyInput struct {
 	TabInput
-	Key       string   `json:"key" jsonschema:"Key to press (e.g. Enter Tab Escape ArrowDown)"`
-	Modifiers []string `json:"modifiers,omitempty" jsonschema:"Modifier keys: ctrl shift alt meta"`
+	Key             string   `json:"key" jsonschema:"Key to press (e.g. Enter Tab Escape ArrowDown)"`
+	Modifiers       []string `json:"modifiers,omitempty" jsonschema:"Modifier keys: ctrl shift alt meta"`
+	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the key event and return counts in 'observed'. Useful for Enter (submit detection), Escape (modal dismiss), arrow navigation. Default 0. Max 30000."`
 }
 
 // UploadFilesInput is the input for upload_files.
 type UploadFilesInput struct {
 	SelectorInput
-	Selector string   `json:"selector" jsonschema:"CSS selector of the file input element"`
-	Paths    []string `json:"paths" jsonschema:"Absolute file paths to set"`
+	Selector        string   `json:"selector" jsonschema:"CSS selector of the file input element"`
+	Paths           []string `json:"paths" jsonschema:"Absolute file paths to set"`
+	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the input.files change fires and return counts in 'observed'. Useful when an onchange handler kicks off the actual upload XHR. Default 0. Max 30000."`
 }
 
 // HandleDialogInput is the input for handle_dialog.
@@ -241,8 +263,11 @@ type HandleDialogInput struct {
 func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "click",
-		Description: "Click an element by CSS selector. Returns the post-resolution state of the target (disabled, aria_disabled, pointer_events, visible) plus a warning string when the click likely had no observable effect (e.g. pointer-events:none, hidden). Errors out before dispatching when the target has the 'disabled' attribute or aria-disabled='true', since clicking a disabled element is almost always a bug in the caller's plan.",
+		Description: "Click an element by CSS selector. Returns the post-resolution state of the target (disabled, aria_disabled, pointer_events, visible) plus a warning string when the click likely had no observable effect (e.g. pointer-events:none, hidden). Errors out before dispatching when the target has the 'disabled' attribute or aria-disabled='true', since clicking a disabled element is almost always a bug in the caller's plan. Pass observe_window_ms > 0 to also observe browser activity (network/DOM/URL/console/JS errors) for that many ms after dispatch — use this to detect silent no-ops where the click landed but the handler short-circuited.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ClickInput) (*mcp.CallToolResult, ClickOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ClickOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
 			return nil, ClickOutput{}, err
@@ -271,11 +296,32 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, state, fmt.Errorf("element %q has aria-disabled=\"true\"; click was not dispatched", inp.Selector)
 		}
 
+		// Wait for VISIBILITY before opening the window. The probe above
+		// only waited for the node to exist, but every dispatch path below
+		// waits for it to be visible (chromedp.Click and DoubleClick append
+		// NodeVisible; the raw-button path waits NodeVisible explicitly).
+		// Leaving that wait inside the window would attribute everything a
+		// page does while the element is still invisible — a modal fading
+		// in, a poll firing — to a click that has not been dispatched yet.
+		//
+		// This runs after the disabled/aria-disabled checks so those still
+		// produce their crisp errors rather than a visibility timeout, and
+		// it is a no-op for the overwhelmingly common already-visible case.
+		if err := chromedp.Run(sctx, chromedp.WaitVisible(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, state, selectorError(tctx, inp.Selector, err)
+		}
+
+		// Open the window BEFORE dispatch so handler effects — sync
+		// handlers, microtasks fired during dispatch — are caught.
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
+
 		if inp.ClickCount == 2 {
 			if err := chromedp.Run(sctx, chromedp.DoubleClick(inp.Selector, chromedp.ByQuery)); err != nil {
 				return nil, state, selectorError(tctx, inp.Selector, err)
 			}
-			return nil, finalizeClickState(tctx, inp.Selector, state), nil
+			out := finalizeClickState(tctx, inp.Selector, state)
+			out.Observed = obs.close(tctx)
+			return nil, out, nil
 		}
 
 		// For non-standard buttons or click counts, use CDP
@@ -322,26 +368,33 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			})); err != nil {
 				return nil, state, err
 			}
-			return nil, finalizeClickState(tctx, inp.Selector, state), nil
+			out := finalizeClickState(tctx, inp.Selector, state)
+			out.Observed = obs.close(tctx)
+			return nil, out, nil
 		}
 
 		if err := chromedp.Run(sctx, chromedp.Click(inp.Selector, chromedp.ByQuery)); err != nil {
 			return nil, state, selectorError(tctx, inp.Selector, err)
 		}
-		return nil, finalizeClickState(tctx, inp.Selector, state), nil
+		out := finalizeClickState(tctx, inp.Selector, state)
+		out.Observed = obs.close(tctx)
+		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type",
 		Description: "Type text into an element matching a CSS selector. 'mode' must be 'replace' (clear the field first — the correct choice for almost every form interaction, since real pages pre-populate fields with placeholders, geocoded defaults, or previous values) or 'append' (type after the existing value — rare; e.g. for contenteditable mid-composition).",
 		InputSchema: modeSchemaFor[TypeInput](TypeModeReplace, TypeModeAppend),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp TypeInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp TypeInput) (*mcp.CallToolResult, ActionOutput, error) {
 		if err := validateMode(inp.Mode, TypeModeReplace, TypeModeAppend); err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
+		}
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -371,19 +424,39 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
-		if err := chromedp.Run(sctx, actions); err != nil {
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+		// Wait for the field BEFORE opening the window, so the wait for a
+		// still-loading page to produce it is not counted as the type's
+		// doing. The pre-wait must match the wait the dispatch performs
+		// internally — stronger would reject elements the tool used to
+		// accept, weaker would leave a wait inside the window. SendKeys
+		// (the delay==0 path) waits NodeVisible; chromedp.Focus (the
+		// delay>0 path) only waits NodeReady.
+		var preWait chromedp.QueryAction
+		if inp.Delay > 0 {
+			preWait = chromedp.WaitReady(inp.Selector, chromedp.ByQuery)
+		} else {
+			preWait = chromedp.WaitVisible(inp.Selector, chromedp.ByQuery)
 		}
-		return nil, struct{}{}, nil
+		if err := chromedp.Run(sctx, preWait); err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+		}
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
+		if err := chromedp.Run(sctx, actions); err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+		}
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "select_option",
 		Description: "Select an option from a <select> element. Exactly one of value, label, or index must be provided.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SelectOptionInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SelectOptionInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 
 		// Validate that exactly one selection criterion is provided.
@@ -398,7 +471,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			criteria++
 		}
 		if criteria > 1 {
-			return nil, struct{}{}, fmt.Errorf("exactly one of value, label, or index must be provided, not multiple")
+			return nil, ActionOutput{}, fmt.Errorf("exactly one of value, label, or index must be provided, not multiple")
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -408,7 +481,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 
 		// Build a JS snippet to select by the appropriate attribute.
@@ -446,23 +519,27 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				sel.dispatchEvent(new Event('change', {bubbles: true}));
 			})()`, inp.Selector, *inp.Index, *inp.Index, *inp.Index)
 		} else {
-			return nil, struct{}{}, fmt.Errorf("exactly one of value, label, or index must be provided")
+			return nil, ActionOutput{}, fmt.Errorf("exactly one of value, label, or index must be provided")
 		}
 
 		var res interface{}
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Run(tctx, chromedp.Evaluate(js, &res)); err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
-		return nil, struct{}{}, nil
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "submit_form",
-		Description: "Submit a form by CSS selector. Fires the submit event so JS handlers can intercept it.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SubmitFormInput) (*mcp.CallToolResult, struct{}, error) {
+		Description: "Submit a form by CSS selector. Fires the submit event so JS handlers can intercept it. Pass observe_window_ms > 0 to detect submits that fire the event but short-circuit (HTML5 validation, JS validation, framework guards) — non-zero observed counts confirm the submit landed.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SubmitFormInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -472,7 +549,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
 		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 
 		// Use requestSubmit() which fires the submit event (unlike the
@@ -486,16 +563,20 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			form.requestSubmit();
 		})()`, inp.Selector)
 		var res interface{}
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Run(tctx, chromedp.Evaluate(js, &res)); err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
-		return nil, struct{}{}, nil
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Scroll a page or scroll an element into view.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ScrollInput) (*mcp.CallToolResult, ScrollOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ScrollOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
 			return nil, ScrollOutput{}, err
@@ -503,14 +584,25 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
+		var obs *observation
 		if inp.Selector != "" {
 			sctx, cancel := selectorContext(tctx, inp.Timeout)
 			defer cancel()
+			// Wait for the target BEFORE opening the window, so the wait is
+			// not blamed on the scroll. WaitReady, not WaitVisible: it must
+			// match chromedp.ScrollIntoView's own NodeReady wait —
+			// requiring visibility here would reject elements scroll
+			// previously accepted.
+			if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
+				return nil, ScrollOutput{}, selectorError(tctx, inp.Selector, err)
+			}
+			obs = openObservation(tctx, t, inp.ObserveWindowMs)
 			err = chromedp.Run(sctx, chromedp.ScrollIntoView(inp.Selector, chromedp.ByQuery))
 			if err != nil {
 				return nil, ScrollOutput{}, selectorError(tctx, inp.Selector, err)
 			}
 		} else {
+			obs = openObservation(tctx, t, inp.ObserveWindowMs)
 			js := fmt.Sprintf("window.scrollBy(%d, %d)", inp.X, inp.Y)
 			var res interface{}
 			err = chromedp.Run(tctx, chromedp.Evaluate(js, &res))
@@ -532,16 +624,20 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		})); err != nil {
 			return nil, ScrollOutput{}, err
 		}
+		out.Observed = obs.close(tctx)
 		return nil, out, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "hover",
 		Description: "Hover over an element by CSS selector.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp HoverInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp HoverInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -554,12 +650,13 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		// trigger the browser's native :hover CSS state.
 		var nodes []*cdp.Node
 		if err := chromedp.Run(sctx, chromedp.Nodes(inp.Selector, &nodes, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 		if len(nodes) == 0 {
-			return nil, struct{}{}, fmt.Errorf("selector %q matched no elements", inp.Selector)
+			return nil, ActionOutput{}, fmt.Errorf("selector %q matched no elements", inp.Selector)
 		}
 
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			cx, cy, err := elementCenter(ctx, nodes[0])
 			if err != nil {
@@ -567,36 +664,50 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 			return input.DispatchMouseEvent(input.MouseMoved, cx, cy).Do(ctx)
 		})); err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
-		return nil, struct{}{}, nil
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "focus",
 		Description: "Focus an element by CSS selector.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp FocusInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp FocusInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
-		if err := chromedp.Run(sctx, chromedp.Focus(inp.Selector, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+		// Wait for the element BEFORE opening the window, so the wait is not
+		// counted as the focus's doing. WaitReady, not WaitVisible: it must
+		// match chromedp.Focus's own NodeReady wait — requiring visibility
+		// here would reject elements focus previously accepted.
+		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
-		return nil, struct{}{}, nil
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
+		if err := chromedp.Run(sctx, chromedp.Focus(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+		}
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "press_key",
-		Description: "Press a keyboard key, optionally with modifiers.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp PressKeyInput) (*mcp.CallToolResult, struct{}, error) {
+		Description: "Press a keyboard key, optionally with modifiers. Pass observe_window_ms > 0 to detect Enter (form submit), Escape (modal dismiss), or arrow-key handler effects.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp PressKeyInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 
 		var modifiers input.Modifier
@@ -611,7 +722,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			case "meta":
 				modifiers |= input.ModifierMeta
 			default:
-				return nil, struct{}{}, fmt.Errorf("unknown modifier %q: must be ctrl, shift, alt, or meta", m)
+				return nil, ActionOutput{}, fmt.Errorf("unknown modifier %q: must be ctrl, shift, alt, or meta", m)
 			}
 		}
 
@@ -627,7 +738,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			// Try decoding as a single UTF-8 rune.
 			decoded, size := utf8.DecodeRuneInString(inp.Key)
 			if decoded == utf8.RuneError || size != len(inp.Key) {
-				return nil, struct{}{}, fmt.Errorf("unknown key: %q", inp.Key)
+				return nil, ActionOutput{}, fmt.Errorf("unknown key: %q", inp.Key)
 			}
 			r = decoded
 		}
@@ -638,6 +749,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		events := kb.Encode(r)
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
 			for _, ev := range events {
 				ev.Modifiers |= modifiers
@@ -647,27 +759,36 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 			return nil
 		})); err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
-		return nil, struct{}{}, nil
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "upload_files",
-		Description: "Set files on a file input element.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp UploadFilesInput) (*mcp.CallToolResult, struct{}, error) {
+		Description: "Set files on a file input element. Pass observe_window_ms > 0 to catch the upload XHR that an onchange handler typically fires.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp UploadFilesInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, struct{}{}, err
+			return nil, ActionOutput{}, err
 		}
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
 		defer cancel()
-		if err := chromedp.Run(sctx, chromedp.SetUploadFiles(inp.Selector, inp.Paths, chromedp.ByQuery)); err != nil {
-			return nil, struct{}{}, selectorError(tctx, inp.Selector, err)
+		// Wait for the input BEFORE opening the window — SetUploadFiles
+		// waits internally, and that wait must not be inside the window.
+		if err := chromedp.Run(sctx, chromedp.WaitReady(inp.Selector, chromedp.ByQuery)); err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
-		return nil, struct{}{}, nil
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
+		if err := chromedp.Run(sctx, chromedp.SetUploadFiles(inp.Selector, inp.Paths, chromedp.ByQuery)); err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+		}
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

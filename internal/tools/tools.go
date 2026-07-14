@@ -57,7 +57,6 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerDownloadTools(s, mgr)
 	registerConfigTools(s, mgr)
 	registerEmulationTools(s, mgr)
-	registerObservationTools(s, mgr)
 }
 
 // Buffer-read modes for tools that consume per-tab event buffers

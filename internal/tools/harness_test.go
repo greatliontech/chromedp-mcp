@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -49,8 +50,17 @@ func TestMain(m *testing.M) {
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/page2.html", http.StatusFound)
 	})
+	// /slow delays 200ms by default. ?ms=N overrides the delay, for tests
+	// that need a request guaranteed to still be in flight when an
+	// observation window closes.
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond)
+		delay := 200 * time.Millisecond
+		if v := r.URL.Query().Get("ms"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				delay = time.Duration(n) * time.Millisecond
+			}
+		}
+		time.Sleep(delay)
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html><body><h1>Slow Page</h1></body></html>`)
 	})

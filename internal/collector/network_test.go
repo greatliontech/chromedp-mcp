@@ -696,8 +696,8 @@ func TestHeadersToMapEmpty(t *testing.T) {
 
 // TestNetworkEntryReceivedAtAlwaysSet verifies every entry that lands
 // in the buffer (or stays in pending) has a non-zero ReceivedAt.
-// observe_activity uses ReceivedAt for window filtering — a zero
-// ReceivedAt sorts before any sinceTime and would silently exclude
+// Activity observation uses ReceivedAt for window filtering — a zero
+// ReceivedAt sorts before any window start and would silently exclude
 // the entry from observation counts. This guards against future
 // collector changes that introduce a new entry-construction path
 // missing the ReceivedAt = time.Now() assignment.
