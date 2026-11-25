@@ -177,7 +177,7 @@ func TestConsoleLogs(t *testing.T) {
 	for _, log := range out.Logs {
 		found[log.Level] = true
 	}
-	for _, level := range []string{"log", "warning", "error"} {
+	for _, level := range []string{"log", "warn", "error"} {
 		if !found[level] {
 			t.Errorf("expected console level %q in logs", level)
 		}

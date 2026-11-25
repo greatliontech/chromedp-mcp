@@ -234,7 +234,7 @@ func (o *observation) close(ctx context.Context) *ObservedActivity {
 	}
 
 	out.WindowMs = int(time.Since(o.since) / time.Millisecond)
-	out.NetworkRequests = o.tab.Network.CountStartedSince(o.since)
+	out.NetworkRequests = o.tab.Network.CountStartedSince(o.since) + o.tab.WebSocket.CountCreatedSince(o.since)
 	out.ConsoleMessages = countConsoleSince(o.tab.Console.Peek("", 0), o.since)
 	out.JSErrors = countJSErrorsSince(o.tab.JSErrors.Peek(0), o.since)
 	out.URLChanged = o.tab.URLChanges.CountSince(o.since) > 0

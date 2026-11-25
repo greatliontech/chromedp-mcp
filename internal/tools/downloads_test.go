@@ -234,3 +234,57 @@ func TestDownloadFileRenamed(t *testing.T) {
 		t.Fatalf("renamed file %s not found: %v", dl.Path, err)
 	}
 }
+
+// TestDownloadMultiTabNoDuplicatesAndNoOverwrite verifies that with multiple
+// open tabs in the same browser, each download produces exactly one entry
+// (no per-tab event duplication) and repeated downloads of the same filename
+// are saved to distinct non-overwriting paths.
+func TestDownloadMultiTabNoDuplicatesAndNoOverwrite(t *testing.T) {
+	tab1 := navigateToFixture(t, "download.html")
+	defer closeTab(t, tab1)
+	tab2 := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tab2)
+
+	// Drain any previous downloads.
+	callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
+
+	// Trigger two downloads of the same filename with 2 open tabs.
+	var paths []string
+	for i := 0; i < 2; i++ {
+		callTool[struct{}](t, "click", map[string]any{
+			"tab":      tab1,
+			"selector": "#download-link",
+		})
+		var got GetDownloadsOutput
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			got = callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "peek"})
+			if len(got.Downloads) >= i+1 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if len(got.Downloads) != i+1 {
+			t.Fatalf("after download %d, got %d entries, want %d", i+1, len(got.Downloads), i+1)
+		}
+		paths = append(paths, got.Downloads[i].Path)
+	}
+
+	// Drain and verify no delayed duplicate events arrived.
+	final := callTool[GetDownloadsOutput](t, "get_downloads", map[string]any{"mode": "drain"})
+	if len(final.Downloads) != 2 {
+		t.Fatalf("total downloads = %d, want 2 (no multi-tab duplication)", len(final.Downloads))
+	}
+	if paths[0] == "" || paths[1] == "" || paths[0] == paths[1] {
+		t.Fatalf("expected two distinct non-empty paths, got %q and %q", paths[0], paths[1])
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("reading %s: %v", p, err)
+		}
+		if string(data) != "hello from download test" {
+			t.Errorf("file %s content = %q", p, data)
+		}
+	}
+}

@@ -2,9 +2,9 @@ package collector
 
 import (
 	"encoding/base64"
+	"maps"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/network"
 )
@@ -114,6 +114,9 @@ func NewWebSocket(maxConns, maxFrames, maxPayload int) *WebSocket {
 
 // HandleCreated registers a new WebSocket connection.
 func (w *WebSocket) HandleCreated(ev *network.EventWebSocketCreated) {
+	if ev == nil || ev.RequestID == "" {
+		return
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, ok := w.conns[ev.RequestID]; ok {
@@ -150,7 +153,7 @@ func (w *WebSocket) lookupConn(id network.RequestID) *wsConnState {
 // version, so we tolerate the missing-connection case by ignoring the
 // event rather than synthesizing an entry.
 func (w *WebSocket) HandleHandshakeRequest(ev *network.EventWebSocketWillSendHandshakeRequest) {
-	if ev.Request == nil {
+	if ev == nil || ev.Request == nil {
 		return
 	}
 	c := w.lookupConn(ev.RequestID)
@@ -165,7 +168,7 @@ func (w *WebSocket) HandleHandshakeRequest(ev *network.EventWebSocketWillSendHan
 
 // HandleHandshakeResponse records the upgrade response status and headers.
 func (w *WebSocket) HandleHandshakeResponse(ev *network.EventWebSocketHandshakeResponseReceived) {
-	if ev.Response == nil {
+	if ev == nil || ev.Response == nil {
 		return
 	}
 	c := w.lookupConn(ev.RequestID)
@@ -192,7 +195,7 @@ func (w *WebSocket) HandleHandshakeResponse(ev *network.EventWebSocketHandshakeR
 
 // HandleFrameSent records an outgoing frame.
 func (w *WebSocket) HandleFrameSent(ev *network.EventWebSocketFrameSent) {
-	if ev.Response == nil {
+	if ev == nil || ev.Response == nil {
 		return
 	}
 	c := w.lookupConn(ev.RequestID)
@@ -212,7 +215,7 @@ func (w *WebSocket) HandleFrameSent(ev *network.EventWebSocketFrameSent) {
 
 // HandleFrameReceived records an incoming frame.
 func (w *WebSocket) HandleFrameReceived(ev *network.EventWebSocketFrameReceived) {
-	if ev.Response == nil {
+	if ev == nil || ev.Response == nil {
 		return
 	}
 	c := w.lookupConn(ev.RequestID)
@@ -228,6 +231,9 @@ func (w *WebSocket) HandleFrameReceived(ev *network.EventWebSocketFrameReceived)
 
 // HandleFrameError records a frame-level error on the connection.
 func (w *WebSocket) HandleFrameError(ev *network.EventWebSocketFrameError) {
+	if ev == nil {
+		return
+	}
 	c := w.lookupConn(ev.RequestID)
 	if c == nil {
 		return
@@ -239,6 +245,9 @@ func (w *WebSocket) HandleFrameError(ev *network.EventWebSocketFrameError) {
 
 // HandleClosed marks the connection closed.
 func (w *WebSocket) HandleClosed(ev *network.EventWebSocketClosed) {
+	if ev == nil {
+		return
+	}
 	c := w.lookupConn(ev.RequestID)
 	if c == nil {
 		return
@@ -249,43 +258,49 @@ func (w *WebSocket) HandleClosed(ev *network.EventWebSocketClosed) {
 	c.mu.Unlock()
 }
 
-// Connections returns a snapshot of all retained connections, sorted by
-// creation order (oldest first). Each connection is snapshotted under its
-// own mutex so the global lock is held only long enough to gather the
-// connection pointer list.
-func (w *WebSocket) Connections() []WSConnection {
+func (w *WebSocket) snapshotConns() []*wsConnState {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	conns := make([]*wsConnState, 0, len(w.order))
 	for _, id := range w.order {
 		if c, ok := w.conns[id]; ok {
 			conns = append(conns, c)
 		}
 	}
-	w.mu.Unlock()
+	return conns
+}
 
+// Connections returns a snapshot of all retained connections, sorted by
+// creation order (oldest first). Each connection is snapshotted under its
+// own mutex so the global lock is held only long enough to gather the
+// connection pointer list.
+func (w *WebSocket) Connections() []WSConnection {
+	conns := w.snapshotConns()
 	out := make([]WSConnection, 0, len(conns))
 	for _, c := range conns {
 		c.mu.Lock()
 		snap := *c.info
-		snap.RequestHeaders = cloneStringMap(c.info.RequestHeaders)
-		snap.ResponseHeaders = cloneStringMap(c.info.ResponseHeaders)
+		snap.RequestHeaders = maps.Clone(c.info.RequestHeaders)
+		snap.ResponseHeaders = maps.Clone(c.info.ResponseHeaders)
 		c.mu.Unlock()
 		out = append(out, snap)
 	}
 	return out
 }
 
-// cloneStringMap returns a shallow copy of a string-to-string map, or nil
-// if the input is empty/nil.
-func cloneStringMap(m map[string]string) map[string]string {
-	if len(m) == 0 {
-		return nil
+// CountCreatedSince returns the number of retained WebSocket connections whose
+// StartTime is at or after t.
+func (w *WebSocket) CountCreatedSince(t time.Time) int {
+	conns := w.snapshotConns()
+	count := 0
+	for _, c := range conns {
+		c.mu.Lock()
+		if !c.info.StartTime.Before(t) {
+			count++
+		}
+		c.mu.Unlock()
 	}
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
+	return count
 }
 
 // Frames returns frames for a connection in the given direction. peek=true
@@ -306,7 +321,7 @@ func (w *WebSocket) Frames(reqID string, dir WSDirection, limit int, peek bool) 
 		return nil, false
 	}
 	if peek {
-		return applyLimit(rb.Peek(nil), limit), true
+		return rb.Peek(nil, limit), true
 	}
 	return rb.Drain(nil, limit), true
 }
@@ -316,18 +331,39 @@ func (w *WebSocket) Clear() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.conns = make(map[network.RequestID]*wsConnState)
+	clear(w.order)
 	w.order = w.order[:0]
 }
 
-// evictIfFullLocked drops the oldest connection when the cap is reached.
-// Caller holds w.mu.
+// evictIfFullLocked drops one connection when the cap is reached, preferring
+// the oldest closed connection so long-lived open sockets are not evicted
+// ahead of short-lived closed ones. Falls back to the oldest open connection
+// if all retained connections are still open.
+// Caller holds w.mu (lock order: w.mu -> c.mu).
 func (w *WebSocket) evictIfFullLocked() {
 	if len(w.order) < w.maxConns {
 		return
 	}
-	oldest := w.order[0]
-	w.order = w.order[1:]
-	delete(w.conns, oldest)
+	evictIdx := 0
+	for i, id := range w.order {
+		c := w.conns[id]
+		if c == nil {
+			evictIdx = i
+			break
+		}
+		c.mu.Lock()
+		closed := c.info.Closed
+		c.mu.Unlock()
+		if closed {
+			evictIdx = i
+			break
+		}
+	}
+	victim := w.order[evictIdx]
+	copy(w.order[evictIdx:], w.order[evictIdx+1:])
+	w.order[len(w.order)-1] = ""
+	w.order = w.order[:len(w.order)-1]
+	delete(w.conns, victim)
 }
 
 // buildFrame converts a CDP WebSocketFrame to our internal WSFrame,
@@ -340,12 +376,15 @@ func (w *WebSocket) buildFrame(f *network.WebSocketFrame, dir WSDirection, ts ti
 		Time:      ts,
 	}
 	// CDP contract: opcode 1 means text payload (UTF-8); any other opcode
-	// means binary. cdproto decodes wire base64 into raw bytes for non-text
-	// frames during JSON unmarshaling.
+	// means binary/control. cdproto decodes wire base64 into raw bytes for
+	// non-text frames during JSON unmarshaling.
 	if int(f.Opcode) == 1 {
-		payload, truncated := truncateText(string(f.PayloadData), w.maxPayload)
+		payload, truncated := TruncateUTF8(string(f.PayloadData), w.maxPayload)
 		frame.Payload = payload
 		frame.PayloadTruncated = truncated
+		return frame
+	}
+	if len(f.PayloadData) == 0 {
 		return frame
 	}
 	payload, truncated := encodeBinaryPayload(f.PayloadData, w.maxPayload)
@@ -353,19 +392,6 @@ func (w *WebSocket) buildFrame(f *network.WebSocketFrame, dir WSDirection, ts ti
 	frame.PayloadBase64 = true
 	frame.PayloadTruncated = truncated
 	return frame
-}
-
-// truncateText caps a UTF-8 string at maxBytes, trimming back to the last
-// valid rune boundary if the cap lands mid-codepoint.
-func truncateText(s string, maxBytes int) (string, bool) {
-	if len(s) <= maxBytes {
-		return s, false
-	}
-	out := s[:maxBytes]
-	for len(out) > 0 && !utf8.ValidString(out) {
-		out = out[:len(out)-1]
-	}
-	return out, true
 }
 
 // encodeBinaryPayload caps raw binary frame bytes at maxBytes and returns

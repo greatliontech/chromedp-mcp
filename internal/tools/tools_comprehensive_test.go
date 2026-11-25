@@ -832,14 +832,22 @@ func TestConsoleLogsLimitWithFilter(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
+	// Emit a second warning so limit=1 must actually truncate >1 matching entries.
+	callTool[any](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `console.warn("second warning")`,
+	})
+
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
-		"level": "warning",
+		"level": "warn",
 		"limit": 1,
 	})
-	if len(out.Logs) > 1 {
-		t.Errorf("limit=1 with level filter returned %d logs, want <= 1", len(out.Logs))
+	if len(out.Logs) != 1 {
+		t.Errorf("limit=1 with level filter returned %d logs, want 1", len(out.Logs))
+	} else if out.Logs[0].Level != "warn" {
+		t.Errorf("log level = %q, want %q", out.Logs[0].Level, "warn")
 	}
 }
 
@@ -857,13 +865,20 @@ func TestConsoleLogSourceField(t *testing.T) {
 		"mode": "peek",
 	})
 	if len(out.Logs) == 0 {
-		t.Skip("no console logs captured")
+		t.Fatal("expected console logs from index.html")
 	}
-	// Verify each log entry has the expected fields populated.
+	wantPrefix := harness.httpSrv.URL + "/:"
+	hasSource := false
 	for _, log := range out.Logs {
 		if log.Level == "" {
 			t.Error("log entry has empty level")
 		}
+		if strings.HasPrefix(log.Source, wantPrefix) {
+			hasSource = true
+		}
+	}
+	if !hasSource {
+		t.Errorf("expected at least one console log with source prefix %q, got %+v", wantPrefix, out.Logs)
 	}
 }
 

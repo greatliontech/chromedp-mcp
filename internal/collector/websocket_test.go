@@ -437,3 +437,66 @@ func TestWSConcurrentHandlers(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestWSEvictionPrefersClosedOverOpen(t *testing.T) {
+	w := newWS(2, 10, 1024)
+	fireCreated(w, "ws-open", "wss://example.com/open")
+	ridClosed := fireCreated(w, "ws-closed", "wss://example.com/closed")
+	w.HandleClosed(&network.EventWebSocketClosed{
+		RequestID: ridClosed,
+		Timestamp: monoTime(time.Now()),
+	})
+
+	// Adding a third socket must evict ws-closed, preserving the older still-open ws-open.
+	fireCreated(w, "ws-new", "wss://example.com/new")
+
+	conns := w.Connections()
+	if len(conns) != 2 {
+		t.Fatalf("len = %d, want 2", len(conns))
+	}
+	if conns[0].ID != "ws-open" || conns[1].ID != "ws-new" {
+		t.Errorf("retained IDs = [%s, %s], want [ws-open, ws-new]", conns[0].ID, conns[1].ID)
+	}
+}
+
+func TestWSEmptyControlFrameCountCreatedSinceAndNilGuards(t *testing.T) {
+	w := newWS(10, 10, 1024)
+
+	// Nil guards must not panic.
+	w.HandleCreated(nil)
+	w.HandleCreated(&network.EventWebSocketCreated{RequestID: ""})
+	w.HandleHandshakeRequest(nil)
+	w.HandleHandshakeRequest(&network.EventWebSocketWillSendHandshakeRequest{})
+	w.HandleHandshakeResponse(nil)
+	w.HandleHandshakeResponse(&network.EventWebSocketHandshakeResponseReceived{})
+	w.HandleFrameSent(nil)
+	w.HandleFrameSent(&network.EventWebSocketFrameSent{})
+	w.HandleFrameReceived(nil)
+	w.HandleFrameReceived(&network.EventWebSocketFrameReceived{})
+	w.HandleFrameError(nil)
+	w.HandleClosed(nil)
+
+	before := time.Now()
+	rid := fireCreated(w, "ws-ctrl", "wss://example.com/ctrl")
+	// Opcode 9 (ping) with empty payload must NOT set PayloadBase64.
+	w.HandleFrameReceived(&network.EventWebSocketFrameReceived{
+		RequestID: rid,
+		Timestamp: monoTime(time.Now()),
+		Response:  &network.WebSocketFrame{Opcode: 9, PayloadData: nil},
+	})
+
+	frames, ok := w.Frames("ws-ctrl", WSDirectionReceived, 0, true)
+	if !ok || len(frames) != 1 {
+		t.Fatalf("frames = %+v (ok=%v), want 1", frames, ok)
+	}
+	if frames[0].PayloadBase64 || frames[0].Payload != "" || frames[0].Opcode != 9 {
+		t.Errorf("empty control frame = %+v, want PayloadBase64=false, empty Payload, Opcode=9", frames[0])
+	}
+
+	if got := w.CountCreatedSince(before); got != 1 {
+		t.Errorf("CountCreatedSince(before) = %d, want 1", got)
+	}
+	if got := w.CountCreatedSince(time.Now().Add(time.Hour)); got != 0 {
+		t.Errorf("CountCreatedSince(future) = %d, want 0", got)
+	}
+}

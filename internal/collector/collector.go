@@ -1,7 +1,10 @@
 // Package collector provides a generic ring buffer for capturing CDP events.
 package collector
 
-import "sync"
+import (
+	"sync"
+	"unicode/utf8"
+)
 
 // RingBuffer is a bounded, thread-safe buffer that overwrites the oldest
 // entries when full. It supports drain (read+clear) and peek (read-only)
@@ -80,9 +83,9 @@ func (rb *RingBuffer[T]) Drain(filter func(T) bool, limit int) []T {
 	return taken
 }
 
-// Peek returns entries without clearing the buffer. The optional filter
-// function selects which entries to return.
-func (rb *RingBuffer[T]) Peek(filter func(T) bool) []T {
+// Peek returns up to limit entries without clearing the buffer. The optional
+// filter function selects which entries to return. limit <= 0 means no limit.
+func (rb *RingBuffer[T]) Peek(filter func(T) bool, limit int) []T {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	if len(rb.entries) == 0 {
@@ -93,19 +96,28 @@ func (rb *RingBuffer[T]) Peek(filter func(T) bool) []T {
 		for _, e := range rb.entries {
 			if filter(e) {
 				result = append(result, e)
+				if limit > 0 && len(result) >= limit {
+					break
+				}
 			}
 		}
 		return result
 	}
-	result := make([]T, len(rb.entries))
-	copy(result, rb.entries)
+	n := len(rb.entries)
+	if limit > 0 && n > limit {
+		n = limit
+	}
+	result := make([]T, n)
+	copy(result, rb.entries[:n])
 	return result
 }
 
-// Clear removes all entries from the buffer.
+// Clear removes all entries from the buffer and zeroes the backing slice so
+// referenced values can be garbage-collected immediately.
 func (rb *RingBuffer[T]) Clear() {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
+	clear(rb.entries)
 	rb.entries = rb.entries[:0]
 }
 
@@ -114,4 +126,47 @@ func (rb *RingBuffer[T]) Len() int {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	return len(rb.entries)
+}
+
+// TruncateUTF8Bytes caps a UTF-8 byte slice at maxBytes, trimming back any
+// partial multi-byte rune split across the boundary.
+func TruncateUTF8Bytes(b []byte, maxBytes int) ([]byte, bool) {
+	if maxBytes <= 0 {
+		return b[:0], len(b) > 0
+	}
+	if len(b) <= maxBytes {
+		return b, false
+	}
+	out := b[:maxBytes]
+	// Walk back at most 3 bytes to check if the cut landed inside a multi-byte rune.
+	for i := 1; i <= 3 && i <= len(out); i++ {
+		if utf8.RuneStart(out[len(out)-i]) {
+			if !utf8.FullRune(out[len(out)-i:]) {
+				out = out[:len(out)-i]
+			}
+			break
+		}
+	}
+	return out, true
+}
+
+// TruncateUTF8 caps a UTF-8 string at maxBytes, trimming back any partial
+// multi-byte rune split across the boundary.
+func TruncateUTF8(s string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 {
+		return "", len(s) > 0
+	}
+	if len(s) <= maxBytes {
+		return s, false
+	}
+	out := s[:maxBytes]
+	for i := 1; i <= 3 && i <= len(out); i++ {
+		if utf8.RuneStart(out[len(out)-i]) {
+			if !utf8.FullRuneInString(out[len(out)-i:]) {
+				out = out[:len(out)-i]
+			}
+			break
+		}
+	}
+	return out, true
 }

@@ -33,7 +33,7 @@ func TestRingBufferOverflowExact(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		buf.Add(i)
 	}
-	entries := buf.Peek(nil)
+	entries := buf.Peek(nil, 0)
 	if len(entries) != 5 {
 		t.Fatalf("peek returned %d, want 5", len(entries))
 	}
@@ -49,7 +49,7 @@ func TestRingBufferOverflowOnePastCapacity(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		buf.Add(i)
 	}
-	entries := buf.Peek(nil)
+	entries := buf.Peek(nil, 0)
 	if len(entries) != 5 {
 		t.Fatalf("len = %d, want 5", len(entries))
 	}
@@ -80,7 +80,7 @@ func TestRingBufferDrainWithFilter(t *testing.T) {
 	if buf.Len() != 5 {
 		t.Errorf("after selective drain, len = %d, want 5", buf.Len())
 	}
-	remaining := buf.Peek(nil)
+	remaining := buf.Peek(nil, 0)
 	for _, v := range remaining {
 		if v%2 == 0 {
 			t.Errorf("retained value %d is even, expected only odds left", v)
@@ -135,7 +135,7 @@ func TestRingBufferPeekWithFilter(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		buf.Add(i)
 	}
-	odds := buf.Peek(func(v int) bool { return v%2 != 0 })
+	odds := buf.Peek(func(v int) bool { return v%2 != 0 }, 0)
 	if len(odds) != 5 {
 		t.Fatalf("filtered peek returned %d, want 5", len(odds))
 	}
@@ -168,7 +168,7 @@ func TestRingBufferEmptyDrainReturnsNil(t *testing.T) {
 
 func TestRingBufferEmptyPeekReturnsNil(t *testing.T) {
 	buf := NewRingBuffer[int](5)
-	if result := buf.Peek(nil); result != nil {
+	if result := buf.Peek(nil, 0); result != nil {
 		t.Errorf("peek on new buffer = %v, want nil", result)
 	}
 }
@@ -231,7 +231,7 @@ func TestRingBufferConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				_ = buf.Peek(nil)
+				_ = buf.Peek(nil, 0)
 				_ = buf.Len()
 			}
 		}()
@@ -287,11 +287,80 @@ func TestRingBufferDrainThenAdd(t *testing.T) {
 	buf.Drain(nil, 0)
 	buf.Add(3)
 	buf.Add(4)
-	entries := buf.Peek(nil)
+	entries := buf.Peek(nil, 0)
 	if len(entries) != 2 {
 		t.Fatalf("after drain+add, len = %d, want 2", len(entries))
 	}
 	if entries[0] != 3 || entries[1] != 4 {
 		t.Errorf("entries = %v, want [3, 4]", entries)
+	}
+}
+
+func TestRingBufferPeekLimitAndClearZeroing(t *testing.T) {
+	buf := NewRingBuffer[string](5)
+	for _, s := range []string{"a1", "b1", "a2", "a3", "b2"} {
+		buf.Add(s)
+	}
+
+	if got := buf.Peek(nil, 2); len(got) != 2 || got[0] != "a1" || got[1] != "b1" {
+		t.Errorf("Peek(nil, 2) = %v, want [a1 b1]", got)
+	}
+	isA := func(s string) bool { return len(s) > 0 && s[0] == 'a' }
+	if got := buf.Peek(isA, 2); len(got) != 2 || got[0] != "a1" || got[1] != "a2" {
+		t.Errorf("Peek(isA, 2) = %v, want [a1 a2]", got)
+	}
+	if buf.Len() != 5 {
+		t.Errorf("Peek mutated buffer len = %d, want 5", buf.Len())
+	}
+
+	// Clear must zero backing array slots so referenced values can be GC'd.
+	buf.Clear()
+	backing := buf.entries[:cap(buf.entries)]
+	for i, s := range backing {
+		if s != "" {
+			t.Errorf("backing[%d] = %q after Clear, want empty zero value", i, s)
+		}
+	}
+}
+
+func TestTruncateUTF8AndBytes(t *testing.T) {
+	cases := []struct {
+		name     string
+		in       string
+		maxBytes int
+		want     string
+		wantCut  bool
+	}{
+		{"fits_exact", "abc", 3, "abc", false},
+		{"fits_under", "abc", 10, "abc", false},
+		{"zero_max_nonempty", "abc", 0, "", true},
+		{"zero_max_empty", "", 0, "", false},
+		{"negative_max", "abc", -1, "", true},
+		{"ascii_cut", "abcdef", 4, "abcd", true},
+		// 2-byte UTF-8: 'é' = 0xC3 0xA9
+		{"2byte_mid", "aé", 2, "a", true},
+		{"2byte_exact", "aé", 3, "aé", false},
+		// 3-byte UTF-8: '€' = 0xE2 0x82 0xAC
+		{"3byte_cut_1", "€x", 1, "", true},
+		{"3byte_cut_2", "€x", 2, "", true},
+		{"3byte_exact", "€x", 3, "€", true},
+		// 4-byte UTF-8: '😀' = 0xF0 0x9F 0x98 0x80
+		{"4byte_cut_1", "😀z", 1, "", true},
+		{"4byte_cut_2", "😀z", 2, "", true},
+		{"4byte_cut_3", "😀z", 3, "", true},
+		{"4byte_exact", "😀z", 4, "😀", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotS, cutS := TruncateUTF8(tc.in, tc.maxBytes)
+			if gotS != tc.want || cutS != tc.wantCut {
+				t.Errorf("TruncateUTF8(%q, %d) = (%q, %v), want (%q, %v)", tc.in, tc.maxBytes, gotS, cutS, tc.want, tc.wantCut)
+			}
+			gotB, cutB := TruncateUTF8Bytes([]byte(tc.in), tc.maxBytes)
+			if string(gotB) != tc.want || cutB != tc.wantCut {
+				t.Errorf("TruncateUTF8Bytes(%q, %d) = (%q, %v), want (%q, %v)", tc.in, tc.maxBytes, gotB, cutB, tc.want, tc.wantCut)
+			}
+		})
 	}
 }

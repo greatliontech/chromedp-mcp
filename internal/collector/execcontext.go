@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"cmp"
 	"encoding/json"
 	"maps"
 	"slices"
@@ -21,6 +22,9 @@ type ExecContext struct {
 	FrameID string
 	// IsMain is true for the top-level frame's context.
 	IsMain bool
+	// seq records creation order so Snapshot returns deterministic order
+	// (oldest first, newest last) even when overlapping contexts briefly coexist.
+	seq uint64
 }
 
 // ExecContexts tracks the main-world execution context of every frame in
@@ -38,6 +42,8 @@ type ExecContext struct {
 // them.
 type ExecContexts struct {
 	mu sync.Mutex
+	// nextSeq assigns monotonic creation order to ExecContext entries.
+	nextSeq uint64
 	// byUnique is keyed by ExecContext.UniqueID.
 	byUnique map[string]ExecContext
 	// frames is every frame we know exists, whether or not we hold an
@@ -122,14 +128,16 @@ func (e *ExecContexts) HandleExecutionContextCreated(ev *runtime.EventExecutionC
 			return
 		}
 	}
-	if !aux.IsDefault {
+	if !aux.IsDefault || aux.FrameID == "" {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.nextSeq++
 	e.byUnique[ev.Context.UniqueID] = ExecContext{
 		UniqueID: ev.Context.UniqueID,
 		FrameID:  aux.FrameID,
+		seq:      e.nextSeq,
 	}
 }
 
@@ -180,7 +188,7 @@ func (e *ExecContexts) HandleExecutionContextsCleared() {
 //     about from a frameAttached — so the set is restored from the stash
 //     instead of rebuilt.
 func (e *ExecContexts) HandleFrameNavigated(ev *page.EventFrameNavigated) {
-	if ev == nil || ev.Frame == nil {
+	if ev == nil || ev.Frame == nil || ev.Frame.ID == "" {
 		return
 	}
 	e.mu.Lock()
@@ -253,7 +261,9 @@ func (e *ExecContexts) stashLocked(loaderID string, frames map[string]struct{}, 
 
 	for len(e.retainedOrder) > maxRetainedFrameSets {
 		oldest := e.retainedOrder[0]
-		e.retainedOrder = e.retainedOrder[1:]
+		copy(e.retainedOrder, e.retainedOrder[1:])
+		e.retainedOrder[len(e.retainedOrder)-1] = ""
+		e.retainedOrder = e.retainedOrder[:len(e.retainedOrder)-1]
 		delete(e.retained, oldest)
 	}
 }
@@ -302,14 +312,24 @@ func (e *ExecContexts) HandleFrameDetached(ev *page.EventFrameDetached) {
 // This is a seed, not a source of truth for the frame set: getFrameTree
 // does NOT list out-of-process iframes. Those are learned only from the
 // frameAttached event stream.
-func (e *ExecContexts) SeedFrameTree(mainFrameID string, frameIDs []string) {
+func (e *ExecContexts) SeedFrameTree(mainFrameID, loaderID string, frameIDs []string) {
+	if mainFrameID == "" {
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if mainFrameID != "" {
-		e.mainFrameID = mainFrameID
+	// No-op if a navigation already established the current document's frame
+	// set; otherwise a stale getFrameTree snapshot would inject departed
+	// child frames into the newer document and permanently inflate unobservedFrames.
+	if e.mainFrameID != "" || e.currentLoaderID != "" {
+		return
 	}
+	e.mainFrameID = mainFrameID
+	e.currentLoaderID = loaderID
 	for _, id := range frameIDs {
-		e.frames[id] = struct{}{}
+		if id != "" {
+			e.frames[id] = struct{}{}
+		}
 	}
 }
 
@@ -340,6 +360,9 @@ func (e *ExecContexts) Snapshot() (contexts []ExecContext, unobservedFrames int)
 		contexts = append(contexts, c)
 		withContext[c.FrameID] = struct{}{}
 	}
+	slices.SortFunc(contexts, func(a, b ExecContext) int {
+		return cmp.Compare(a.seq, b.seq)
+	})
 
 	for id := range e.frames {
 		if _, ok := withContext[id]; !ok {

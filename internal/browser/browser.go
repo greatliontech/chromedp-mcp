@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/remote"
 
@@ -109,12 +111,18 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Force-start the browser by running a no-op. chromedp creates the
-	// browser process lazily on the first Run call.
+	// browser process lazily on the first Do call.
 	if err := startBrowserContext(startupCtx, allocCancel, browserCtx, browserCancel); err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 
-	return newBrowser(id, ModeLaunch, allocCancel, browserCtx, browserCancel, opts.DownloadDir), nil
+	b, err := newBrowser(startupCtx, id, ModeLaunch, allocCancel, browserCtx, browserCancel, opts.DownloadDir)
+	if err != nil {
+		browserCancel()
+		allocCancel()
+		return nil, fmt.Errorf("launch browser: %w", err)
+	}
+	return b, nil
 }
 
 // ConnectOptions configures a connected browser.
@@ -159,7 +167,13 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 		rawAllocCancel()
 		waitAlloc()
 	}
-	return newBrowser(id, ModeConnect, allocCancel, browserCtx, browserCancel, opts.DownloadDir), nil
+	b, err := newBrowser(startupCtx, id, ModeConnect, allocCancel, browserCtx, browserCancel, opts.DownloadDir)
+	if err != nil {
+		browserCancel()
+		allocCancel()
+		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
+	}
+	return b, nil
 }
 
 // startBrowserContext forces chromedp to allocate/connect browserCtx while
@@ -193,26 +207,59 @@ func startBrowserContext(
 }
 
 func newBrowser(
+	startupCtx context.Context,
 	id string,
 	mode Mode,
 	allocCancel context.CancelFunc,
 	browserCtx context.Context,
 	browserCancel context.CancelFunc,
 	downloadDir string,
-) *Browser {
+) (*Browser, error) {
 	dl := collector.NewDownload(DefaultDownloadBuffer, downloadDir)
+	if downloadDir != "" {
+		if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create download dir %q: %w", downloadDir, err)
+		}
+		// Configure download handling once at the browser CDP session level
+		// rather than per-tab so multi-tab browsers emit each download event
+		// once instead of once per open tab.
+		if err := chromedp.ListenBrowser(browserCtx, func(ev any) {
+			switch ev := ev.(type) {
+			case *cdpbrowser.EventDownloadWillBegin:
+				dl.HandleDownloadWillBegin(ev)
+			case *cdpbrowser.EventDownloadProgress:
+				dl.HandleDownloadProgress(ev)
+			}
+		}); err != nil {
+			return nil, fmt.Errorf("listen browser downloads: %w", err)
+		}
+		dlCtx, dlCancel := context.WithCancelCause(browserCtx)
+		stop := context.AfterFunc(startupCtx, func() {
+			dlCancel(context.Cause(startupCtx))
+		})
+		_, err := chromedp.CallBrowser(dlCtx, cdpbrowser.SetDownloadBehavior, cdpbrowser.SetDownloadBehaviorParams{
+			Behavior:      cdpbrowser.SetDownloadBehaviorBehaviorAllowAndName,
+			DownloadPath:  downloadDir,
+			EventsEnabled: new(true),
+		})
+		stopped := stop()
+		dlCancel(nil)
+		if err != nil || !stopped {
+			if err == nil {
+				err = context.Cause(startupCtx)
+			}
+			return nil, fmt.Errorf("configure download behavior: %w", err)
+		}
+	}
 	return &Browser{
 		ID:            id,
 		Mode:          mode,
 		allocCancel:   allocCancel,
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
-		Tabs: tab.NewManager(browserCtx, &tab.TabOptions{
-			Downloads:   dl,
-			DownloadDir: downloadDir,
-		}),
-		Downloads: dl,
-	}
+		Tabs:          tab.NewManager(browserCtx),
+		Downloads:     dl,
+	}, nil
 }
 
 // resolveDebuggerURL converts an HTTP(S) or base WebSocket Chrome remote

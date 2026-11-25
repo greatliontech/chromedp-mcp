@@ -45,11 +45,26 @@ func NewURLChanges(maxSize int) *URLChanges {
 	}
 }
 
+// Seed establishes the initial top-frame ID and URL baseline before any
+// navigation event arrives (e.g. from Page.getFrameTree on tab init).
+// No-op if a baseline has already been set.
+func (u *URLChanges) Seed(mainID cdp.FrameID, url string) {
+	if mainID == "" {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.mainID == "" {
+		u.mainID = mainID
+		u.lastURL = url
+	}
+}
+
 // HandleFrameNavigated records cross-document navigations of the top frame.
 // Subframe navigations are ignored. The first navigation establishes the
 // "last URL" baseline without producing an entry — only transitions emit.
 func (u *URLChanges) HandleFrameNavigated(ev *page.EventFrameNavigated) {
-	if ev.Frame == nil || ev.Frame.ParentID != "" {
+	if ev == nil || ev.Frame == nil || ev.Frame.ID == "" || ev.Frame.ParentID != "" {
 		return
 	}
 	u.mu.Lock()
@@ -63,7 +78,7 @@ func (u *URLChanges) HandleFrameNavigated(ev *page.EventFrameNavigated) {
 		u.mainID = ev.Frame.ID
 	}
 	from := u.lastURL
-	to := ev.Frame.URL
+	to := ev.Frame.URL + ev.Frame.URLFragment
 	u.lastURL = to
 	if from == "" || from == to {
 		return
@@ -78,11 +93,13 @@ func (u *URLChanges) HandleFrameNavigated(ev *page.EventFrameNavigated) {
 
 // HandleNavigatedWithinDocument records same-document URL changes
 // (History API: pushState, replaceState, popstate). Drops events that
-// arrive before the main frame's first frameNavigated has established
-// the baseline — without this guard a subframe pushState fired before
-// the main frame was registered would be incorrectly recorded as a
-// top-frame URL change and pollute lastURL.
+// arrive before the main frame's baseline has been established — without
+// this guard a subframe pushState fired before the main frame was registered
+// would be incorrectly recorded as a top-frame URL change and pollute lastURL.
 func (u *URLChanges) HandleNavigatedWithinDocument(ev *page.EventNavigatedWithinDocument) {
+	if ev == nil {
+		return
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.mainID == "" {
@@ -110,7 +127,7 @@ func (u *URLChanges) HandleNavigatedWithinDocument(ev *page.EventNavigatedWithin
 
 // CountSince returns the number of URL changes recorded at or after t.
 func (u *URLChanges) CountSince(t time.Time) int {
-	entries := u.buf.Peek(nil)
+	entries := u.buf.Peek(nil, 0)
 	n := 0
 	for _, e := range entries {
 		if !e.Timestamp.Before(t) {

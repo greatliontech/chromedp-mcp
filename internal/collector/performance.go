@@ -8,9 +8,10 @@ import (
 
 // LayoutShiftEntry represents a captured layout shift event.
 type LayoutShiftEntry struct {
-	Value     float64             `json:"value"`
-	Sources   []LayoutShiftSource `json:"sources,omitempty"`
-	Timestamp time.Time           `json:"timestamp"`
+	Value          float64             `json:"value"`
+	HadRecentInput bool                `json:"had_recent_input,omitempty"`
+	Sources        []LayoutShiftSource `json:"sources,omitempty"`
+	Timestamp      time.Time           `json:"timestamp"`
 }
 
 // LayoutShiftSource identifies the element that shifted.
@@ -45,6 +46,9 @@ func NewPerformance(maxLayoutShifts, maxLCP int) *Performance {
 
 // HandleTimelineEvent processes a performancetimeline.EventTimelineEventAdded event.
 func (p *Performance) HandleTimelineEvent(ev *performancetimeline.EventTimelineEventAdded) {
+	if ev == nil || ev.Event == nil {
+		return
+	}
 	entry := ev.Event
 
 	switch entry.Type {
@@ -54,7 +58,11 @@ func (p *Performance) HandleTimelineEvent(ev *performancetimeline.EventTimelineE
 		}
 		if entry.LayoutShiftDetails != nil {
 			ls.Value = entry.LayoutShiftDetails.Value
+			ls.HadRecentInput = entry.LayoutShiftDetails.HadRecentInput
 			for _, src := range entry.LayoutShiftDetails.Sources {
+				if src == nil {
+					continue
+				}
 				lss := LayoutShiftSource{}
 				if src.NodeID > 0 {
 					lss.NodeID = int64(src.NodeID)
@@ -100,10 +108,10 @@ func (p *Performance) DrainLayoutShifts(limit int) []LayoutShiftEntry {
 	return p.layoutShifts.Drain(nil, limit)
 }
 
-// PeekLayoutShifts returns layout shift entries without clearing the buffer.
+// PeekLayoutShifts returns up to limit layout shift entries without clearing
+// the buffer.
 func (p *Performance) PeekLayoutShifts(limit int) []LayoutShiftEntry {
-	entries := p.layoutShifts.Peek(nil)
-	return applyLimit(entries, limit)
+	return p.layoutShifts.Peek(nil, limit)
 }
 
 // DrainLCP returns up to limit LCP entries, removing only the returned
@@ -112,10 +120,9 @@ func (p *Performance) DrainLCP(limit int) []LCPEntry {
 	return p.lcpEntries.Drain(nil, limit)
 }
 
-// PeekLCP returns LCP entries without clearing the buffer.
+// PeekLCP returns up to limit LCP entries without clearing the buffer.
 func (p *Performance) PeekLCP(limit int) []LCPEntry {
-	entries := p.lcpEntries.Peek(nil)
-	return applyLimit(entries, limit)
+	return p.lcpEntries.Peek(nil, limit)
 }
 
 // Clear removes all entries from both buffers.

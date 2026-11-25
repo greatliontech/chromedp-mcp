@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestNewTabAndGet(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	tab, err := mgr.NewTab(context.Background())
@@ -65,7 +65,7 @@ func TestNewTabAndGet(t *testing.T) {
 }
 
 func TestActive(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	// No tabs — Active should return nil.
@@ -99,7 +99,7 @@ func TestActive(t *testing.T) {
 }
 
 func TestGetNotFound(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	_, err := mgr.Get("nonexistent")
@@ -109,7 +109,7 @@ func TestGetNotFound(t *testing.T) {
 }
 
 func TestActivateAndMRU(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	t1, err := mgr.NewTab(context.Background())
@@ -147,7 +147,7 @@ func TestActivateAndMRU(t *testing.T) {
 }
 
 func TestActivateNotFound(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	err := mgr.Activate("nonexistent")
@@ -157,7 +157,7 @@ func TestActivateNotFound(t *testing.T) {
 }
 
 func TestCloseNotFound(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	err := mgr.Close("nonexistent")
@@ -167,7 +167,7 @@ func TestCloseNotFound(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	t1, err := mgr.NewTab(context.Background())
@@ -199,7 +199,7 @@ func TestList(t *testing.T) {
 }
 
 func TestLen(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	if mgr.Len() != 0 {
@@ -224,7 +224,7 @@ func TestLen(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	// Resolve with no tabs should fail.
@@ -268,7 +268,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestCloseAll(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 
 	for i := 0; i < 3; i++ {
 		if _, err := mgr.NewTab(context.Background()); err != nil {
@@ -295,7 +295,7 @@ func TestCloseAll(t *testing.T) {
 }
 
 func TestMRUOrder(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	t1, err := mgr.NewTab(context.Background())
@@ -334,7 +334,7 @@ func TestMRUOrder(t *testing.T) {
 }
 
 func TestConcurrentOps(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	const numTabs = 5
@@ -387,7 +387,7 @@ func TestConcurrentOps(t *testing.T) {
 }
 
 func TestTabURL(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	tab, err := mgr.NewTab(context.Background())
@@ -406,7 +406,7 @@ func TestTabURL(t *testing.T) {
 }
 
 func TestTabTitle(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	tab, err := mgr.NewTab(context.Background())
@@ -426,7 +426,7 @@ func TestTabTitle(t *testing.T) {
 }
 
 func TestTabNewCancelledStartupContext(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -441,7 +441,7 @@ func TestTabNewCancelledStartupContext(t *testing.T) {
 }
 
 func TestTabInfoDoesNotHangOnJSDialog(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	tb, err := mgr.NewTab(context.Background())
@@ -492,7 +492,7 @@ func TestTabInfoDoesNotHangOnJSDialog(t *testing.T) {
 }
 
 func TestListPropagatesCancelledContext(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -512,7 +512,7 @@ func TestListPropagatesCancelledContext(t *testing.T) {
 }
 
 func TestNewTabConcurrentCloseAll(t *testing.T) {
-	mgr := NewManager(browserCtx, nil)
+	mgr := NewManager(browserCtx)
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)

@@ -579,15 +579,15 @@ func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 	}
 	var nonWarning int
 	for _, l := range all.Logs {
-		if l.Level != "warning" {
+		if l.Level != "warn" {
 			nonWarning++
 		}
 	}
 
-	// Drain only "warning" level.
+	// Drain only "warn" level.
 	_ = callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
-		"level": "warning",
+		"level": "warn",
 		"mode":  "drain",
 	})
 
@@ -597,11 +597,11 @@ func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 		"mode": "peek",
 	})
 	if len(out2.Logs) != nonWarning {
-		t.Errorf("after drain with level=warning, remaining = %d, want %d (non-warning entries retained)",
+		t.Errorf("after drain with level=warn, remaining = %d, want %d (non-warning entries retained)",
 			len(out2.Logs), nonWarning)
 	}
 	for _, l := range out2.Logs {
-		if l.Level == "warning" {
+		if l.Level == "warn" {
 			t.Errorf("warning entry %q survived drain; selective drain should have removed it", l.Text)
 		}
 	}

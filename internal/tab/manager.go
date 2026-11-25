@@ -19,16 +19,13 @@ type Manager struct {
 	order     []string // MRU order (most recent last; tail is active)
 	closed    bool
 	parentCtx context.Context
-	tabOpts   *TabOptions
 }
 
 // NewManager creates a tab manager for tabs within the given browser context.
-// The optional TabOptions are applied to every new tab created by this manager.
-func NewManager(parentCtx context.Context, opts *TabOptions) *Manager {
+func NewManager(parentCtx context.Context) *Manager {
 	return &Manager{
 		tabs:      make(map[string]*Tab),
 		parentCtx: parentCtx,
-		tabOpts:   opts,
 	}
 }
 
@@ -43,7 +40,7 @@ func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
 		return nil, fmt.Errorf("tab manager is closed")
 	}
 
-	t, err := New(m.parentCtx, ctx, "", m.tabOpts)
+	t, err := New(m.parentCtx, ctx, "")
 	if err != nil {
 		return nil, err
 	}

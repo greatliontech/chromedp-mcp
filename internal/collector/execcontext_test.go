@@ -234,7 +234,7 @@ func TestExecContextsObservedFrameIsNotUnobserved(t *testing.T) {
 // count on that tab reports "unavailable" forever.
 func TestExecContextsSeedFrameTree(t *testing.T) {
 	e := NewExecContexts()
-	e.SeedFrameTree("top", []string{"top", "child"})
+	e.SeedFrameTree("top", "loader-init", []string{"top", "child"})
 	e.HandleExecutionContextCreated(created("u-top", "top", true))
 
 	contexts, unobserved := e.Snapshot()
@@ -457,5 +457,75 @@ func TestExecContextsUnknownFrameSetNotLaunderedByStash(t *testing.T) {
 
 	if _, unobserved := e.Snapshot(); unobserved == 0 {
 		t.Error("unobservedFrames = 0 after restoring a document whose stashed frame set was itself never fully enumerated — the stash laundered an admitted-unknown set into a confident, complete one, so the DOM count now presents itself as covering frames it may never have seen")
+	}
+}
+
+func TestExecContextsRejectsEmptyFrameIDDeterministicOrderAndSeedLoaderID(t *testing.T) {
+	e := NewExecContexts()
+
+	// Nil guards must not panic.
+	e.HandleExecutionContextCreated(nil)
+	e.HandleExecutionContextCreated(&runtime.EventExecutionContextCreated{})
+	e.HandleExecutionContextDestroyed(nil)
+	e.HandleFrameNavigated(nil)
+	e.HandleFrameNavigated(&page.EventFrameNavigated{})
+	e.HandleFrameAttached(nil)
+	e.HandleFrameDetached(nil)
+
+	// isDefault=true with empty frameId must be rejected.
+	e.HandleExecutionContextCreated(created("u-no-frame", "", true))
+	if ctxs, _ := e.Snapshot(); len(ctxs) != 0 {
+		t.Fatalf("empty frameId context was retained: %+v", ctxs)
+	}
+
+	// SeedFrameTree with loaderID enables bfcache stash/restore of the initial document.
+	e.SeedFrameTree("top", "loader-init", []string{"top", "child-oopif"})
+	e.HandleExecutionContextCreated(created("u-first", "top", true))
+	e.HandleExecutionContextCreated(created("u-second", "top", true))
+
+	// Snapshot must return overlapping contexts in deterministic creation order.
+	for i := 0; i < 20; i++ {
+		ctxs, unobserved := e.Snapshot()
+		if len(ctxs) != 2 || ctxs[0].UniqueID != "u-first" || ctxs[1].UniqueID != "u-second" {
+			t.Fatalf("Snapshot order = %+v, want [u-first, u-second]", ctxs)
+		}
+		if unobserved != 1 {
+			t.Fatalf("unobserved = %d, want 1 (child-oopif)", unobserved)
+		}
+	}
+
+	// Navigate away to loader-2, then bfcache-restore loader-init: child-oopif must be remembered.
+	e.HandleExecutionContextsCleared()
+	e.HandleFrameNavigated(navigatedTyped("top", "", "loader-2", page.NavigationTypeNavigation))
+	e.HandleExecutionContextCreated(created("u-2", "top", true))
+	if _, unobserved := e.Snapshot(); unobserved != 0 {
+		t.Fatalf("on loader-2, unobserved = %d, want 0", unobserved)
+	}
+
+	e.HandleExecutionContextsCleared()
+	e.HandleExecutionContextCreated(created("u-restored", "top", true))
+	e.HandleFrameNavigated(navigatedTyped("top", "", "loader-init", page.NavigationTypeBackForwardCacheRestore))
+	if _, unobserved := e.Snapshot(); unobserved != 1 {
+		t.Errorf("after bfcache restore of seeded loader-init, unobserved = %d, want 1", unobserved)
+	}
+}
+
+func TestExecContextsSeedFrameTreeNoOpAfterNavigationAndEmptyFrameIDRejected(t *testing.T) {
+	e := NewExecContexts()
+
+	// Empty Frame.ID on HandleFrameNavigated must be ignored.
+	e.HandleFrameNavigated(&page.EventFrameNavigated{Frame: &cdp.Frame{ID: ""}})
+	if _, unobserved := e.Snapshot(); unobserved != 0 {
+		t.Fatalf("empty Frame.ID polluted frames: unobserved = %d, want 0", unobserved)
+	}
+
+	// Simulate early navigation arriving before SeedFrameTree finishes.
+	e.HandleFrameNavigated(navigatedTyped("top", "", "loader-2", page.NavigationTypeNavigation))
+	e.HandleExecutionContextCreated(created("u-top", "top", true))
+
+	// Stale SeedFrameTree from loader-1 must NOT inject departed child frames into loader-2.
+	e.SeedFrameTree("top", "loader-1", []string{"top", "old-child"})
+	if _, unobserved := e.Snapshot(); unobserved != 0 {
+		t.Errorf("stale SeedFrameTree polluted newer document frames: unobserved = %d, want 0", unobserved)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,6 +453,17 @@ func TestLaunchValidationAndCancellation(t *testing.T) {
 			t.Fatalf("Launch with mid-flight %v timeout deadlocked", delay)
 		}
 		midCancel()
+	}
+
+	// Launching with a non-existent DownloadDir must create it automatically.
+	dlDir := filepath.Join(t.TempDir(), "nested", "downloads")
+	b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true, DownloadDir: dlDir})
+	if err != nil {
+		t.Fatalf("Launch with missing DownloadDir: %v", err)
+	}
+	defer mgr.Close(b.ID)
+	if fi, err := os.Stat(dlDir); err != nil || !fi.IsDir() {
+		t.Errorf("DownloadDir %q was not created: fi=%v err=%v", dlDir, fi, err)
 	}
 }
 

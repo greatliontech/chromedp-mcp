@@ -2,6 +2,7 @@ package collector
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/runtime"
@@ -11,14 +12,13 @@ import (
 type JSErrorEntry struct {
 	Message    string    `json:"message"`
 	Source     string    `json:"source,omitempty"`
-	Line       int64     `json:"line,omitempty"`
-	Column     int64     `json:"column,omitempty"`
+	Line       int64     `json:"line"`
+	Column     int64     `json:"column"`
 	StackTrace string    `json:"stack_trace,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
 	// ReceivedAt is the wall-clock time the event was processed by the
 	// Go-side collector. Used by activity observation for time-window
-	// filtering — Timestamp is from CDP's MonotonicTime which drifts
-	// vs. time.Now(). JSON-hidden.
+	// filtering on the same Go clock as window start. JSON-hidden.
 	ReceivedAt time.Time `json:"-"`
 }
 
@@ -34,14 +34,27 @@ func NewJSErrors(maxSize int) *JSErrors {
 
 // Handle processes a runtime.EventExceptionThrown event.
 func (je *JSErrors) Handle(ev *runtime.EventExceptionThrown) {
+	if ev == nil || ev.ExceptionDetails == nil {
+		return
+	}
 	details := ev.ExceptionDetails
 	entry := JSErrorEntry{
 		Message:    details.Text,
 		Timestamp:  timeFromRuntimeTimestamp(ev.Timestamp),
 		ReceivedAt: time.Now(),
 	}
-	if details.Exception != nil && details.Exception.Description != "" {
-		entry.Message = details.Exception.Description
+	if details.Exception != nil {
+		if details.Exception.Description != "" {
+			entry.Message = details.Exception.Description
+		} else if val := remoteObjectToString(details.Exception); val != "" {
+			// Thrown primitives (e.g. throw "boom" or Promise.reject(42)) carry
+			// their payload in Exception.Value rather than Exception.Description.
+			if details.Text != "" {
+				entry.Message = details.Text + ": " + val
+			} else {
+				entry.Message = val
+			}
+		}
 	}
 	if details.URL != "" {
 		entry.Source = details.URL
@@ -59,10 +72,9 @@ func (je *JSErrors) Drain(limit int) []JSErrorEntry {
 	return je.buf.Drain(nil, limit)
 }
 
-// Peek returns entries without clearing the buffer.
+// Peek returns up to limit entries without clearing the buffer.
 func (je *JSErrors) Peek(limit int) []JSErrorEntry {
-	entries := je.buf.Peek(nil)
-	return applyLimit(entries, limit)
+	return je.buf.Peek(nil, limit)
 }
 
 // Clear removes all entries.
@@ -75,15 +87,23 @@ func formatStackTrace(st *runtime.StackTrace) string {
 	if st == nil || len(st.CallFrames) == 0 {
 		return ""
 	}
-	var result string
+	var b strings.Builder
 	for _, frame := range st.CallFrames {
+		if frame == nil {
+			continue
+		}
 		name := frame.FunctionName
 		if name == "" {
 			name = "(anonymous)"
 		}
-		result += name + " (" + frame.URL + ":" +
-			strconv.FormatInt(frame.LineNumber, 10) + ":" +
-			strconv.FormatInt(frame.ColumnNumber, 10) + ")\n"
+		b.WriteString(name)
+		b.WriteString(" (")
+		b.WriteString(frame.URL)
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatInt(frame.LineNumber, 10))
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatInt(frame.ColumnNumber, 10))
+		b.WriteString(")\n")
 	}
-	return result
+	return b.String()
 }

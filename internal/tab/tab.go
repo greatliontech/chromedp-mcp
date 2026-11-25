@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -112,21 +111,11 @@ type Tab struct {
 	ExecContexts *collector.ExecContexts
 }
 
-// TabOptions configures optional per-tab behavior.
-type TabOptions struct {
-	// Downloads is the browser-level download collector. When non-nil,
-	// download events from this tab are routed to it.
-	Downloads *collector.Download
-	// DownloadDir is the directory for saving downloads. When non-empty,
-	// SetDownloadBehavior is called on each new tab to enable downloads.
-	DownloadDir string
-}
-
 // New creates a new tab from a parent browser context. It creates a new
 // Chrome target, starts event listeners, and initializes collectors.
 // startupCtx bounds initialization (e.g. MCP request cancellation) without
 // tying the tab's post-init lifetime to it; nil defaults to context.Background().
-func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
+func New(parentCtx, startupCtx context.Context, id string) (*Tab, error) {
 	if startupCtx == nil {
 		startupCtx = context.Background()
 	}
@@ -146,12 +135,6 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 		URLChanges:   collector.NewURLChanges(DefaultURLChangesBuffer),
 		Performance:  collector.NewPerformance(DefaultPerformanceBuffer, 50),
 		ExecContexts: collector.NewExecContexts(),
-	}
-
-	// Resolve optional download collector.
-	var dl *collector.Download
-	if opts != nil {
-		dl = opts.Downloads
 	}
 
 	// Register CDP event listeners via WithListener so they are attached
@@ -203,29 +186,16 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 			t.ExecContexts.HandleExecutionContextsCleared()
 		case *performancetimeline.EventTimelineEventAdded:
 			t.Performance.HandleTimelineEvent(ev)
-		case *browser.EventDownloadWillBegin:
-			if dl != nil {
-				dl.HandleDownloadWillBegin(ev)
-			}
-		case *browser.EventDownloadProgress:
-			if dl != nil {
-				dl.HandleDownloadProgress(ev)
-			}
 		}
 	}))
 	t.ctx = ctx
 	t.cancel = cancel
 
-	// Resolve optional download dir for enabling downloads on this tab.
-	var downloadDir string
-	if opts != nil {
-		downloadDir = opts.DownloadDir
-	}
-
-	// Initialize the tab: enable performance timeline and (optionally)
-	// downloads. We need to run a chromedp action to trigger the target
-	// allocation (chromedp creates the target lazily on the first Do call).
-	// chromedp already enables Page and Runtime domains on target attach.
+	// Initialize the tab: enable performance timeline and configure Network
+	// and DOM mutation observation. We need to run a chromedp action to
+	// trigger the target allocation (chromedp creates the target lazily on
+	// the first Do call). chromedp already enables Page and Runtime domains
+	// on target attach.
 	cancelOnce := sync.OnceFunc(cancel)
 	stopStartup := context.AfterFunc(startupCtx, cancelOnce)
 	err := chromedp.Do(ctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
@@ -263,9 +233,11 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 		if _, err := chromedp.Evaluate[chromedp.Void](domMutationObserverScript)(ctx, tgt); err != nil {
 			return err
 		}
-		// Seed the frame registry so the main frame is known before any
-		// navigation. Without it a tab left on about:blank has no main
-		// frame, and every DOM mutation count on it reports "unavailable".
+		// Seed the frame and URL registries so the main frame and initial URL
+		// are known before any navigation. Without it a tab left on about:blank
+		// (or an existing loaded tab) has no main frame for DOM mutation counts,
+		// and a same-document history.pushState before any cross-document
+		// navigation would lack a mainFrameID and baseline URL.
 		//
 		// A seed only: Page.getFrameTree does NOT list out-of-process
 		// (cross-origin) iframes. Those are learned solely from the
@@ -284,18 +256,9 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 				}
 			}
 			walk(treeRes.FrameTree)
-			t.ExecContexts.SeedFrameTree(string(treeRes.FrameTree.Frame.ID), ids)
-		}
-		// Enable downloads per-tab if a download directory is configured.
-		// SetDownloadBehavior is session-scoped — it must be called on
-		// each tab's context for events to be delivered to that tab.
-		if downloadDir != "" {
-			_, err := cdp.Call(ctx, tgt, browser.SetDownloadBehavior, browser.SetDownloadBehaviorParams{
-				Behavior:      browser.SetDownloadBehaviorBehaviorAllowAndName,
-				DownloadPath:  downloadDir,
-				EventsEnabled: new(true),
-			})
-			return err
+			top := treeRes.FrameTree.Frame
+			t.ExecContexts.SeedFrameTree(string(top.ID), string(top.LoaderID), ids)
+			t.URLChanges.Seed(top.ID, top.URL+top.URLFragment)
 		}
 		return nil
 	}))

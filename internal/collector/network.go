@@ -2,6 +2,8 @@ package collector
 
 import (
 	"encoding/base64"
+	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +61,9 @@ type NetworkEntry struct {
 	Size            float64           `json:"size,omitempty"`
 	Timing          *TimingInfo       `json:"timing,omitempty"`
 	Error           string            `json:"error,omitempty"`
+	BlockedReason   string            `json:"blocked_reason,omitempty"`
+	CorsError       string            `json:"cors_error,omitempty"`
+	Canceled        bool              `json:"canceled,omitempty"`
 	StartTime       time.Time         `json:"start_time"`
 	EndTime         time.Time         `json:"end_time,omitempty"`
 	// ReceivedAt is the wall-clock time the request-will-be-sent event
@@ -66,10 +71,12 @@ type NetworkEntry struct {
 	// observation for time-window filtering on the same Go clock as
 	// window start (StartTime comes from CDP WallTime, which can differ
 	// slightly from Go's time.Now()). JSON-hidden.
-	ReceivedAt time.Time `json:"-"`
-	startMono  cdp.MonotonicTime
-	Completed  bool      `json:"-"`
-	Failed     bool      `json:"failed,omitempty"`
+	ReceivedAt        time.Time `json:"-"`
+	startMono         cdp.MonotonicTime
+	requestTime       float64
+	receiveHeadersEnd float64
+	Completed         bool `json:"-"`
+	Failed            bool `json:"failed,omitempty"`
 
 	// HasRequestBody is true when the request carried a body. It mirrors
 	// CDP's Request.hasPostData and is set even when no inline body was
@@ -109,22 +116,35 @@ type TimingInfo struct {
 }
 
 // Network collects network request/response data.
+// Lock order: always n.mu before n.buf.mu (RingBuffer never acquires n.mu).
 type Network struct {
-	mu      sync.Mutex
-	pending map[network.RequestID]*NetworkEntry
-	buf     *RingBuffer[NetworkEntry]
+	mu           sync.Mutex
+	pending      map[network.RequestID]*NetworkEntry
+	pendingOrder []network.RequestID
+	maxPending   int
+	buf          *RingBuffer[NetworkEntry]
 }
 
 // NewNetwork creates a network collector with the given buffer size.
 func NewNetwork(maxSize int) *Network {
+	if maxSize < 1 {
+		maxSize = 1
+	}
 	return &Network{
-		pending: make(map[network.RequestID]*NetworkEntry),
-		buf:     NewRingBuffer[NetworkEntry](maxSize),
+		pending:    make(map[network.RequestID]*NetworkEntry),
+		maxPending: max(maxSize*2, 200),
+		buf:        NewRingBuffer[NetworkEntry](maxSize),
 	}
 }
 
-// HandleRequestWillBeSent records a new outgoing request.
+// HandleRequestWillBeSent records a new outgoing request. When CDP signals an
+// HTTP redirect (ev.RedirectResponse != nil), the previous pending hop sharing
+// the same RequestID is finalized into the completed buffer before storing the
+// redirected request.
 func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
+	if ev == nil || ev.Request == nil {
+		return
+	}
 	headers := headersToMap(ev.Request.Headers)
 	now := time.Now()
 	startTime := now
@@ -148,9 +168,41 @@ func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 		entry.RequestBodyBase64 = base64Encoded
 		entry.RequestBodyTruncated = truncated
 	}
+
 	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if ev.RedirectResponse != nil {
+		if prev, ok := n.pending[ev.RequestID]; ok {
+			applyResponse(prev, ev.RedirectResponse, ev.Type)
+			prev.Completed = true
+			prev.Size = ev.RedirectResponse.EncodedDataLength
+			prev.EndTime = endTimeFromMonotonic(prev.StartTime, prev.startMono, ev.Timestamp)
+			finalizeTiming(prev, ev.Timestamp)
+			n.buf.Add(*prev)
+			delete(n.pending, ev.RequestID)
+			n.removePendingOrderLocked(ev.RequestID)
+		}
+	}
+
+	if _, exists := n.pending[ev.RequestID]; !exists {
+		if len(n.pendingOrder) >= n.maxPending {
+			oldest := n.pendingOrder[0]
+			copy(n.pendingOrder, n.pendingOrder[1:])
+			n.pendingOrder[len(n.pendingOrder)-1] = ""
+			n.pendingOrder = n.pendingOrder[:len(n.pendingOrder)-1]
+			delete(n.pending, oldest)
+		}
+		n.pendingOrder = append(n.pendingOrder, ev.RequestID)
+	}
 	n.pending[ev.RequestID] = entry
-	n.mu.Unlock()
+}
+
+// removePendingOrderLocked removes id from pendingOrder. Caller holds n.mu.
+func (n *Network) removePendingOrderLocked(id network.RequestID) {
+	n.pendingOrder = slices.DeleteFunc(n.pendingOrder, func(x network.RequestID) bool {
+		return x == id
+	})
 }
 
 // decodePostDataEntries concatenates CDP PostDataEntries (cdproto decodes
@@ -177,89 +229,144 @@ func decodePostDataEntries(entries []*network.PostDataEntry, maxBytes int) (stri
 	}
 	// Classify text vs binary on the *full* body so a UTF-8 string cut
 	// mid-codepoint doesn't get misreported as binary after truncation.
-	isText := utf8.Valid(buf)
+	if utf8.Valid(buf) {
+		trimmed, truncated := TruncateUTF8Bytes(buf, maxBytes)
+		return string(trimmed), false, truncated
+	}
 	truncated := false
 	if len(buf) > maxBytes {
-		// Defensive: in current Chrome behavior MaxPostDataSize gates
-		// the entire entries array, so decoded bodies arrive either
-		// complete or absent. Still, if a future Chrome ever delivers
-		// an oversized body, we cap and flag.
 		buf = buf[:maxBytes]
 		truncated = true
-	}
-	if isText {
-		// Trim trailing bytes that fall inside a partial rune. UTF-8
-		// runes are at most 4 bytes, so this loop runs at most 3 times.
-		for len(buf) > 0 && !utf8.Valid(buf) {
-			buf = buf[:len(buf)-1]
-		}
-		return string(buf), false, truncated
 	}
 	return base64.StdEncoding.EncodeToString(buf), true, truncated
 }
 
+// timingDelta returns end - start when both endpoints are finite, non-negative,
+// and ordered. CDP uses -1 as a sentinel for phases that did not occur.
+func timingDelta(start, end float64) float64 {
+	if math.IsNaN(start) || math.IsInf(start, 0) || math.IsNaN(end) || math.IsInf(end, 0) {
+		return 0
+	}
+	if start < 0 || end < start {
+		return 0
+	}
+	return end - start
+}
+
+// applyResponse populates response status, headers, and phase timings on entry.
+func applyResponse(entry *NetworkEntry, resp *network.Response, typ network.ResourceType) {
+	entry.Status = int64(resp.Status)
+	if typ != "" {
+		entry.Type = string(typ)
+	}
+	entry.ResponseHeaders = headersToMap(resp.Headers)
+
+	if resp.Timing != nil {
+		t := resp.Timing
+		entry.requestTime = t.RequestTime
+		entry.receiveHeadersEnd = t.ReceiveHeadersEnd
+		entry.Timing = &TimingInfo{
+			DNSLookup: timingDelta(t.DNSStart, t.DNSEnd),
+			Connect:   timingDelta(t.ConnectStart, t.ConnectEnd),
+			TLS:       timingDelta(t.SslStart, t.SslEnd),
+			TTFB:      timingDelta(t.SendEnd, t.ReceiveHeadersEnd),
+		}
+	}
+}
+
+// finalizeTiming populates TotalTime and Transfer on entry.Timing once loading ends.
+func finalizeTiming(entry *NetworkEntry, endMono cdp.MonotonicTime) {
+	if entry.Timing == nil {
+		return
+	}
+	if total := entry.EndTime.Sub(entry.StartTime).Seconds() * 1000; total > 0 {
+		entry.Timing.TotalTime = total
+	}
+	if entry.requestTime > 0 && entry.receiveHeadersEnd >= 0 &&
+		!math.IsNaN(entry.requestTime) && !math.IsInf(entry.requestTime, 0) &&
+		!math.IsNaN(entry.receiveHeadersEnd) && !math.IsInf(entry.receiveHeadersEnd, 0) &&
+		!math.IsNaN(float64(endMono)) && !math.IsInf(float64(endMono), 0) &&
+		float64(endMono) >= entry.requestTime {
+		elapsedMs := (float64(endMono) - entry.requestTime) * 1000
+		if transfer := elapsedMs - entry.receiveHeadersEnd; transfer > 0 && !math.IsNaN(transfer) && !math.IsInf(transfer, 0) {
+			entry.Timing.Transfer = transfer
+		}
+	}
+}
+
 // HandleResponseReceived records a response for a pending request.
 func (n *Network) HandleResponseReceived(ev *network.EventResponseReceived) {
+	if ev == nil || ev.Response == nil {
+		return
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	entry, ok := n.pending[ev.RequestID]
 	if !ok {
 		return
 	}
-	entry.Status = int64(ev.Response.Status)
-	entry.Type = string(ev.Type)
-	entry.ResponseHeaders = headersToMap(ev.Response.Headers)
-
-	if ev.Response.Timing != nil {
-		t := ev.Response.Timing
-		entry.Timing = &TimingInfo{
-			DNSLookup: t.DNSEnd - t.DNSStart,
-			Connect:   t.ConnectEnd - t.ConnectStart,
-			TLS:       t.SslEnd - t.SslStart,
-			TTFB:      t.ReceiveHeadersEnd - t.SendEnd,
-		}
-	}
+	applyResponse(entry, ev.Response, ev.Type)
 }
 
 // HandleLoadingFinished records a completed request.
 func (n *Network) HandleLoadingFinished(ev *network.EventLoadingFinished) {
-	n.mu.Lock()
-	entry, ok := n.pending[ev.RequestID]
-	if ok {
-		delete(n.pending, ev.RequestID)
+	if ev == nil {
+		return
 	}
-	n.mu.Unlock()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	entry, ok := n.pending[ev.RequestID]
 	if !ok {
 		return
 	}
-	// Safe to mutate entry without lock: it has been removed from pending,
-	// so no other handler can access it concurrently.
 	entry.Completed = true
 	entry.Size = ev.EncodedDataLength
 	entry.EndTime = endTimeFromMonotonic(entry.StartTime, entry.startMono, ev.Timestamp)
-	if entry.Timing != nil {
-		entry.Timing.TotalTime = entry.EndTime.Sub(entry.StartTime).Seconds() * 1000
-	}
+	finalizeTiming(entry, ev.Timestamp)
+	// Add to buf BEFORE removing from pending while holding n.mu so a
+	// concurrent CountStartedSince never observes a transition gap.
 	n.buf.Add(*entry)
+	delete(n.pending, ev.RequestID)
+	n.removePendingOrderLocked(ev.RequestID)
 }
 
 // HandleLoadingFailed records a failed request.
 func (n *Network) HandleLoadingFailed(ev *network.EventLoadingFailed) {
-	n.mu.Lock()
-	entry, ok := n.pending[ev.RequestID]
-	if ok {
-		delete(n.pending, ev.RequestID)
+	if ev == nil {
+		return
 	}
-	n.mu.Unlock()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	entry, ok := n.pending[ev.RequestID]
 	if !ok {
 		return
 	}
-	// Safe to mutate entry without lock: it has been removed from pending,
-	// so no other handler can access it concurrently.
 	entry.Failed = true
 	entry.Error = ev.ErrorText
+	entry.Canceled = ev.Canceled
+	if ev.BlockedReason != "" {
+		entry.BlockedReason = string(ev.BlockedReason)
+	}
+	if ev.CorsErrorStatus != nil && ev.CorsErrorStatus.CorsError != "" {
+		entry.CorsError = string(ev.CorsErrorStatus.CorsError)
+	}
+	if entry.Error == "" {
+		switch {
+		case entry.BlockedReason != "":
+			entry.Error = entry.BlockedReason
+		case entry.CorsError != "":
+			entry.Error = entry.CorsError
+		case entry.Canceled:
+			entry.Error = "canceled"
+		}
+	}
 	entry.EndTime = endTimeFromMonotonic(entry.StartTime, entry.startMono, ev.Timestamp)
+	finalizeTiming(entry, ev.Timestamp)
+	// Add to buf BEFORE removing from pending while holding n.mu so a
+	// concurrent CountStartedSince never observes a transition gap.
 	n.buf.Add(*entry)
+	delete(n.pending, ev.RequestID)
+	n.removePendingOrderLocked(ev.RequestID)
 }
 
 // NetworkFilter specifies which network entries to return.
@@ -278,10 +385,9 @@ func (n *Network) Drain(f *NetworkFilter, limit int) []NetworkEntry {
 	return n.buf.Drain(networkFilter(f), limit)
 }
 
-// Peek returns entries without clearing the buffer.
+// Peek returns up to limit entries without clearing the buffer.
 func (n *Network) Peek(f *NetworkFilter, limit int) []NetworkEntry {
-	entries := n.buf.Peek(networkFilter(f))
-	return applyLimit(entries, limit)
+	return n.buf.Peek(networkFilter(f), limit)
 }
 
 // CountStartedSince returns the number of requests whose ReceivedAt
@@ -292,27 +398,21 @@ func (n *Network) Peek(f *NetworkFilter, limit int) []NetworkEntry {
 // XHRs, which is exactly the case it exists to catch: an action fires a
 // request that outlives the observation window.
 //
-// Walks pending FIRST (recording each ID it counts), then walks the
-// completed buffer and skips IDs already counted from pending. This
-// prevents both double-counting and miss-counting when an entry
-// transitions pending→buf concurrently with the walk: an entry that
-// moves between the two snapshots is counted once via pending and
-// skipped via the seen-set when we reach buf.
+// Holding n.mu across both pending and buf.Peek (preserving lock order
+// n.mu -> n.buf.mu) makes the two sets strictly disjoint at the snapshot
+// instant because HandleRequestWillBeSent/LoadingFinished/LoadingFailed all
+// mutate pending and buf under n.mu. No entry is ever missed or double-counted,
+// even across 3xx redirects that reuse RequestID.
 func (n *Network) CountStartedSince(t time.Time) int {
-	seen := make(map[string]struct{})
-	count := 0
 	n.mu.Lock()
-	for id, e := range n.pending {
+	defer n.mu.Unlock()
+	count := 0
+	for _, e := range n.pending {
 		if !e.ReceivedAt.Before(t) {
-			seen[string(id)] = struct{}{}
 			count++
 		}
 	}
-	n.mu.Unlock()
-	for _, e := range n.buf.Peek(nil) {
-		if _, dup := seen[e.ID]; dup {
-			continue
-		}
+	for _, e := range n.buf.Peek(nil, 0) {
 		if !e.ReceivedAt.Before(t) {
 			count++
 		}
@@ -324,8 +424,10 @@ func (n *Network) CountStartedSince(t time.Time) int {
 func (n *Network) Clear() {
 	n.mu.Lock()
 	n.pending = make(map[network.RequestID]*NetworkEntry)
-	n.mu.Unlock()
+	clear(n.pendingOrder)
+	n.pendingOrder = n.pendingOrder[:0]
 	n.buf.Clear()
+	n.mu.Unlock()
 }
 
 func networkFilter(f *NetworkFilter) func(NetworkEntry) bool {

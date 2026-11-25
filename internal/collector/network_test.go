@@ -827,3 +827,272 @@ func TestNetworkDrainPeekFilter(t *testing.T) {
 		t.Errorf("status 400-499 filter: expected 5, got %d", len(notFound))
 	}
 }
+
+func TestNetworkRedirectChainFinalizesEachHop(t *testing.T) {
+	n := NewNetwork(20)
+	t0 := time.Now()
+	rid := network.RequestID("redir-1")
+
+	// Hop 1: POST /start -> 303 redirect to /mid
+	n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+		RequestID: rid,
+		Request: &network.Request{
+			URL:         "https://example.com/start",
+			Method:      "POST",
+			HasPostData: true,
+			PostDataEntries: []*network.PostDataEntry{
+				{Bytes: []byte("k=v")},
+			},
+		},
+		Type:      "Document",
+		Timestamp: monoTime(t0),
+	})
+
+	// Hop 2: GET /mid carrying RedirectResponse for hop 1 (303)
+	n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+		RequestID: rid,
+		Request: &network.Request{
+			URL:    "https://example.com/mid",
+			Method: "GET",
+		},
+		RedirectResponse: &network.Response{
+			Status:            303,
+			Headers:           network.Headers{"Location": "/mid"},
+			EncodedDataLength: 120,
+			Timing: &network.ResourceTiming{
+				RequestTime:       float64(monoTime(t0)),
+				DNSStart:          -1,
+				DNSEnd:            -1,
+				SendEnd:           5,
+				ReceiveHeadersEnd: 15,
+			},
+		},
+		Type:      "Document",
+		Timestamp: monoTime(t0.Add(20 * time.Millisecond)),
+	})
+
+	// Hop 2 completes with 200.
+	n.HandleResponseReceived(&network.EventResponseReceived{
+		RequestID: rid,
+		Type:      "Document",
+		Response:  &network.Response{Status: 200, Headers: network.Headers{"Content-Type": "text/html"}},
+	})
+	n.HandleLoadingFinished(&network.EventLoadingFinished{
+		RequestID:         rid,
+		EncodedDataLength: 512,
+		Timestamp:         monoTime(t0.Add(45 * time.Millisecond)),
+	})
+
+	entries := n.Peek(nil, 0)
+	if len(entries) != 2 {
+		t.Fatalf("len = %d, want 2 (redirect hop + final hop)", len(entries))
+	}
+	if entries[0].URL != "https://example.com/start" || entries[0].Method != "POST" || entries[0].Status != 303 || !entries[0].Completed || entries[0].Size != 120 {
+		t.Errorf("hop 0 = %+v", entries[0])
+	}
+	if entries[0].RequestBody != "k=v" {
+		t.Errorf("hop 0 RequestBody = %q, want k=v", entries[0].RequestBody)
+	}
+	if entries[0].Timing == nil || entries[0].Timing.DNSLookup != 0 || entries[0].Timing.TTFB != 10 {
+		t.Errorf("hop 0 Timing = %+v, want DNSLookup=0, TTFB=10", entries[0].Timing)
+	}
+	if entries[1].URL != "https://example.com/mid" || entries[1].Method != "GET" || entries[1].Status != 200 || entries[1].Size != 512 {
+		t.Errorf("hop 1 = %+v", entries[1])
+	}
+
+	// CountStartedSince must count both hops (distinct seq despite shared RequestID).
+	if got := n.CountStartedSince(t0.Add(-time.Second)); got != 2 {
+		t.Errorf("CountStartedSince = %d, want 2", got)
+	}
+}
+
+func TestNetworkCountStartedSinceNoTransitionGap(t *testing.T) {
+	n := NewNetwork(200)
+	cutoff := time.Now().Add(-time.Second)
+	const total = 100
+
+	// Start all requests first so true count is always exactly total.
+	now := time.Now()
+	for i := 0; i < total; i++ {
+		rid := network.RequestID(fmt.Sprintf("gap-%d", i))
+		n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+			RequestID: rid,
+			Request:   &network.Request{URL: "http://example.com", Method: "GET"},
+			Timestamp: monoTime(now),
+		})
+	}
+
+	done := make(chan struct{})
+	var readerErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				if got := n.CountStartedSince(cutoff); got != total {
+					readerErr = fmt.Errorf("CountStartedSince observed %d during transitions, want %d", got, total)
+					return
+				}
+			}
+		}
+	}()
+
+	for i := 0; i < total; i++ {
+		rid := network.RequestID(fmt.Sprintf("gap-%d", i))
+		if i%2 == 0 {
+			n.HandleLoadingFinished(&network.EventLoadingFinished{
+				RequestID: rid,
+				Timestamp: monoTime(now.Add(5 * time.Millisecond)),
+			})
+		} else {
+			n.HandleLoadingFailed(&network.EventLoadingFailed{
+				RequestID: rid,
+				ErrorText: "net::ERR_FAILED",
+				Timestamp: monoTime(now.Add(5 * time.Millisecond)),
+			})
+		}
+	}
+	close(done)
+	wg.Wait()
+
+	if readerErr != nil {
+		t.Fatal(readerErr)
+	}
+	if got := n.CountStartedSince(cutoff); got != total {
+		t.Fatalf("final CountStartedSince = %d, want %d", got, total)
+	}
+}
+
+func TestNetworkTimingSentinelsAndTransfer(t *testing.T) {
+	n := NewNetwork(10)
+	t0 := time.Now()
+	reqMono := float64(monoTime(t0))
+	rid := network.RequestID("timing-1")
+
+	n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+		RequestID: rid,
+		Request:   &network.Request{URL: "https://example.com/t", Method: "GET"},
+		WallTime:  cdp.TimeSinceEpoch(float64(t0.UnixNano()) / 1e9),
+		Timestamp: cdp.MonotonicTime(reqMono),
+	})
+	n.HandleResponseReceived(&network.EventResponseReceived{
+		RequestID: rid,
+		Response: &network.Response{
+			Status: 200,
+			Timing: &network.ResourceTiming{
+				RequestTime:       reqMono,
+				DNSStart:          -1,
+				DNSEnd:            -1,
+				ConnectStart:      -1,
+				ConnectEnd:        5, // invalid negative start -> must yield 0, not 6
+				SslStart:          10,
+				SslEnd:            5, // reversed -> must yield 0, not -5
+				SendEnd:           20,
+				ReceiveHeadersEnd: 50, // TTFB = 30ms
+			},
+		},
+	})
+	n.HandleLoadingFinished(&network.EventLoadingFinished{
+		RequestID: rid,
+		Timestamp: cdp.MonotonicTime(reqMono + 0.080), // 80ms total -> Transfer = 80 - 50 = 30ms
+	})
+
+	entries := n.Peek(nil, 0)
+	if len(entries) != 1 || entries[0].Timing == nil {
+		t.Fatalf("entries = %+v", entries)
+	}
+	tm := entries[0].Timing
+	if tm.DNSLookup != 0 || tm.Connect != 0 || tm.TLS != 0 {
+		t.Errorf("sentinel timings must be 0: %+v", tm)
+	}
+	if math.Abs(tm.TTFB-30) > 0.01 {
+		t.Errorf("TTFB = %v, want 30", tm.TTFB)
+	}
+	if math.Abs(tm.Transfer-30) > 0.01 {
+		t.Errorf("Transfer = %v, want 30", tm.Transfer)
+	}
+	if math.Abs(tm.TotalTime-80) > 0.5 {
+		t.Errorf("TotalTime = %v, want ~80", tm.TotalTime)
+	}
+	if timingDelta(math.NaN(), 10) != 0 || timingDelta(0, math.Inf(1)) != 0 {
+		t.Error("timingDelta must reject NaN/Inf")
+	}
+
+	// Overflowing float difference (e.g. endMono=1e308, requestTime=1) must not store +Inf.
+	overflowEntry := &NetworkEntry{
+		StartTime:         t0,
+		EndTime:           t0.Add(10 * time.Millisecond),
+		requestTime:       1,
+		receiveHeadersEnd: 0,
+		Timing:            &TimingInfo{},
+	}
+	finalizeTiming(overflowEntry, cdp.MonotonicTime(1e308))
+	if math.IsInf(overflowEntry.Timing.Transfer, 0) || math.IsNaN(overflowEntry.Timing.Transfer) || overflowEntry.Timing.Transfer != 0 {
+		t.Errorf("overflow Transfer = %v, want 0 (finite)", overflowEntry.Timing.Transfer)
+	}
+}
+
+func TestNetworkLoadingFailedFieldsPendingCapAndNilGuards(t *testing.T) {
+	n := NewNetwork(5)
+	n.maxPending = 3
+
+	// Nil guards must not panic.
+	n.HandleRequestWillBeSent(nil)
+	n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{})
+	n.HandleResponseReceived(nil)
+	n.HandleResponseReceived(&network.EventResponseReceived{})
+	n.HandleLoadingFinished(nil)
+	n.HandleLoadingFailed(nil)
+
+	now := time.Now()
+	// Verify pending cap evicts oldest unfinished request.
+	for i := 0; i < 5; i++ {
+		n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+			RequestID: network.RequestID(fmt.Sprintf("cap-%d", i)),
+			Request:   &network.Request{URL: "http://example.com", Method: "GET"},
+			Timestamp: monoTime(now),
+		})
+	}
+	n.mu.Lock()
+	pendingLen := len(n.pending)
+	_, hasOldest := n.pending["cap-0"]
+	n.mu.Unlock()
+	if pendingLen != 3 || hasOldest {
+		t.Fatalf("pending len=%d hasOldest=%v, want len=3 and cap-0 evicted", pendingLen, hasOldest)
+	}
+
+	// BlockedReason, CorsError, and Canceled fallbacks when ErrorText is empty.
+	n.HandleLoadingFailed(&network.EventLoadingFailed{
+		RequestID:     "cap-2",
+		BlockedReason: network.BlockedReasonInspector,
+		Timestamp:     monoTime(now.Add(10 * time.Millisecond)),
+	})
+	n.HandleLoadingFailed(&network.EventLoadingFailed{
+		RequestID:       "cap-3",
+		CorsErrorStatus: &network.CorsErrorStatus{CorsError: network.CorsErrorMissingAllowOriginHeader},
+		Timestamp:       monoTime(now.Add(10 * time.Millisecond)),
+	})
+	n.HandleLoadingFailed(&network.EventLoadingFailed{
+		RequestID: "cap-4",
+		Canceled:  true,
+		Timestamp: monoTime(now.Add(10 * time.Millisecond)),
+	})
+
+	entries := n.Peek(nil, 0)
+	if len(entries) != 3 {
+		t.Fatalf("len = %d, want 3", len(entries))
+	}
+	if entries[0].BlockedReason != string(network.BlockedReasonInspector) || entries[0].Error != string(network.BlockedReasonInspector) {
+		t.Errorf("blocked entry = %+v", entries[0])
+	}
+	if entries[1].CorsError != string(network.CorsErrorMissingAllowOriginHeader) || entries[1].Error != string(network.CorsErrorMissingAllowOriginHeader) {
+		t.Errorf("cors entry = %+v", entries[1])
+	}
+	if !entries[2].Canceled || entries[2].Error != "canceled" {
+		t.Errorf("canceled entry = %+v", entries[2])
+	}
+}

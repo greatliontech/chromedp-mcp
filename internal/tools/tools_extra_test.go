@@ -1051,11 +1051,11 @@ func TestConsoleLogsLevelFilter(t *testing.T) {
 	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
-		"level": "warning",
+		"level": "warn",
 	})
 	for _, log := range out.Logs {
-		if log.Level != "warning" {
-			t.Errorf("level filter returned log with level %q, want 'warning'", log.Level)
+		if log.Level != "warn" {
+			t.Errorf("level filter returned log with level %q, want 'warn'", log.Level)
 		}
 	}
 	if len(out.Logs) == 0 {
