@@ -510,133 +510,6 @@ func TestBlockURLsWildcard(t *testing.T) {
 	})
 }
 
-// --- Consolidation: delete_cookies clears all when name is empty ---
-
-// TestDeleteCookiesClearAll verifies that omitting name clears all cookies.
-func TestDeleteCookiesClearAll(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	// Set cookies via JS (simpler, no domain issues).
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.cookie = 'a=1'; document.cookie = 'b=2'; 'ok'",
-	})
-
-	// Verify they exist.
-	cookies := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	if len(cookies.Cookies) < 2 {
-		t.Fatalf("expected at least 2 cookies, got %d", len(cookies.Cookies))
-	}
-
-	// Delete all (no name).
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	// Verify all cleared.
-	cookies = callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	if len(cookies.Cookies) != 0 {
-		t.Fatalf("expected 0 cookies after clear-all, got %d", len(cookies.Cookies))
-	}
-}
-
-// TestDeleteCookiesClearAllIdempotent verifies double clear-all is fine.
-func TestDeleteCookiesClearAllIdempotent(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-}
-
-// --- Consolidation: evaluate with selector ---
-
-// TestEvaluateWithSelector verifies the merged evaluate+selector behavior.
-func TestEvaluateWithSelector(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"selector":   "h1",
-		"expression": "return el.textContent",
-	})
-	if result.Result != "Hello World" {
-		t.Fatalf("expected 'Hello World', got %q", result.Result)
-	}
-}
-
-// TestEvaluateWithSelectorNotFound verifies error on missing selector.
-func TestEvaluateWithSelectorNotFound(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"selector":   "#nonexistent-xyz",
-		"expression": "return el.textContent",
-		"timeout":    500,
-	})
-	if !strings.Contains(errText, "not found") {
-		t.Fatalf("expected 'not found' error, got: %s", errText)
-	}
-}
-
-// TestEvaluateWithoutSelector verifies plain evaluate still works.
-func TestEvaluateWithoutSelector(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	type evalResult struct {
-		Result float64 `json:"result"`
-	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "2 + 2",
-	})
-	if result.Result != 4 {
-		t.Fatalf("expected 4, got %v", result.Result)
-	}
-}
-
-// --- select_option/submit_form selectorContext ---
-
-// TestSelectOptionSelectorTimeout verifies select_option times out cleanly.
-func TestSelectOptionSelectorTimeout(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "select_option", map[string]any{
-		"tab":      tabID,
-		"selector": "#nonexistent-select",
-		"value":    "x",
-		"timeout":  500,
-	})
-	if !strings.Contains(errText, "not found") {
-		t.Fatalf("expected 'not found' error, got: %s", errText)
-	}
-}
-
-// TestSubmitFormSelectorTimeout verifies submit_form times out cleanly.
-func TestSubmitFormSelectorTimeout(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "submit_form", map[string]any{
-		"tab":      tabID,
-		"selector": "#nonexistent-form",
-		"timeout":  500,
-	})
-	if !strings.Contains(errText, "not found") {
-		t.Fatalf("expected 'not found' error, got: %s", errText)
-	}
-}
-
 func TestNormalizeBlockPattern(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -995,4 +868,95 @@ func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
 	if errText := callToolExpectErr(t, "emulate_device", map[string]any{"tab": tabID, "device": "reset", "landscape": true}); !strings.Contains(errText, "landscape") {
 		t.Errorf("reset+landscape err = %q, want landscape", errText)
 	}
+}
+
+// TestSetGeolocationDefaultAccuracy verifies that when latitude/longitude
+// are set but accuracy is omitted, the default accuracy (1) is applied.
+func TestSetGeolocationDefaultAccuracy(t *testing.T) {
+	tabID := navigateToFixture(t, "emulation.html")
+	defer closeTab(t, tabID)
+
+	// Grant geolocation permission.
+	callTool[struct{}](t, "set_permission", map[string]any{
+		"tab":     tabID,
+		"name":    "geolocation",
+		"setting": "granted",
+	})
+
+	// Set geolocation WITHOUT explicit accuracy.
+	callTool[struct{}](t, "set_geolocation", map[string]any{
+		"tab":       tabID,
+		"latitude":  51.5074,
+		"longitude": -0.1278,
+		// accuracy omitted — should default to 1
+	})
+
+	// Query the position and verify coordinates are correct.
+	result := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `new Promise((resolve, reject) => {
+			navigator.geolocation.getCurrentPosition(
+				pos => resolve({
+					lat: pos.coords.latitude,
+					lng: pos.coords.longitude,
+					acc: pos.coords.accuracy
+				}),
+				err => reject(err.message),
+				{timeout: 5000}
+			);
+		})`,
+	})
+
+	var coords struct {
+		Lat float64 `json:"lat"`
+		Lng float64 `json:"lng"`
+		Acc float64 `json:"acc"`
+	}
+	if err := json.Unmarshal(result.Result, &coords); err != nil {
+		t.Fatalf("unmarshal: %v, raw: %s", err, result.Result)
+	}
+	if coords.Lat != 51.5074 || coords.Lng != -0.1278 {
+		t.Errorf("coordinates = (%v, %v), want (51.5074, -0.1278)", coords.Lat, coords.Lng)
+	}
+	if coords.Acc != 1 {
+		t.Errorf("accuracy = %v, want 1 (default)", coords.Acc)
+	}
+}
+
+// TestEmulateNetworkDefaultThroughput verifies that calling emulate_network
+// with all defaults (throughput=0) doesn't error — the 0→-1 coercion works.
+func TestEmulateNetworkDefaultThroughput(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Call with all defaults — throughput values are 0, should be coerced
+	// to -1 (disabled) internally.
+	callTool[struct{}](t, "emulate_network", map[string]any{
+		"tab": tabID,
+	})
+
+	// Reset to normal — same call pattern.
+	callTool[struct{}](t, "emulate_network", map[string]any{
+		"tab": tabID,
+	})
+}
+
+// TestEmulateNetworkExplicitThroughput verifies explicit throughput values
+// are passed through without coercion.
+func TestEmulateNetworkExplicitThroughput(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Set a low throughput — should not error.
+	callTool[struct{}](t, "emulate_network", map[string]any{
+		"tab":                 tabID,
+		"download_throughput": 1000000,
+		"upload_throughput":   500000,
+		"latency":             50,
+	})
+
+	// Reset.
+	callTool[struct{}](t, "emulate_network", map[string]any{
+		"tab": tabID,
+	})
 }

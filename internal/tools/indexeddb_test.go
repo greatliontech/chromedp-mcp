@@ -188,14 +188,14 @@ func TestIndexedDBLifecyclePaginationIndexAndDelete(t *testing.T) {
 	// serialize faithfully rather than collapsing to {} or "Object".
 	rawMeta, _ := json.Marshal(metaOut.Entries[0].Value)
 	var metaRec struct {
-		Schema string  `json:"schema"`
-		Re     string  `json:"re"`
+		Schema string   `json:"schema"`
+		Re     string   `json:"re"`
 		Set    []string `json:"set"`
-		Map    [][]any `json:"map"`
-		Bytes  []int   `json:"bytes"`
-		Floats []any   `json:"floats"`
-		Big    string  `json:"big"`
-		Self   string  `json:"self"`
+		Map    [][]any  `json:"map"`
+		Bytes  []int    `json:"bytes"`
+		Floats []any    `json:"floats"`
+		Big    string   `json:"big"`
+		Self   string   `json:"self"`
 	}
 	if err := json.Unmarshal(rawMeta, &metaRec); err != nil {
 		t.Fatalf("unmarshal structured-clone meta record: %v (raw=%s)", err, rawMeta)

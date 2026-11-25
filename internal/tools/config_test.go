@@ -78,9 +78,8 @@ func TestAddAndRemoveScript(t *testing.T) {
 }
 
 // TestAddScriptEvaluateNowRunsOnCurrentDoc verifies evaluate_now=true
-// executes the script once on the document already loaded in the tab —
-// the original issue 006 footgun (registration happens but current doc
-// is left alone) must be gone.
+// executes the script once on the document already loaded in the tab
+// in addition to registering it for future navigations.
 func TestAddScriptEvaluateNowRunsOnCurrentDoc(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)

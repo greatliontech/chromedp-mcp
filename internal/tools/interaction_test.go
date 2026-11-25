@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1044,5 +1046,2003 @@ func TestDragAndDropHTML5AndPointerWithObservation(t *testing.T) {
 				t.Errorf("%s err = %q, want substring %q", tc.name, errText, tc.want)
 			}
 		})
+	}
+}
+
+func TestClickAndType(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Click the target.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#click-target",
+	})
+
+	// Verify click was registered.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-count').textContent",
+	})
+	if string(out.Result) != `"1"` {
+		t.Errorf("click count = %s, want \"1\"", out.Result)
+	}
+
+	// Type into the input.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "hello world",
+		"mode":     "replace",
+	})
+
+	// Verify typed text.
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if string(out.Result) != `"hello world"` {
+		t.Errorf("typed text = %s, want \"hello world\"", out.Result)
+	}
+}
+
+func TestFormInteraction(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// Type a name.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#name",
+		"text":     "Alice",
+		"mode":     "replace",
+	})
+
+	// Select an option.
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"value":    "blue",
+	})
+
+	// Verify selection.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('color').value",
+	})
+	if string(out.Result) != `"blue"` {
+		t.Errorf("select value = %s, want \"blue\"", out.Result)
+	}
+
+	// Submit form.
+	callTool[struct{}](t, "submit_form", map[string]any{
+		"tab":      tabID,
+		"selector": "#test-form",
+	})
+
+	// Wait for result to appear.
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":      tabID,
+		"selector": "#result",
+	})
+
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('result').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Alice") {
+		t.Errorf("form result = %s, want to contain 'Alice'", out.Result)
+	}
+}
+
+func TestScrollIntoView(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#scroll-marker",
+	})
+
+	// Verify the element is in view.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			var el = document.getElementById('scroll-marker');
+			var rect = el.getBoundingClientRect();
+			return rect.top >= 0 && rect.top < window.innerHeight;
+		})()`,
+	})
+	if string(out.Result) != "true" {
+		t.Error("scroll-marker not in view after scroll")
+	}
+}
+
+func TestPressKey(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "a",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "a") {
+		t.Errorf("key output = %s, want to contain 'a'", out.Result)
+	}
+}
+
+func TestHover(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#hover-target",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('hover-target').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Hovered") {
+		t.Errorf("hover target text = %s, want to contain 'Hovered'", out.Result)
+	}
+}
+
+func TestFocus(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.activeElement.id",
+	})
+	if !strings.Contains(string(out.Result), "type-target") {
+		t.Errorf("focused element = %s, want 'type-target'", out.Result)
+	}
+}
+
+func TestTypeWithClear(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Type initial text.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "initial",
+		"mode":     "replace",
+	})
+
+	// Type again with clear.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "replaced",
+		"mode":     "replace",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if !strings.Contains(string(out.Result), "replaced") {
+		t.Errorf("typed text = %s, want 'replaced'", out.Result)
+	}
+	if strings.Contains(string(out.Result), "initial") {
+		t.Errorf("typed text = %s, should not contain 'initial' after clear", out.Result)
+	}
+}
+
+// TestTypeAppendPreservesExisting verifies mode=append concatenates
+// onto the field's current value instead of clearing it. Without this,
+// the only test coverage of the append branch was the validateMode
+// table — a refactor that inverted the mode check would silently change
+// behaviour but still pass the existing suite.
+func TestTypeAppendPreservesExisting(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "abc",
+		"mode":     "replace",
+	})
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "def",
+		"mode":     "append",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if string(out.Result) != `"abcdef"` {
+		t.Errorf("after append, value = %s, want \"abcdef\"", out.Result)
+	}
+}
+
+func TestPressKeyWithModifiers(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"ctrl"},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Ctrl") {
+		t.Errorf("key output = %s, want to contain 'Ctrl'", out.Result)
+	}
+}
+
+func TestSelectOptionByLabel(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"label":    "Green",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('color').value",
+	})
+	if string(out.Result) != `"green"` {
+		t.Errorf("select value = %s, want \"green\"", out.Result)
+	}
+}
+
+func TestSelectOptionByIndex(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	idx := 2 // "Blue" is index 2 (Red=0, Green=1, Blue=2)
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"index":    idx,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('color').value",
+	})
+	if string(out.Result) != `"blue"` {
+		t.Errorf("select value = %s, want \"blue\"", out.Result)
+	}
+}
+
+func TestSelectOptionValidation(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// No value, label, or index provided → error.
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+	})
+	if !strings.Contains(errText, "exactly one") {
+		t.Errorf("expected validation error, got: %s", errText)
+	}
+}
+
+func TestHandleDialog(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	// Set up a dialog handler before triggering the dialog.
+	// Chrome auto-dismisses dialogs unless we handle them. We need to
+	// trigger the dialog and handle it in the right order. The simplest
+	// approach: trigger an alert via evaluate (which blocks until dialog
+	// is dismissed), but do so from a separate goroutine.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// This will block until the dialog is handled.
+		callToolRaw(t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "alert('test dialog')",
+		})
+	}()
+
+	// Handle the dialog (retries until dialog appears).
+	handleDialog(t, tabID, map[string]any{"accept": true})
+
+	// Wait for the evaluate to complete.
+	select {
+	case <-done:
+		// Success — dialog was handled and evaluate returned.
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for dialog handling to complete")
+	}
+}
+
+func TestScrollByOffset(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   500,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.scrollY > 0",
+	})
+	if string(out.Result) != "true" {
+		t.Errorf("after scroll by y=500, scrollY > 0 = %s, want true", out.Result)
+	}
+}
+
+func TestClickMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorTimeout(t, tabID, "click",
+		nil, // no extra args for invalid
+		map[string]any{"selector": "#click-target"}, // valid
+	)
+
+	// Verify the valid click actually worked.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-count').textContent",
+	})
+	if !strings.Contains(string(out.Result), "1") {
+		t.Errorf("after valid click, click count = %s, want to contain '1'", out.Result)
+	}
+}
+
+func TestDoubleClickMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorTimeout(t, tabID, "click",
+		map[string]any{"click_count": 2},                              // invalid
+		map[string]any{"selector": "#click-target", "click_count": 2}, // valid
+	)
+}
+
+func TestTypeMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorTimeout(t, tabID, "type",
+		map[string]any{"text": "hello", "mode": "replace"},                               // invalid
+		map[string]any{"selector": "#type-target", "text": "test123", "mode": "replace"}, // valid
+	)
+
+	// Verify the valid type actually worked.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if !strings.Contains(string(out.Result), "test123") {
+		t.Errorf("after valid type, value = %s, want to contain 'test123'", out.Result)
+	}
+}
+
+func TestTypeWithClearMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorTimeout(t, tabID, "type",
+		map[string]any{"text": "hello", "mode": "replace"},                               // invalid
+		map[string]any{"selector": "#type-target", "text": "cleared", "mode": "replace"}, // valid
+	)
+}
+
+func TestFocusMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorTimeout(t, tabID, "focus",
+		nil, // invalid
+		map[string]any{"selector": "#type-target"}, // valid
+	)
+
+	// Verify focus actually moved.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.activeElement.id",
+	})
+	if !strings.Contains(string(out.Result), "type-target") {
+		t.Errorf("after valid focus, activeElement = %s, want 'type-target'", out.Result)
+	}
+}
+
+func TestScrollIntoViewMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	selectorTimeout(t, tabID, "scroll",
+		nil, // invalid
+		map[string]any{"selector": "#scroll-marker"}, // valid
+	)
+}
+
+func TestUploadFilesMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-file-input",
+		"paths":    []string{"/dev/null"},
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Error("upload_files with missing selector should return an error")
+	}
+}
+
+func TestSubmitFormMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "submit_form", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-form",
+		"timeout":  1000,
+	})
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error = %q, want to contain 'not found'", errText)
+	}
+}
+
+func TestHoverMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-hover",
+		"timeout":  1000,
+	})
+	if errText == "" {
+		t.Error("hover on missing selector should return an error")
+	}
+}
+
+func TestSelectOptionMissingSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-select",
+		"value":    "red",
+	})
+	if errText == "" {
+		t.Error("select_option with missing selector should return an error")
+	}
+}
+
+func TestClickDelayedElement(t *testing.T) {
+	tabID := navigateToFixture(t, "delayed.html")
+	defer closeTab(t, tabID)
+
+	// #delayed-element appears after 500ms. With default 5s timeout,
+	// chromedp should poll and find it.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#delayed-element",
+	})
+	// If we get here without error, the element was found after it appeared.
+}
+
+func TestClickRightButton(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Set up a contextmenu listener.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `document.getElementById('click-target').addEventListener('contextmenu', function(e) {
+			e.preventDefault();
+			this.textContent = 'Right-clicked';
+		})`,
+	})
+
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#click-target",
+		"button":   "right",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-target').textContent",
+	})
+	// The JS dispatch sends mousedown/mouseup/click with button=2 but not
+	// contextmenu. The click event listener should fire (it fires for any button).
+	if !strings.Contains(string(out.Result), "Clicked") && !strings.Contains(string(out.Result), "Right-clicked") {
+		t.Errorf("right-click result = %s, want evidence of click or right-click", out.Result)
+	}
+}
+
+func TestClickDoubleClickBehaviour(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Set up a dblclick listener.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `document.getElementById('click-target').addEventListener('dblclick', function() {
+			document.getElementById('click-count').textContent = 'dblclick';
+		})`,
+	})
+
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":         tabID,
+		"selector":    "#click-target",
+		"click_count": 2,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-count').textContent",
+	})
+	if string(out.Result) != `"dblclick"` {
+		t.Errorf("double-click result = %s, want \"dblclick\"", out.Result)
+	}
+}
+
+func TestTypeWithDelay(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	start := time.Now()
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "abc",
+		"delay":    50,
+		"mode":     "replace",
+	})
+	elapsed := time.Since(start)
+
+	// With 3 characters and 50ms delay each, should take at least ~150ms.
+	if elapsed < 100*time.Millisecond {
+		t.Errorf("type with delay took %v, expected at least 100ms for 3 chars at 50ms delay", elapsed)
+	}
+
+	// Verify the text was actually typed.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if !strings.Contains(string(out.Result), "abc") {
+		t.Errorf("typed text = %s, want to contain 'abc'", out.Result)
+	}
+}
+
+func TestUploadFilesSuccess(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// Create a temp file to upload.
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test-upload.txt")
+	if err := os.WriteFile(tmpFile, []byte("upload content"), 0644); err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+
+	callTool[struct{}](t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "#file-input",
+		"paths":    []string{tmpFile},
+	})
+
+	// Verify the file input now has a file.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('file-input').files.length",
+	})
+	if string(out.Result) != "1" {
+		t.Errorf("file input files.length = %s, want 1", out.Result)
+	}
+
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('file-input').files[0].name",
+	})
+	if !strings.Contains(string(out.Result), "test-upload.txt") {
+		t.Errorf("file name = %s, want 'test-upload.txt'", out.Result)
+	}
+}
+
+func TestHandleDialogDismiss(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	done := make(chan string, 1)
+	go func() {
+		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "confirm('Are you sure?')",
+		})
+		done <- string(out.Result)
+	}()
+
+	handleDialog(t, tabID, map[string]any{"accept": false})
+
+	select {
+	case result := <-done:
+		if result != "false" {
+			t.Errorf("confirm() after dismiss = %s, want false", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for confirm dialog")
+	}
+}
+
+func TestHandleDialogConfirmAccept(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	done := make(chan string, 1)
+	go func() {
+		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "confirm('Are you sure?')",
+		})
+		done <- string(out.Result)
+	}()
+
+	handleDialog(t, tabID, map[string]any{"accept": true})
+
+	select {
+	case result := <-done:
+		if result != "true" {
+			t.Errorf("confirm() after accept = %s, want true", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for confirm dialog")
+	}
+}
+
+func TestHandleDialogPrompt(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	done := make(chan string, 1)
+	go func() {
+		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "prompt('Enter name:')",
+		})
+		done <- string(out.Result)
+	}()
+
+	handleDialog(t, tabID, map[string]any{"accept": true, "text": "Alice"})
+
+	select {
+	case result := <-done:
+		if !strings.Contains(result, "Alice") {
+			t.Errorf("prompt() result = %s, want 'Alice'", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for prompt dialog")
+	}
+}
+
+func TestPressKeyEnter(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Enter",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Enter") {
+		t.Errorf("key output = %s, want to contain 'Enter'", out.Result)
+	}
+}
+
+func TestPressKeyMultiModifier(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"ctrl", "shift"},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	result := string(out.Result)
+	if !strings.Contains(result, "Ctrl") || !strings.Contains(result, "Shift") {
+		t.Errorf("key output = %s, want to contain both 'Ctrl' and 'Shift'", result)
+	}
+}
+
+func TestSubmitFormFromInputElement(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// Type a name first.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#name",
+		"text":     "Bob",
+		"mode":     "replace",
+	})
+
+	// Submit using the input element (not the form), tests the .closest('form') path.
+	callTool[struct{}](t, "submit_form", map[string]any{
+		"tab":      tabID,
+		"selector": "#name",
+	})
+
+	// Wait for result to appear.
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":      tabID,
+		"selector": "#result",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('result').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Bob") {
+		t.Errorf("form result = %s, want to contain 'Bob'", out.Result)
+	}
+}
+
+func TestSubmitFormNoFormError(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	// #title is an h1, not inside a form.
+	errText := callToolExpectErr(t, "submit_form", map[string]any{
+		"tab":      tabID,
+		"selector": "#title",
+	})
+	if !strings.Contains(errText, "no form found") {
+		t.Errorf("submit_form error = %q, want 'no form found'", errText)
+	}
+}
+
+func TestSelectOptionMultipleCriteria(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"value":    "red",
+		"label":    "Green",
+	})
+	if !strings.Contains(errText, "exactly one") || !strings.Contains(errText, "not multiple") {
+		t.Errorf("expected multiple criteria error, got: %s", errText)
+	}
+}
+
+func TestClickMiddleButton(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#click-target",
+		"button":   "middle",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('middle-click-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "middle-click") {
+		t.Errorf("middle-click output = %s, want 'middle-click'", out.Result)
+	}
+}
+
+func TestClickTripleClick(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":         tabID,
+		"selector":    "#click-target",
+		"click_count": 3,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('triple-click-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "triple-click") {
+		t.Errorf("triple-click output = %s, want 'triple-click'", out.Result)
+	}
+}
+
+func TestScrollHorizontal(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   300,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.scrollX > 0",
+	})
+	if string(out.Result) != "true" {
+		t.Errorf("after scroll x=300, scrollX > 0 = %s, want true", out.Result)
+	}
+}
+
+func TestScrollBothAxes(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   200,
+		"y":   400,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.scrollX > 0 && window.scrollY > 0",
+	})
+	if string(out.Result) != "true" {
+		t.Errorf("after scroll x=200,y=400, both axes should be > 0, got %s", out.Result)
+	}
+}
+
+func TestTypeWithClearOnEmptyField(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Type into an empty field with clear=true.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "fresh",
+		"mode":     "replace",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if string(out.Result) != `"fresh"` {
+		t.Errorf("typed text = %s, want \"fresh\"", out.Result)
+	}
+}
+
+func TestPressKeyTab(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Tab",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Tab") {
+		t.Errorf("key output = %s, want to contain 'Tab'", out.Result)
+	}
+}
+
+func TestPressKeyEscape(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Escape",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Escape") {
+		t.Errorf("key output = %s, want to contain 'Escape'", out.Result)
+	}
+}
+
+func TestPressKeyArrowDown(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "ArrowDown",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "ArrowDown") {
+		t.Errorf("key output = %s, want to contain 'ArrowDown'", out.Result)
+	}
+}
+
+func TestPressKeyAltModifier(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"alt"},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Alt") {
+		t.Errorf("key output = %s, want to contain 'Alt'", out.Result)
+	}
+}
+
+func TestSelectOptionByValueVerification(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"value":    "green",
+	})
+
+	// Verify value.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('color').value",
+	})
+	if string(out.Result) != `"green"` {
+		t.Errorf("value = %s, want \"green\"", out.Result)
+	}
+
+	// Verify selectedIndex.
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('color').selectedIndex",
+	})
+	if string(out.Result) != "1" {
+		t.Errorf("selectedIndex = %s, want 1", out.Result)
+	}
+}
+
+func TestSelectOptionFiresChangeEvent(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"value":    "blue",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('change-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "changed:blue") {
+		t.Errorf("change event output = %s, want to contain 'changed:blue'", out.Result)
+	}
+}
+
+func TestSelectOptionByIndexZero(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// First select blue (index 2), then select index 0 (red).
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"value":    "blue",
+	})
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#color",
+		"index":    0,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('color').value",
+	})
+	if string(out.Result) != `"red"` {
+		t.Errorf("value after index=0 = %s, want \"red\"", out.Result)
+	}
+}
+
+func TestUploadMultipleFiles(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	tmpDir := t.TempDir()
+	file1 := filepath.Join(tmpDir, "file1.txt")
+	file2 := filepath.Join(tmpDir, "file2.txt")
+	os.WriteFile(file1, []byte("content1"), 0644)
+	os.WriteFile(file2, []byte("content2"), 0644)
+
+	// Make the file input accept multiple files.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('file-input').multiple = true",
+	})
+
+	callTool[struct{}](t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "#file-input",
+		"paths":    []string{file1, file2},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('file-input').files.length",
+	})
+	if string(out.Result) != "2" {
+		t.Errorf("files.length = %s, want 2", out.Result)
+	}
+}
+
+func TestHandleDialogTextOnAlert(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	done := make(chan struct{}, 1)
+	go func() {
+		callToolRaw(t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "alert('test alert')",
+		})
+		done <- struct{}{}
+	}()
+
+	// Pass text to an alert dialog — should be ignored, no error.
+	handleDialog(t, tabID, map[string]any{"accept": true, "text": "ignored text"})
+
+	select {
+	case <-done:
+		// Success.
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for alert handling")
+	}
+}
+
+func TestFocusNonFocusableElement(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// #title is an h1 — not normally focusable.
+	// chromedp.Focus should either work (by setting focus programmatically)
+	// or error. Either way, no hang.
+	callToolRaw(t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#title",
+	})
+}
+
+func TestPressKeyIntoFocusedInput(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Focus the input.
+	callTool[struct{}](t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+	})
+
+	// Press 'x' — should type 'x' into the input.
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "x",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	// press_key dispatches keyDown/keyUp but does NOT type characters
+	// (it's not SendKeys). This verifies the actual behaviour.
+	_ = out
+}
+
+func TestTypeUnicodeCharacters(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "café",
+		"mode":     "replace",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if !strings.Contains(string(out.Result), "caf") {
+		t.Errorf("typed text = %s, want to contain 'caf'", out.Result)
+	}
+}
+
+func TestTypeWithDelayAndClear(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Type initial.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "old",
+		"mode":     "replace",
+	})
+
+	// Type with delay + clear.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+		"text":     "new",
+		"mode":     "replace",
+		"delay":    20,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if strings.Contains(string(out.Result), "old") {
+		t.Errorf("after clear+delay, text should not contain 'old': %s", out.Result)
+	}
+	if !strings.Contains(string(out.Result), "new") {
+		t.Errorf("after clear+delay, text should contain 'new': %s", out.Result)
+	}
+}
+
+func TestTypeIntoTextarea(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#textarea-target",
+		"text":     "multi\nline\ntext",
+		"mode":     "replace",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('textarea-target').value",
+	})
+	if !strings.Contains(string(out.Result), "multi") {
+		t.Errorf("textarea value = %s, want to contain 'multi'", out.Result)
+	}
+}
+
+func TestTypeEmptyText(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Type empty string — should not error.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#textarea-target",
+		"text":     "",
+		"mode":     "replace",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('textarea-target').value",
+	})
+	if string(out.Result) != `""` {
+		t.Errorf("after typing empty string, value = %s, want empty", out.Result)
+	}
+}
+
+func TestClickDisabledButton(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Click on a disabled button must error rather than silently
+	// dispatching into the void.
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#disabled-btn",
+	})
+	if !strings.Contains(errText, "disabled") {
+		t.Errorf("click on disabled button: error %q should mention 'disabled'", errText)
+	}
+
+	// And the page-side handler must not have fired (defense against an
+	// implementation that errored after dispatching).
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('disabled-output').textContent",
+	})
+	if strings.Contains(string(out.Result), "clicked-disabled") {
+		t.Error("click event fired despite the pre-click error")
+	}
+}
+
+func TestClickTriggersNavigation(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Click the link that navigates to page2.html.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#nav-link",
+	})
+
+	// Poll until the navigation completes and document.title changes.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result := callToolRaw(t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "document.title",
+		})
+		if !result.IsError {
+			if text := contentText(result); strings.Contains(text, "Page 2") {
+				break
+			}
+			// Also check structured content.
+			if result.StructuredContent != nil {
+				b, _ := json.Marshal(result.StructuredContent)
+				if strings.Contains(string(b), "Page 2") {
+					break
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.title",
+	})
+	if !strings.Contains(string(out.Result), "Page 2") {
+		t.Errorf("after click navigation, title = %s, want 'Page 2'", out.Result)
+	}
+}
+
+func TestSelectOptionIndexOutOfRange(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Select index 999 — out of range. Should return an error.
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#big-select",
+		"index":    999,
+	})
+	if !strings.Contains(strings.ToLower(errText), "out of range") {
+		t.Errorf("expected 'out of range' error, got: %s", errText)
+	}
+}
+
+func TestSelectOptionLabelNotFound(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Try to select by a label that doesn't exist — should error.
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#big-select",
+		"label":    "NonexistentLabel",
+	})
+	if !strings.Contains(strings.ToLower(errText), "no option with label") {
+		t.Errorf("expected 'no option with label' error, got: %s", errText)
+	}
+}
+
+func TestSelectOptionAllThreeCriteria(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#big-select",
+		"value":    "a",
+		"label":    "Alpha",
+		"index":    0,
+	})
+	if !strings.Contains(errText, "exactly one") && !strings.Contains(errText, "multiple") {
+		t.Errorf("error = %q, want validation error about multiple criteria", errText)
+	}
+}
+
+func TestScrollNegativeOffset(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// First scroll down.
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   500,
+	})
+
+	out1 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.scrollY",
+	})
+
+	// Now scroll up with negative offset.
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   -200,
+	})
+
+	out2 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.scrollY",
+	})
+
+	// scrollY should have decreased.
+	var y1, y2 float64
+	json.Unmarshal(out1.Result, &y1)
+	json.Unmarshal(out2.Result, &y2)
+	if y2 >= y1 {
+		t.Errorf("after negative scroll, scrollY = %f, expected < %f", y2, y1)
+	}
+}
+
+func TestScrollSelectorIgnoresXY(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// With both selector and x/y, the implementation takes the selector path
+	// (ScrollIntoView) and ignores x/y. Should not error.
+	callTool[struct{}](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#scroll-marker",
+		"x":        100,
+		"y":        100,
+	})
+
+	// The marker should now be in view. Verify scrollY > 0.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.scrollY > 0",
+	})
+	if string(out.Result) != "true" {
+		t.Error("after scroll-into-view with x/y set, page should have scrolled")
+	}
+}
+
+func TestHandleDialogDismissConfirm(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	done := make(chan struct{}, 1)
+	go func() {
+		callToolRaw(t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "document.getElementById('confirm-result').textContent = String(confirm('Sure?'))",
+		})
+		done <- struct{}{}
+	}()
+
+	handleDialog(t, tabID, map[string]any{"accept": false})
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for confirm dialog")
+	}
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('confirm-result').textContent",
+	})
+	if !strings.Contains(string(out.Result), "false") {
+		t.Errorf("dismissed confirm result = %s, want 'false'", out.Result)
+	}
+}
+
+func TestHandleDialogDismissPrompt(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	done := make(chan struct{}, 1)
+	go func() {
+		callToolRaw(t, "evaluate", map[string]any{
+			"tab":        tabID,
+			"expression": "document.getElementById('prompt-result').textContent = String(prompt('Name:'))",
+		})
+		done <- struct{}{}
+	}()
+
+	handleDialog(t, tabID, map[string]any{"accept": false})
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for prompt dialog")
+	}
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('prompt-result').textContent",
+	})
+	if !strings.Contains(string(out.Result), "null") {
+		t.Errorf("dismissed prompt result = %s, want 'null'", out.Result)
+	}
+}
+
+func TestPressKeyMetaModifier(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"meta"},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('key-output').textContent",
+	})
+	if !strings.Contains(string(out.Result), "Meta") {
+		t.Errorf("key output = %s, want to contain 'Meta'", out.Result)
+	}
+}
+
+func TestUploadFilesEmptyPaths(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// Empty paths — should effectively set 0 files.
+	callTool[struct{}](t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "#file-input",
+		"paths":    []string{},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('file-input').files.length",
+	})
+	if string(out.Result) != "0" {
+		t.Errorf("files.length after empty paths = %s, want 0", out.Result)
+	}
+}
+
+func TestHoverTriggersCSSHover(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Get the background color BEFORE hover.
+	bgBefore := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "getComputedStyle(document.getElementById('hover-target')).backgroundColor",
+	})
+
+	// Hover over the element.
+	callTool[struct{}](t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#hover-target",
+	})
+
+	// Verify JS mouseover event fired (CDP mouseMoved triggers native events).
+	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('hover-output').textContent",
+	})
+	if string(eval.Result) != `"hovered"` {
+		t.Errorf("JS mouseover event not fired: got %s", eval.Result)
+	}
+
+	// Check background color AFTER hover — CSS :hover SHOULD activate
+	// because we use CDP Input.dispatchMouseEvent (mouseMoved).
+	bgAfter := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "getComputedStyle(document.getElementById('hover-target')).backgroundColor",
+	})
+
+	if string(bgBefore.Result) == string(bgAfter.Result) {
+		t.Errorf("CSS :hover not activated: background before=%s, after=%s (should change to yellow)",
+			bgBefore.Result, bgAfter.Result)
+	}
+}
+
+func TestSelectOptionMultipleSelect(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Select "green" by value.
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#multi-select",
+		"value":    "green",
+	})
+
+	// Check which options are selected.
+	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "Array.from(document.getElementById('multi-select').selectedOptions).map(o => o.value).join(',')",
+	})
+
+	// With .value = "green", only "green" should be selected.
+	// The limitation: you can't select multiple options with a single call.
+	if string(eval.Result) != `"green"` {
+		t.Errorf("selected options = %s, want \"green\"", eval.Result)
+	}
+
+	// Now "add" red — with option.selected = true on a multi-select,
+	// this adds to the selection rather than replacing.
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#multi-select",
+		"value":    "red",
+	})
+
+	eval2 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "Array.from(document.getElementById('multi-select').selectedOptions).map(o => o.value).join(',')",
+	})
+
+	// With option.selected = true, both "red" and "green" should be selected.
+	if string(eval2.Result) != `"red,green"` {
+		t.Errorf("after second select, selected = %s, want \"red,green\" (additive multi-select)", eval2.Result)
+	}
+
+	// Verify change event still fires.
+	eval3 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('multi-select-output').textContent",
+	})
+	if !strings.Contains(string(eval3.Result), "multi:") {
+		t.Errorf("change event not fired: %s", eval3.Result)
+	}
+}
+
+func TestSelectOptionMultipleByLabel(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#multi-select",
+		"label":    "Blue",
+	})
+
+	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('multi-select').value",
+	})
+	if string(eval.Result) != `"blue"` {
+		t.Errorf("selected by label = %s, want \"blue\"", eval.Result)
+	}
+}
+
+func TestSelectOptionMultipleByIndex(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	idx := 2 // "Blue"
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#multi-select",
+		"index":    idx,
+	})
+
+	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('multi-select').value",
+	})
+	if string(eval.Result) != `"blue"` {
+		t.Errorf("selected by index = %s, want \"blue\"", eval.Result)
+	}
+}
+
+func TestSelectOptionByValueNonexistent(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	// Set a value that doesn't match any option — should error.
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#big-select",
+		"value":    "nonexistent",
+	})
+	if !strings.Contains(strings.ToLower(errText), "no option with value") {
+		t.Errorf("expected 'no option with value' error, got: %s", errText)
+	}
+}
+
+func TestClickHiddenElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// #hidden-btn is display:none. click should fail with a clear message
+	// that the element exists but is not visible.
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#hidden-btn",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Fatal("click on hidden element should error")
+	}
+	if !strings.Contains(errText, "not visible") {
+		t.Errorf("error should mention 'not visible', got: %s", errText)
+	}
+}
+
+func TestClickRightHiddenElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#hidden-btn",
+		"button":   "right",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Fatal("right-click on hidden element should error")
+	}
+	if !strings.Contains(errText, "not visible") {
+		t.Errorf("error should mention 'not visible', got: %s", errText)
+	}
+}
+
+func TestClickNonExistentElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#does-not-exist",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Fatal("click on non-existent element should error")
+	}
+	if !strings.Contains(errText, "not found") {
+		t.Errorf("error should mention 'not found', got: %s", errText)
+	}
+}
+
+func TestClickZeroSizeElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// chromedp clicks zero-size elements without error (they exist in DOM,
+	// just have no visual dimensions). This matches browser behavior —
+	// you can programmatically click hidden inputs.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#zero-size-input",
+	})
+}
+
+func TestClickToggleRevealsElement(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// The wiki-search-input is initially hidden. Clicking the toggle reveals it.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#wiki-search-toggle",
+	})
+
+	// Now the input should be visible and clickable.
+	callTool[struct{}](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#wiki-search-input",
+	})
+
+	// Verify the input is focused.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.activeElement.id",
+	})
+	if string(out.Result) != `"wiki-search-input"` {
+		t.Errorf("active element = %s, want wiki-search-input", out.Result)
+	}
+}
+
+func TestPressEnterSubmitsForm(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Type into search input.
+	callTool[struct{}](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#search-input",
+		"text":     "test query",
+		"mode":     "replace",
+	})
+
+	// Press Enter — should trigger form submission.
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Enter",
+	})
+
+	// Wait for the submit handler to update the DOM.
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent !== ''",
+		"timeout":    3000,
+	})
+
+	// Check that the form's submit handler was called.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent",
+	})
+	if string(out.Result) != `"submitted:test query"` {
+		t.Errorf("form submit result = %s, want 'submitted:test query'", out.Result)
+	}
+}
+
+func TestPressEnterAfterFocus(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Focus the search input explicitly, then type + Enter.
+	callTool[struct{}](t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#search-input",
+	})
+
+	// Type using press_key character by character.
+	for _, ch := range "hello" {
+		callTool[struct{}](t, "press_key", map[string]any{
+			"tab": tabID,
+			"key": string(ch),
+		})
+	}
+
+	// Press Enter.
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "Enter",
+	})
+
+	// Wait for the submit handler to update the DOM.
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent !== ''",
+		"timeout":    3000,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('search-submitted').textContent",
+	})
+	if string(out.Result) != `"submitted:hello"` {
+		t.Errorf("form submit after focus+type = %s, want 'submitted:hello'", out.Result)
+	}
+}
+
+// TestPressKeyUTF8Character verifies that a multi-byte UTF-8 character
+// (e.g. an emoji or accented char) can be pressed via the UTF-8 decode path.
+func TestPressKeyUTF8Character(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// Focus the input first.
+	callTool[struct{}](t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#name",
+	})
+
+	// Press an accented character (é) which is multi-byte UTF-8.
+	callTool[struct{}](t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "é",
+	})
+
+	// Verify the character was typed.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `document.querySelector('#name').value`,
+	})
+	var val string
+	if err := json.Unmarshal(out.Result, &val); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if val != "é" {
+		t.Errorf("input value = %q, want %q", val, "é")
+	}
+}
+
+func TestPressKeyInvalidModifier(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"invalid_mod"},
+	})
+	if !strings.Contains(errText, "modifiers") || !strings.Contains(errText, "invalid_mod") {
+		t.Errorf("error = %q, want to mention modifiers and 'invalid_mod'", errText)
+	}
+}
+
+func TestPressKeyMultipleInvalidModifiers(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Mix valid and invalid modifiers — the first invalid one should trigger error.
+	errText := callToolExpectErr(t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"ctrl", "superkey"},
+	})
+	if !strings.Contains(errText, "modifiers") {
+		t.Errorf("error = %q, want to mention 'modifiers'", errText)
+	}
+	if !strings.Contains(errText, "superkey") {
+		t.Errorf("error = %q, want to mention the invalid modifier 'superkey'", errText)
+	}
+}
+
+func TestPressKeyValidModifiersStillWork(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Verify all valid modifiers still work after the validation was added.
+	for _, mod := range []string{"ctrl", "shift", "alt", "meta"} {
+		t.Run(mod, func(t *testing.T) {
+			callTool[struct{}](t, "press_key", map[string]any{
+				"tab":       tabID,
+				"key":       "a",
+				"modifiers": []string{mod},
+			})
+		})
+	}
+}
+
+func TestPressKeyUnknownKeyName(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "press_key", map[string]any{
+		"tab": tabID,
+		"key": "NonExistentKey",
+	})
+	if !strings.Contains(errText, "unknown key") {
+		t.Errorf("error = %q, want to contain 'unknown key'", errText)
+	}
+}
+
+func TestSelectOptionEmptyValue(t *testing.T) {
+	tabID := navigateToFixture(t, "forms.html")
+	defer closeTab(t, tabID)
+
+	// First select "low" so we have a non-empty selection.
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#priority",
+		"value":    "low",
+	})
+
+	// Verify it was set to "low".
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('priority').value",
+	})
+	if string(out.Result) != `"low"` {
+		t.Fatalf("value after selecting low = %s, want \"low\"", out.Result)
+	}
+
+	// Now select the empty-value option (the placeholder).
+	callTool[struct{}](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#priority",
+		"value":    "",
+	})
+
+	// Verify it was set back to "".
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('priority').value",
+	})
+	if string(out.Result) != `""` {
+		t.Errorf("value after selecting empty = %s, want \"\"", out.Result)
+	}
+}
+
+func TestPressKeyInsertsCharacter(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Focus the input.
+	callTool[struct{}](t, "focus", map[string]any{
+		"tab":      tabID,
+		"selector": "#type-target",
+	})
+
+	// Press individual keys.
+	for _, key := range []string{"a", "b", "c"} {
+		callTool[struct{}](t, "press_key", map[string]any{
+			"tab": tabID,
+			"key": key,
+		})
+	}
+
+	// Verify the input has the typed characters.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('type-target').value",
+	})
+	if string(out.Result) != `"abc"` {
+		t.Errorf("input value after press_key = %s, want \"abc\"", out.Result)
+	}
+}
+
+// TestSelectOptionSelectorTimeout verifies select_option times out cleanly.
+func TestSelectOptionSelectorTimeout(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-select",
+		"value":    "x",
+		"timeout":  500,
+	})
+	if !strings.Contains(errText, "not found") {
+		t.Fatalf("expected 'not found' error, got: %s", errText)
+	}
+}
+
+// TestSubmitFormSelectorTimeout verifies submit_form times out cleanly.
+func TestSubmitFormSelectorTimeout(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "submit_form", map[string]any{
+		"tab":      tabID,
+		"selector": "#nonexistent-form",
+		"timeout":  500,
+	})
+	if !strings.Contains(errText, "not found") {
+		t.Fatalf("expected 'not found' error, got: %s", errText)
 	}
 }

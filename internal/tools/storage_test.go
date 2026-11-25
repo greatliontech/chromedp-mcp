@@ -393,3 +393,34 @@ func TestGetStorage_EmptyAllEntriesVsMissingKeyJSON(t *testing.T) {
 		t.Errorf("single-key JSON should omit 'entries', got: %s", missingJSON)
 	}
 }
+
+func TestIsLocalStorage(t *testing.T) {
+	tests := []struct {
+		input   string
+		isLocal bool
+		wantErr bool
+	}{
+		{input: "", isLocal: true, wantErr: false},
+		{input: "local", isLocal: true, wantErr: false},
+		{input: "session", isLocal: false, wantErr: false},
+		{input: "invalid", isLocal: false, wantErr: true},
+		{input: "Local", isLocal: false, wantErr: true},     // case sensitive
+		{input: "SESSION", isLocal: false, wantErr: true},   // case sensitive
+		{input: "indexeddb", isLocal: false, wantErr: true}, // not supported
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := isLocalStorage(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("isLocalStorage(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.isLocal {
+				t.Errorf("isLocalStorage(%q) = %v, want %v", tt.input, got, tt.isLocal)
+			}
+			if tt.wantErr && err != nil && !strings.Contains(err.Error(), "invalid storage type") {
+				t.Errorf("isLocalStorage(%q) error = %q, want it to contain 'invalid storage type'", tt.input, err)
+			}
+		})
+	}
+}

@@ -10,7 +10,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/greatliontech/chromedp-mcp/internal/browser"
 	"github.com/greatliontech/chromedp-mcp/internal/profile"
 )
 
@@ -19,7 +18,6 @@ import (
 // tools via the returned session.
 type profileHarness struct {
 	session *mcp.ClientSession
-	cancel  context.CancelFunc
 }
 
 func newProfileHarness(t *testing.T, allowedProfiles []string, localState string) *profileHarness {
@@ -31,41 +29,11 @@ func newProfileHarness(t *testing.T, allowedProfiles []string, localState string
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(harness.ctx)
-
-	// Use the existing browser manager — we won't actually launch browsers.
-	mgr := browser.NewManager(ctx)
-
-	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "chromedp-mcp-profile-test",
-		Version: "test",
-	}, nil)
-	Register(srv, mgr, &Options{
+	sess := newIsolatedSession(t, &Options{
 		AllowedProfiles: allowedProfiles,
 		UserDataDir:     userDataDir,
 	})
-
-	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	go func() {
-		_ = srv.Run(ctx, serverTransport)
-	}()
-
-	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "profile-test-client",
-		Version: "test",
-	}, nil)
-	session, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		cancel()
-		t.Fatalf("connect MCP client: %v", err)
-	}
-
-	t.Cleanup(func() {
-		mgr.CloseAll()
-		cancel()
-	})
-
-	return &profileHarness{session: session, cancel: cancel}
+	return &profileHarness{session: sess}
 }
 
 func (ph *profileHarness) callTool(t *testing.T, name string, args any) *mcp.CallToolResult {
@@ -224,24 +192,9 @@ func TestBrowserLaunchProfileMissingUserDataDir(t *testing.T) {
 		t.Skipf("platform DefaultUserDataDir() returned %q despite empty XDG_CONFIG_HOME", dir)
 	}
 
-	ctx, cancel := context.WithCancel(harness.ctx)
-	mgr := browser.NewManager(ctx)
-	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "test"}, nil)
-	Register(srv, mgr, &Options{
+	session := newIsolatedSession(t, &Options{
 		AllowedProfiles: []string{"Work"},
 		UserDataDir:     "",
-	})
-	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	go func() { _ = srv.Run(ctx, serverTransport) }()
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
-	session, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		cancel()
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(func() {
-		mgr.CloseAll()
-		cancel()
 	})
 
 	callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)

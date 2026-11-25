@@ -11,10 +11,6 @@ import (
 // reference chain is too long". The handler coerces the expression to
 // Boolean(...) before sending to chromedp.Poll, which makes any
 // truthy/falsy semantics work without the LLM having to wrap manually.
-//
-// This was issue 010 from the exploration session; the original failure
-// was a chained optional access on a DOM node whose intermediate value
-// was itself a complex object.
 func TestWaitForExpressionNonPrimitive(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
@@ -47,12 +43,11 @@ func TestWaitForExpressionFalsyPrimitive(t *testing.T) {
 	}
 }
 
-// TestWaitForExpressionReturnsObject reproduces the original issue 010
-// scenario: a predicate whose terminal value is a non-primitive (a
-// DOMRect object from getBoundingClientRect). Without coercion, CDP
-// errors with "Object reference chain is too long" trying to serialize
-// the result. With Promise.resolve(...).then(Boolean), the object is
-// truthy → predicate matches → wait_for returns immediately.
+// TestWaitForExpressionReturnsObject verifies a predicate whose terminal
+// value is a non-primitive (a DOMRect object from getBoundingClientRect).
+// Without coercion, CDP errors with "Object reference chain is too long"
+// trying to serialize the result. With Promise.resolve(...).then(Boolean),
+// the object is truthy → predicate matches → wait_for returns immediately.
 func TestWaitForExpressionReturnsObject(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)

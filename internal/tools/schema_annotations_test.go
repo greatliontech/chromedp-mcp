@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,30 +11,13 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/greatliontech/chromedp-mcp/internal/browser"
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 func listAllRegisteredTools(t *testing.T, opts *Options) []*mcp.Tool {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	mgr := browser.NewManager(ctx)
-	srv := mcp.NewServer(&mcp.Implementation{Name: "schema-test", Version: "test"}, nil)
-	Register(srv, mgr, opts)
-
-	ct, st := mcp.NewInMemoryTransports()
-	go func() { _ = srv.Run(ctx, st) }()
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "schema-client", Version: "test"}, nil)
-	sess, err := client.Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	defer sess.Close()
-
-	res, err := sess.ListTools(ctx, &mcp.ListToolsParams{})
+	sess := newIsolatedSession(t, opts)
+	res, err := sess.ListTools(t.Context(), &mcp.ListToolsParams{})
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
@@ -101,27 +83,27 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"get_downloads":        {false, false, false},
 
 		// Non-destructive, non-idempotent mutations
-		"browser_launch":  {false, false, false},
-		"browser_connect": {false, false, false},
-		"tab_new":         {false, false, false},
-		"navigate":        {false, false, false},
-		"reload":          {false, false, false},
-		"go_back":         {false, false, false},
-		"go_forward":      {false, false, false},
+		"browser_launch":     {false, false, false},
+		"browser_connect":    {false, false, false},
+		"tab_new":            {false, false, false},
+		"navigate":           {false, false, false},
+		"reload":             {false, false, false},
+		"go_back":            {false, false, false},
+		"go_forward":         {false, false, false},
 		"evaluate":           {false, false, false},
 		"add_script":         {false, false, false},
 		"add_intercept_rule": {false, false, false},
 		"click":              {false, false, false},
-		"type":            {false, false, false},
-		"select_option":   {false, false, false},
-		"submit_form":     {false, false, false},
-		"scroll":          {false, false, false},
-		"hover":           {false, false, false},
-		"focus":           {false, false, false},
-		"press_key":       {false, false, false},
-		"upload_files":    {false, false, false},
-		"handle_dialog":   {false, false, false},
-		"drag_and_drop":   {false, false, false},
+		"type":               {false, false, false},
+		"select_option":      {false, false, false},
+		"submit_form":        {false, false, false},
+		"scroll":             {false, false, false},
+		"hover":              {false, false, false},
+		"focus":              {false, false, false},
+		"press_key":          {false, false, false},
+		"upload_files":       {false, false, false},
+		"handle_dialog":      {false, false, false},
+		"drag_and_drop":      {false, false, false},
 
 		// Idempotent non-destructive writes
 		"browser_activate":              {false, false, true},
@@ -311,24 +293,12 @@ func TestBrowserListProfilesReturnsEmptyArrayNotNull(t *testing.T) {
 		t.Fatalf("write Local State: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	mgr := browser.NewManager(ctx)
-	srv := mcp.NewServer(&mcp.Implementation{Name: "prof-test", Version: "test"}, nil)
-	Register(srv, mgr, &Options{
+	sess := newIsolatedSession(t, &Options{
 		AllowedProfiles: []string{"NonExistentProfile"},
 		UserDataDir:     dir,
 	})
-	ct, st := mcp.NewInMemoryTransports()
-	go func() { _ = srv.Run(ctx, st) }()
-	client := mcp.NewClient(&mcp.Implementation{Name: "prof-client", Version: "test"}, nil)
-	sess, err := client.Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	defer sess.Close()
 
-	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: "browser_list_profiles"})
+	res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: "browser_list_profiles"})
 	if err != nil || res.IsError {
 		t.Fatalf("browser_list_profiles failed: err=%v text=%s", err, contentText(res))
 	}
@@ -511,19 +481,7 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 func TestValidationRunsBeforeTabResolution(t *testing.T) {
 	// Fresh server with NO launched browser: upfront validation must fail with
 	// the parameter error rather than "no browser running".
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	mgr := browser.NewManager(ctx)
-	srv := mcp.NewServer(&mcp.Implementation{Name: "precheck-test", Version: "test"}, nil)
-	Register(srv, mgr, &Options{})
-	ct, st := mcp.NewInMemoryTransports()
-	go func() { _ = srv.Run(ctx, st) }()
-	client := mcp.NewClient(&mcp.Implementation{Name: "precheck-client", Version: "test"}, nil)
-	sess, err := client.Connect(ctx, ct, nil)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	defer sess.Close()
+	sess := newIsolatedSession(t, &Options{})
 
 	cases := []struct {
 		name string
@@ -560,7 +518,7 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"drag_and_drop", map[string]any{"source": "#a", "target": "#b", "steps": -1}, "steps"},
 	}
 	for _, tc := range cases {
-		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
 		if err != nil {
 			t.Fatalf("%s protocol error: %v", tc.name, err)
 		}

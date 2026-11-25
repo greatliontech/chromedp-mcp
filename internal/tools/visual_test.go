@@ -473,3 +473,684 @@ func TestScreenshotValidationAndSelectorTimeout(t *testing.T) {
 		t.Errorf("screenshot missing selector err = %q, want 'not found in the DOM'", errText)
 	}
 }
+
+func TestScreenshot(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "screenshot", map[string]any{"tab": tabID})
+	if result.IsError {
+		t.Fatalf("screenshot returned error")
+	}
+	// Should have image content.
+	found := false
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			found = true
+			if len(img.Data) == 0 {
+				t.Error("screenshot returned empty image data")
+			}
+			if img.MIMEType != "image/png" {
+				t.Errorf("screenshot MIME = %q, want image/png", img.MIMEType)
+			}
+		}
+	}
+	if !found {
+		t.Error("screenshot result has no ImageContent")
+	}
+}
+
+func TestElementScreenshot(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#title",
+	})
+	if result.IsError {
+		t.Fatalf("element screenshot returned error")
+	}
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			if len(img.Data) == 0 {
+				t.Error("element screenshot returned empty data")
+			}
+			return
+		}
+	}
+	t.Error("element screenshot has no ImageContent")
+}
+
+func TestSetViewport(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "set_viewport", map[string]any{
+		"tab":    tabID,
+		"width":  375,
+		"height": 667,
+	})
+
+	// Verify via JS.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.innerWidth",
+	})
+	if string(out.Result) != "375" {
+		t.Errorf("viewport width = %s, want 375", out.Result)
+	}
+}
+
+func TestFullPageScreenshot(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":       tabID,
+		"full_page": true,
+	})
+	if result.IsError {
+		t.Fatalf("full_page screenshot error: %s", contentText(result))
+	}
+	var found bool
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			found = true
+			if len(img.Data) == 0 {
+				t.Error("full_page screenshot returned empty data")
+			}
+		}
+	}
+	if !found {
+		t.Error("full_page screenshot did not return ImageContent")
+	}
+}
+
+func TestPDF(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{"tab": tabID})
+	if result.IsError {
+		t.Fatalf("pdf error: %s", contentText(result))
+	}
+	var found bool
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			found = true
+			if res.Resource.MIMEType != "application/pdf" {
+				t.Errorf("pdf MIME = %q, want application/pdf", res.Resource.MIMEType)
+			}
+			if len(res.Resource.Blob) == 0 {
+				t.Error("pdf returned empty blob")
+			}
+		}
+	}
+	if !found {
+		t.Error("pdf did not return EmbeddedResource")
+	}
+}
+
+func TestScreenshotJPEG(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":       tabID,
+		"format":    "jpeg",
+		"quality":   50,
+		"full_page": true,
+	})
+	if result.IsError {
+		t.Fatalf("JPEG screenshot error: %s", contentText(result))
+	}
+	var found bool
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			found = true
+			if img.MIMEType != "image/jpeg" {
+				t.Errorf("JPEG screenshot MIME = %q, want image/jpeg", img.MIMEType)
+			}
+			if len(img.Data) == 0 {
+				t.Error("JPEG screenshot returned empty data")
+			}
+		}
+	}
+	if !found {
+		t.Error("JPEG screenshot did not return ImageContent")
+	}
+}
+
+func TestScreenshotPNGDefault(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Default format should be PNG.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab": tabID,
+	})
+	if result.IsError {
+		t.Fatalf("screenshot error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			if img.MIMEType != "image/png" {
+				t.Errorf("default format MIME = %q, want image/png", img.MIMEType)
+			}
+			// PNG magic bytes: 0x89 0x50 0x4E 0x47
+			if len(img.Data) > 4 && img.Data[0] != 0x89 {
+				t.Error("PNG data doesn't start with PNG magic bytes")
+			}
+			return
+		}
+	}
+	t.Error("no ImageContent in result")
+}
+
+func TestPDFLandscape(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{
+		"tab":       tabID,
+		"landscape": true,
+	})
+	if result.IsError {
+		t.Fatalf("landscape PDF error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			if len(res.Resource.Blob) == 0 {
+				t.Error("landscape PDF returned empty blob")
+			}
+			return
+		}
+	}
+	t.Error("no EmbeddedResource in result")
+}
+
+func TestPDFPrintBackgroundFalse(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{
+		"tab":              tabID,
+		"print_background": false,
+	})
+	if result.IsError {
+		t.Fatalf("PDF print_background=false error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			if len(res.Resource.Blob) == 0 {
+				t.Error("PDF returned empty blob")
+			}
+			return
+		}
+	}
+	t.Error("no EmbeddedResource in result")
+}
+
+func TestPDFCustomScale(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{
+		"tab":   tabID,
+		"scale": 0.5,
+	})
+	if result.IsError {
+		t.Fatalf("PDF scale=0.5 error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			if len(res.Resource.Blob) == 0 {
+				t.Error("PDF returned empty blob")
+			}
+			return
+		}
+	}
+	t.Error("no EmbeddedResource in result")
+}
+
+func TestSetViewportDeviceScaleFactor(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "set_viewport", map[string]any{
+		"tab":                 tabID,
+		"width":               800,
+		"height":              600,
+		"device_scale_factor": 2.0,
+	})
+
+	// Verify width.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.innerWidth",
+	})
+	if string(out.Result) != "800" {
+		t.Errorf("viewport width = %s, want 800", out.Result)
+	}
+
+	// Verify height.
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.innerHeight",
+	})
+	if string(out.Result) != "600" {
+		t.Errorf("viewport height = %s, want 600", out.Result)
+	}
+
+	// Verify device pixel ratio matches scale factor.
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.devicePixelRatio",
+	})
+	if string(out.Result) != "2" {
+		t.Errorf("devicePixelRatio = %s, want 2", out.Result)
+	}
+}
+
+func TestSetViewportMobile(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "set_viewport", map[string]any{
+		"tab":    tabID,
+		"width":  390,
+		"height": 844,
+		"mobile": true,
+	})
+
+	// In mobile mode, screen.width/height reflects the device metrics
+	// regardless of layout viewport.
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "screen.width",
+	})
+	if string(out.Result) != "390" {
+		t.Errorf("screen.width = %s, want 390", out.Result)
+	}
+
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "screen.height",
+	})
+	if string(out.Result) != "844" {
+		t.Errorf("screen.height = %s, want 844", out.Result)
+	}
+}
+
+func TestScreenshotSelectorOverridesFullPage(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// When both selector and full_page are given, selector should take priority.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":       tabID,
+		"selector":  "#title",
+		"full_page": true,
+	})
+	if result.IsError {
+		t.Fatalf("screenshot error: %s", contentText(result))
+	}
+	// Get element screenshot size for comparison.
+	var selectorSize int
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			selectorSize = len(img.Data)
+		}
+	}
+
+	// Now get a full-page screenshot (no selector).
+	result2 := callToolRaw(t, "screenshot", map[string]any{
+		"tab":       tabID,
+		"full_page": true,
+	})
+	var fullSize int
+	for _, c := range result2.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			fullSize = len(img.Data)
+		}
+	}
+
+	// Element screenshot should be smaller than full page.
+	if selectorSize >= fullSize {
+		t.Errorf("element screenshot (%d bytes) should be smaller than full page (%d bytes)", selectorSize, fullSize)
+	}
+}
+
+func TestPDFCustomPaperSize(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{
+		"tab":          tabID,
+		"paper_width":  11,
+		"paper_height": 17,
+	})
+	if result.IsError {
+		t.Fatalf("PDF custom paper error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			if len(res.Resource.Blob) == 0 {
+				t.Error("PDF returned empty blob")
+			}
+			return
+		}
+	}
+	t.Error("no EmbeddedResource in result")
+}
+
+func TestPDFCombinedParams(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{
+		"tab":              tabID,
+		"landscape":        true,
+		"scale":            0.75,
+		"print_background": true,
+	})
+	if result.IsError {
+		t.Fatalf("PDF combined params error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			if len(res.Resource.Blob) == 0 {
+				t.Error("PDF returned empty blob")
+			}
+			return
+		}
+	}
+	t.Error("no EmbeddedResource in result")
+}
+
+func TestSetViewportDefaultScaleFactor(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "set_viewport", map[string]any{
+		"tab":    tabID,
+		"width":  1024,
+		"height": 768,
+		// device_scale_factor omitted — should default to 1.0.
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.devicePixelRatio",
+	})
+	if string(out.Result) != "1" {
+		t.Errorf("default devicePixelRatio = %s, want 1", out.Result)
+	}
+}
+
+func TestScreenshotJPEGViewport(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":    tabID,
+		"format": "jpeg",
+	})
+	if result.IsError {
+		t.Fatalf("screenshot error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			if img.MIMEType != "image/jpeg" {
+				t.Errorf("MIME = %q, want image/jpeg", img.MIMEType)
+			}
+			if len(img.Data) == 0 {
+				t.Error("screenshot returned empty data")
+			}
+			// JPEG magic bytes: FF D8.
+			if len(img.Data) >= 2 && (img.Data[0] != 0xFF || img.Data[1] != 0xD8) {
+				t.Error("data does not start with JPEG magic bytes")
+			}
+			return
+		}
+	}
+	t.Error("no ImageContent in result")
+}
+
+func TestPDFPageRanges(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "pdf", map[string]any{
+		"tab":         tabID,
+		"page_ranges": "1",
+	})
+	if result.IsError {
+		t.Fatalf("PDF page_ranges error: %s", contentText(result))
+	}
+	for _, c := range result.Content {
+		if res, ok := c.(*mcp.EmbeddedResource); ok {
+			if len(res.Resource.Blob) == 0 {
+				t.Error("PDF returned empty blob")
+			}
+			// Verify PDF magic bytes.
+			if len(res.Resource.Blob) >= 4 && string(res.Resource.Blob[:4]) != "%PDF" {
+				t.Error("PDF data doesn't start with %PDF magic")
+			}
+			return
+		}
+	}
+	t.Error("no EmbeddedResource in result")
+}
+
+func TestSetViewportScaleFactorZero(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "set_viewport", map[string]any{
+		"tab":                 tabID,
+		"width":               800,
+		"height":              600,
+		"device_scale_factor": 0,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.devicePixelRatio",
+	})
+	if string(out.Result) != "1" {
+		t.Errorf("scale=0 devicePixelRatio = %s, want 1 (default)", out.Result)
+	}
+}
+
+// TestElementScaleWithinMax verifies element screenshots succeed without
+// downscaling when the element is smaller than max_dimension.
+func TestElementScaleWithinMax(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// #top-box is 100x80 per the fixture; max_dimension=1000 requires no downscale.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":           tabID,
+		"selector":      "#top-box",
+		"max_dimension": 1000,
+	})
+	if result.IsError {
+		t.Fatalf("screenshot with max_dimension (no downscale) failed: %s", contentText(result))
+	}
+}
+
+// TestElementScaleDownscale verifies element screenshots downscale when
+// the element exceeds max_dimension.
+func TestElementScaleDownscale(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// #top-box is 100x80. With max_dimension=50, scale should be ~0.5.
+	// The resulting screenshot should succeed and be smaller.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":           tabID,
+		"selector":      "#top-box",
+		"max_dimension": 50,
+	})
+	if result.IsError {
+		t.Fatalf("screenshot with max_dimension failed: %s", contentText(result))
+	}
+}
+
+// TestScreenshotNonExistentSelector verifies that a screenshot of a
+// non-existent element returns a clear error.
+func TestScreenshotNonExistentSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#does-not-exist-at-all",
+	})
+	if errText == "" {
+		t.Fatal("screenshot with non-existent selector should error")
+	}
+	// The error could be "not found" (selectorError) or "context deadline exceeded"
+	// (chromedp timeout). Either way, a clear error is returned.
+	lowerErr := strings.ToLower(errText)
+	if !strings.Contains(lowerErr, "not found") && !strings.Contains(lowerErr, "deadline") && !strings.Contains(lowerErr, "timeout") {
+		t.Errorf("error = %q, want to contain 'not found', 'deadline', or 'timeout'", errText)
+	}
+}
+
+func TestScreenshotMaxDimensionInvalidSelector(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Use max_dimension with a valid selector that exists.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":           tabID,
+		"selector":      "#title",
+		"max_dimension": 500,
+	})
+	if result.IsError {
+		t.Errorf("screenshot with valid selector and max_dimension should succeed, got: %s", contentText(result))
+	}
+}
+
+func TestScreenshotMaxDimensionViewport(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Viewport screenshot with max_dimension.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":           tabID,
+		"max_dimension": 500,
+	})
+	if result.IsError {
+		t.Errorf("viewport screenshot with max_dimension should succeed, got: %s", contentText(result))
+	}
+}
+
+func TestScreenshotMaxDimensionFullPage(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Full-page screenshot with max_dimension.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":           tabID,
+		"full_page":     true,
+		"max_dimension": 500,
+	})
+	if result.IsError {
+		t.Errorf("full-page screenshot with max_dimension should succeed, got: %s", contentText(result))
+	}
+}
+
+func TestScreenshotElementJPEG(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Take an element screenshot in JPEG format.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#title",
+		"format":   "jpeg",
+		"quality":  80,
+	})
+	if result.IsError {
+		t.Fatalf("JPEG element screenshot error: %s", contentText(result))
+	}
+
+	var found bool
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			found = true
+			if img.MIMEType != "image/jpeg" {
+				t.Errorf("MIME = %q, want image/jpeg", img.MIMEType)
+			}
+			// JPEG files start with 0xFF 0xD8.
+			if len(img.Data) >= 2 && (img.Data[0] != 0xFF || img.Data[1] != 0xD8) {
+				t.Errorf("data starts with %x %x, want JPEG magic bytes FF D8", img.Data[0], img.Data[1])
+			}
+		}
+	}
+	if !found {
+		t.Error("JPEG element screenshot did not return ImageContent")
+	}
+}
+
+func TestScreenshotElementPNG(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Element screenshot with default (PNG) format should still work.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#title",
+	})
+	if result.IsError {
+		t.Fatalf("PNG element screenshot error: %s", contentText(result))
+	}
+
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			if img.MIMEType != "image/png" {
+				t.Errorf("MIME = %q, want image/png", img.MIMEType)
+			}
+			// PNG files start with 0x89 0x50 0x4E 0x47.
+			if len(img.Data) >= 4 && img.Data[0] != 0x89 {
+				t.Error("data doesn't start with PNG magic bytes")
+			}
+			return
+		}
+	}
+	t.Error("PNG element screenshot did not return ImageContent")
+}
+
+func TestScreenshotElementJPEGWithMaxDim(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	// Combine JPEG format with max_dimension for element screenshot.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":           tabID,
+		"selector":      "#title",
+		"format":        "jpeg",
+		"quality":       70,
+		"max_dimension": 200,
+	})
+	if result.IsError {
+		t.Fatalf("JPEG element screenshot with max_dim error: %s", contentText(result))
+	}
+
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			if img.MIMEType != "image/jpeg" {
+				t.Errorf("MIME = %q, want image/jpeg", img.MIMEType)
+			}
+			if len(img.Data) >= 2 && (img.Data[0] != 0xFF || img.Data[1] != 0xD8) {
+				t.Errorf("data starts with %x %x, want JPEG magic bytes FF D8", img.Data[0], img.Data[1])
+			}
+			return
+		}
+	}
+	t.Error("no ImageContent in result")
+}

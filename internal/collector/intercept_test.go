@@ -61,8 +61,8 @@ func TestInterceptRuleLifecyclePrecedenceAndCopies(t *testing.T) {
 		Body:         []byte(`{"ok":true}`),
 	})
 	id2 := ic.Add(InterceptRule{
-		URLPattern: "*/api/*",
-		Action:     InterceptActionFail,
+		URLPattern:  "*/api/*",
+		Action:      InterceptActionFail,
 		ErrorReason: network.ErrorReasonTimedOut,
 	})
 	if id1 == "" || id2 == "" || id1 == id2 {

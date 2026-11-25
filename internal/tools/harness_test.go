@@ -453,3 +453,78 @@ func waitForNetwork(t *testing.T, tabID, urlPattern string) {
 	}
 	t.Fatalf("timed out waiting for network request matching %q", urlPattern)
 }
+
+// newIsolatedSession creates an in-memory MCP server/client session backed by
+// a fresh, empty browser.Manager with no running browsers. Cleanup tears down
+// the client, server goroutine, and any launched browsers synchronously.
+func newIsolatedSession(t *testing.T, opts *Options) *mcp.ClientSession {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	mgr := browser.NewManager(ctx)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "isolated-test", Version: "test"}, nil)
+	Register(srv, mgr, opts)
+
+	ct, st := mcp.NewInMemoryTransports()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = srv.Run(ctx, st)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "isolated-client", Version: "test"}, nil)
+	sess, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		cancel()
+		<-done
+		mgr.CloseAll()
+		t.Fatalf("Connect isolated MCP session: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sess.Close()
+		cancel()
+		<-done
+		mgr.CloseAll()
+	})
+	return sess
+}
+
+// selectorTimeout is a helper that verifies a tool call with a missing
+// selector returns an error within the configured timeout, and that
+// the same tool succeeds with a valid selector.
+func selectorTimeout(t *testing.T, tabID, tool string, extraInvalid, extraValid map[string]any) {
+	t.Helper()
+
+	// --- invalid selector: must error within timeout ---
+	args := map[string]any{
+		"tab":      tabID,
+		"selector": "#selector-that-does-not-exist-xyz",
+		"timeout":  500, // 500ms timeout for quick test turnaround
+	}
+	for k, v := range extraInvalid {
+		args[k] = v
+	}
+
+	start := time.Now()
+	errText := callToolExpectErr(t, tool, args)
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Errorf("%s with invalid selector took %v, want < 3s with 500ms timeout", tool, elapsed)
+	}
+	if errText == "" {
+		t.Errorf("%s with invalid selector should return an error", tool)
+	}
+
+	// --- valid selector: must succeed ---
+	validArgs := map[string]any{
+		"tab": tabID,
+	}
+	for k, v := range extraValid {
+		validArgs[k] = v
+	}
+	result := callToolRaw(t, tool, validArgs)
+	if result.IsError {
+		t.Errorf("%s with valid selector failed: %s", tool, contentText(result))
+	}
+}
