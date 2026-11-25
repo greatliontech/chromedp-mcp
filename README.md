@@ -36,9 +36,9 @@ chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>] [--user-data-d
 
 | Flag                 | Description                                                                                                                                                                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--download-dir`     | Directory for saving screenshots, PDFs, and file downloads. When set, the `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file tracking via `get_downloads`. |
+| `--download-dir`     | Directory for saving screenshots, PDFs, and file downloads (supports `~` expansion). When set, the `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file tracking via `get_downloads`. |
 | `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). Enables the `browser_list_profiles` tool and the `profile` parameter on `browser_launch`. See [User Profiles](#user-profiles) for details. |
-| `--user-data-dir`    | Override the Chrome/Chromium user data directory used for profile discovery. When omitted, the default platform location is auto-detected (e.g. `~/.config/google-chrome` on Linux). Only relevant when `--allowed-profiles` is set. |
+| `--user-data-dir`    | Override the Chrome/Chromium user data directory used for profile discovery (supports `~` expansion). When omitted, the default platform location is auto-detected (e.g. `~/.config/google-chrome` on Linux). Only relevant when `--allowed-profiles` is set. |
 
 ### Claude Desktop
 
@@ -106,7 +106,7 @@ The server reads Chrome's `Local State` file to map display names to profile dir
 
 ## Tools
 
-chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is entirely tool-driven — the LLM decides when to launch browsers and create tabs.
+chromedp-mcp exposes 80 tools (79 by default, plus `browser_list_profiles` when `--allowed-profiles` is set) organized by category. The browser lifecycle is entirely tool-driven — the LLM decides when to launch browsers and create tabs.
 
 ### Browser Management
 
@@ -182,7 +182,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 
 | Tool               | Description                                                   |
 | ------------------ | ------------------------------------------------------------- |
-| `get_console_logs` | Get captured console messages (log, warn, error, info, debug) |
+| `get_console_logs` | Get captured console messages (`log`, `warn`, `error`, `info`, `debug`, `assert`, `trace`, etc.) |
 | `get_js_errors`    | Get captured JavaScript exceptions                            |
 | `clear_console`    | Clear console and error buffers                               |
 | `clear_buffers`    | Clear selected or all event collector buffers                 |
@@ -203,7 +203,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | ---------------- | ----------------------------------- |
 | `get_cookies`    | Get browser cookies                 |
 | `set_cookie`     | Set a browser cookie                |
-| `delete_cookies` | Delete cookies by name or clear all |
+| `delete_cookies` | Delete cookies by name, domain, and/or path, or clear all |
 
 ### Storage
 
