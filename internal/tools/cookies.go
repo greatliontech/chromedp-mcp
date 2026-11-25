@@ -45,7 +45,7 @@ type SetCookieInput struct {
 	TabInput
 	Name     string  `json:"name" jsonschema:"Cookie name"`
 	Value    string  `json:"value" jsonschema:"Cookie value"`
-	Domain   string  `json:"domain,omitempty" jsonschema:"Cookie domain"`
+	Domain   string  `json:"domain,omitempty" jsonschema:"Cookie domain (defaults to the target tab's current HTTP(S) URL if omitted)"`
 	Path     string  `json:"path,omitempty" jsonschema:"Cookie path (default /)"`
 	Expires  float64 `json:"expires,omitempty" jsonschema:"Cookie expiration as Unix timestamp. If omitted creates a session cookie."`
 	HTTPOnly bool    `json:"http_only,omitempty" jsonschema:"HTTP-only flag (default false)"`
@@ -56,7 +56,7 @@ type SetCookieInput struct {
 // DeleteCookiesInput is the input for delete_cookies.
 type DeleteCookiesInput struct {
 	TabInput
-	Name   string `json:"name,omitempty" jsonschema:"Cookie name to delete. If omitted deletes all cookies."`
+	Name   string `json:"name,omitempty" jsonschema:"Cookie name to delete. If name, domain, and path are all omitted, clears all browser cookies."`
 	Domain string `json:"domain,omitempty" jsonschema:"Scope deletion to a domain"`
 	Path   string `json:"path,omitempty" jsonschema:"Scope deletion to a path"`
 }

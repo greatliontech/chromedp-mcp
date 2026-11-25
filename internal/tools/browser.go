@@ -29,7 +29,7 @@ type BrowserLaunchOutput struct {
 
 // BrowserConnectInput is the input for browser_connect.
 type BrowserConnectInput struct {
-	URL string `json:"url" jsonschema:"Chrome remote debugging URL (ws:// or http://)"`
+	URL string `json:"url" jsonschema:"Chrome remote debugging URL (ws://, wss://, http://, or https://)"`
 }
 
 // BrowserConnectOutput is the output for browser_connect.
@@ -167,7 +167,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_list",
-		Description: "List all managed browsers with their IDs, modes, and connection status.",
+		Description: "List all live managed browsers with their IDs, modes, active status, and open tab counts (pruning dead browsers).",
 		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, BrowserListOutput, error) {
 		return nil, BrowserListOutput{Browsers: mgr.List()}, nil

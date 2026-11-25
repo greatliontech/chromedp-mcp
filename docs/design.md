@@ -90,7 +90,7 @@ Returns: `{closed}` with the closed browser ID.
 
 #### `browser_list`
 
-List all active managed browsers (pruning any that exited externally).
+List all live managed browsers (pruning any that exited externally).
 
 No parameters.
 
@@ -627,7 +627,7 @@ Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
 #### `upload_files`
 
-Set files on a file input element. For locally launched browsers (`mode == "launch"`), paths are validated against the local filesystem (must be absolute existing non-directory paths); for remote connected browsers (`mode == "connect"`), paths are passed directly to Chrome so remote/container filesystems work.
+Set files on a file input element. For locally launched browsers (`mode == "launch"`), paths are validated against the local filesystem (must be absolute existing non-directory paths); for connected browsers (`mode == "connect"`), paths are passed directly to Chrome so remote/container filesystems work.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

@@ -39,7 +39,7 @@ type PDFInput struct {
 	Scale           float64 `json:"scale,omitempty" jsonschema:"Page rendering scale (default 1.0)"`
 	PaperWidth      float64 `json:"paper_width,omitempty" jsonschema:"Paper width in inches (default 8.5)"`
 	PaperHeight     float64 `json:"paper_height,omitempty" jsonschema:"Paper height in inches (default 11)"`
-	PageRanges      string  `json:"page_ranges,omitempty" jsonschema:"Page ranges e.g. 1-5 8. Defaults to all pages."`
+	PageRanges      string  `json:"page_ranges,omitempty" jsonschema:"Page ranges e.g. '1-5, 8'. Defaults to all pages."`
 	Filename        string  `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Omit to return inline only."`
 }
 

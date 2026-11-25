@@ -270,7 +270,7 @@ type PressKeyInput struct {
 type UploadFilesInput struct {
 	SelectorInput
 	Selector        string   `json:"selector" jsonschema:"CSS selector of the file input element"`
-	Paths           []string `json:"paths" jsonschema:"Absolute file paths to set"`
+	Paths           []string `json:"paths" jsonschema:"File paths to set (validated as local absolute files on launched browsers; passed directly to Chrome on connected browsers)"`
 	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the input.files change fires and return counts in 'observed'. Useful when an onchange handler kicks off the actual upload XHR. Default 0. Max 30000."`
 }
 

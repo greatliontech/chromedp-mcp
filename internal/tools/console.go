@@ -12,7 +12,7 @@ import (
 // GetConsoleLogsInput is the input for get_console_logs.
 type GetConsoleLogsInput struct {
 	TabInput
-	Level string `json:"level,omitempty" jsonschema:"Filter by level: log warn error info debug. If omitted returns all."`
+	Level string `json:"level,omitempty" jsonschema:"Filter by console level (e.g. log, warn, error, info, debug, assert, trace; CDP warning is normalized to warn). If omitted returns all."`
 	Mode  string `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the buffer, 'drain' to consume them. Required."`
 	Limit int    `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
 }
