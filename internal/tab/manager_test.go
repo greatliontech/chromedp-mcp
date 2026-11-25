@@ -2,10 +2,13 @@ package tab
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -44,7 +47,7 @@ func TestNewTabAndGet(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 	defer mgr.CloseAll()
 
-	tab, err := mgr.NewTab()
+	tab, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
@@ -70,11 +73,11 @@ func TestActive(t *testing.T) {
 		t.Errorf("Active() with no tabs should return nil, got %q", active.ID)
 	}
 
-	t1, err := mgr.NewTab()
+	t1, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t1: %v", err)
 	}
-	t2, err := mgr.NewTab()
+	t2, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t2: %v", err)
 	}
@@ -100,8 +103,8 @@ func TestGetNotFound(t *testing.T) {
 	defer mgr.CloseAll()
 
 	_, err := mgr.Get("nonexistent")
-	if err == nil {
-		t.Error("Get(nonexistent) should return error")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get(nonexistent) err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -109,15 +112,15 @@ func TestActivateAndMRU(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 	defer mgr.CloseAll()
 
-	t1, err := mgr.NewTab()
+	t1, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t1: %v", err)
 	}
-	t2, err := mgr.NewTab()
+	t2, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t2: %v", err)
 	}
-	t3, err := mgr.NewTab()
+	t3, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t3: %v", err)
 	}
@@ -148,8 +151,8 @@ func TestActivateNotFound(t *testing.T) {
 	defer mgr.CloseAll()
 
 	err := mgr.Activate("nonexistent")
-	if err == nil {
-		t.Error("Activate(nonexistent) should return error")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("Activate(nonexistent) err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -158,8 +161,8 @@ func TestCloseNotFound(t *testing.T) {
 	defer mgr.CloseAll()
 
 	err := mgr.Close("nonexistent")
-	if err == nil {
-		t.Error("Close(nonexistent) should return error")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("Close(nonexistent) err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -167,30 +170,31 @@ func TestList(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 	defer mgr.CloseAll()
 
-	t1, err := mgr.NewTab()
+	t1, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t1: %v", err)
 	}
-	t2, err := mgr.NewTab()
+	t2, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t2: %v", err)
 	}
 
-	infos := mgr.List()
+	infos, err := mgr.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
 	if len(infos) != 2 {
 		t.Fatalf("List returned %d tabs, want 2", len(infos))
 	}
-
-	idToInfo := map[string]TabInfo{}
-	for _, info := range infos {
-		idToInfo[info.ID] = info
+	// Deterministic MRU order: t1 oldest, t2 active at tail.
+	if infos[0].ID != t1.ID || infos[1].ID != t2.ID {
+		t.Errorf("List order = [%q, %q], want [%q, %q]", infos[0].ID, infos[1].ID, t1.ID, t2.ID)
 	}
-
-	if !idToInfo[t2.ID].Active {
-		t.Error("t2 should be active")
-	}
-	if idToInfo[t1.ID].Active {
+	if infos[0].Active {
 		t.Error("t1 should not be active")
+	}
+	if !infos[1].Active {
+		t.Error("t2 should be active")
 	}
 }
 
@@ -202,7 +206,7 @@ func TestLen(t *testing.T) {
 		t.Errorf("Len() = %d, want 0", mgr.Len())
 	}
 
-	_, err := mgr.NewTab()
+	_, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
@@ -210,7 +214,7 @@ func TestLen(t *testing.T) {
 		t.Errorf("Len() = %d, want 1", mgr.Len())
 	}
 
-	_, err = mgr.NewTab()
+	_, err = mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
@@ -229,11 +233,11 @@ func TestResolve(t *testing.T) {
 		t.Error("Resolve('') with no tabs should return error")
 	}
 
-	t1, err := mgr.NewTab()
+	t1, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t1: %v", err)
 	}
-	t2, err := mgr.NewTab()
+	t2, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t2: %v", err)
 	}
@@ -267,7 +271,7 @@ func TestCloseAll(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 
 	for i := 0; i < 3; i++ {
-		if _, err := mgr.NewTab(); err != nil {
+		if _, err := mgr.NewTab(context.Background()); err != nil {
 			t.Fatalf("NewTab %d: %v", i, err)
 		}
 	}
@@ -284,21 +288,25 @@ func TestCloseAll(t *testing.T) {
 	if active := mgr.Active(); active != nil {
 		t.Errorf("Active() after CloseAll should be nil, got %q", active.ID)
 	}
+	// NewTab after CloseAll must fail rather than leak a live target.
+	if _, err := mgr.NewTab(context.Background()); err == nil {
+		t.Error("NewTab after CloseAll should return error")
+	}
 }
 
 func TestMRUOrder(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 	defer mgr.CloseAll()
 
-	t1, err := mgr.NewTab()
+	t1, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t1: %v", err)
 	}
-	t2, err := mgr.NewTab()
+	t2, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t2: %v", err)
 	}
-	t3, err := mgr.NewTab()
+	t3, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t3: %v", err)
 	}
@@ -332,7 +340,7 @@ func TestConcurrentOps(t *testing.T) {
 	const numTabs = 5
 	tabs := make([]*Tab, numTabs)
 	for i := 0; i < numTabs; i++ {
-		tb, err := mgr.NewTab()
+		tb, err := mgr.NewTab(context.Background())
 		if err != nil {
 			t.Fatalf("NewTab %d: %v", i, err)
 		}
@@ -348,7 +356,7 @@ func TestConcurrentOps(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = mgr.List()
+			_, _ = mgr.List(context.Background())
 		}()
 	}
 
@@ -382,13 +390,13 @@ func TestTabURL(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 	defer mgr.CloseAll()
 
-	tab, err := mgr.NewTab()
+	tab, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
 
 	// New tab should have about:blank URL.
-	url, err := tab.URL()
+	url, err := tab.URL(context.Background())
 	if err != nil {
 		t.Fatalf("URL: %v", err)
 	}
@@ -401,18 +409,120 @@ func TestTabTitle(t *testing.T) {
 	mgr := NewManager(browserCtx, nil)
 	defer mgr.CloseAll()
 
-	tab, err := mgr.NewTab()
+	tab, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
 
 	// New tab title should be empty or blank.
-	title, err := tab.Title()
+	title, err := tab.Title(context.Background())
 	if err != nil {
 		t.Fatalf("Title: %v", err)
 	}
 	// about:blank has empty title
 	if title != "" {
 		t.Errorf("Title = %q, want empty string", title)
+	}
+}
+
+func TestTabNewCancelledStartupContext(t *testing.T) {
+	mgr := NewManager(browserCtx, nil)
+	defer mgr.CloseAll()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := mgr.NewTab(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("NewTab with cancelled ctx = %v, want context.Canceled", err)
+	}
+	if mgr.Len() != 0 {
+		t.Errorf("Len() = %d after cancelled NewTab, want 0", mgr.Len())
+	}
+}
+
+func TestTabInfoDoesNotHangOnJSDialog(t *testing.T) {
+	mgr := NewManager(browserCtx, nil)
+	defer mgr.CloseAll()
+
+	tb, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+
+	dialogOpened := make(chan struct{}, 1)
+	lctx, lcancel := context.WithCancel(tb.Context())
+	defer lcancel()
+	chromedp.ListenTarget(lctx, func(ev any) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			select {
+			case dialogOpened <- struct{}{}:
+			default:
+			}
+		}
+	})
+
+	// Trigger an async alert() that blocks the renderer's JS thread.
+	if err := chromedp.Run(tb.Context(), chromedp.Evaluate(`setTimeout(() => alert('blocked'), 10); document.title = 'Dialog Page';`, nil)); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	select {
+	case <-dialogOpened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for alert dialog to open")
+	}
+
+	// List/Info must return promptly without blocking on Runtime.evaluate.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	infos, err := mgr.List(ctx)
+	if err != nil {
+		t.Fatalf("List while dialog open: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("List returned %d tabs, want 1", len(infos))
+	}
+	if infos[0].Title != "Dialog Page" {
+		t.Errorf("Title while dialog open = %q, want %q", infos[0].Title, "Dialog Page")
+	}
+
+	// Dismiss the dialog cleanly.
+	_ = chromedp.Run(tb.Context(), page.HandleJavaScriptDialog(true))
+}
+
+func TestListPropagatesCancelledContext(t *testing.T) {
+	mgr := NewManager(browserCtx, nil)
+	defer mgr.CloseAll()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Must propagate cancellation even with zero open tabs.
+	if _, err := mgr.List(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("List(cancelled, empty) err = %v, want context.Canceled", err)
+	}
+
+	if _, err := mgr.NewTab(context.Background()); err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	if _, err := mgr.List(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("List(cancelled, 1 tab) err = %v, want context.Canceled", err)
+	}
+}
+
+func TestNewTabConcurrentCloseAll(t *testing.T) {
+	mgr := NewManager(browserCtx, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = mgr.NewTab(context.Background())
+		}()
+	}
+	mgr.CloseAll()
+	wg.Wait()
+
+	if mgr.Len() != 0 {
+		t.Errorf("Len() after concurrent CloseAll = %d, want 0", mgr.Len())
 	}
 }

@@ -4,7 +4,15 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/chromedp/chromedp"
 
@@ -32,6 +40,7 @@ type Browser struct {
 	allocCancel   context.CancelFunc
 	browserCtx    context.Context
 	browserCancel context.CancelFunc
+	closeOnce     sync.Once
 	Tabs          *tab.Manager
 	Downloads     *collector.Download
 }
@@ -62,8 +71,20 @@ func DefaultLaunchOptions() LaunchOptions {
 	}
 }
 
-// Launch starts a new Chrome browser process.
-func Launch(parentCtx context.Context, id string, opts LaunchOptions) (*Browser, error) {
+// Launch starts a new Chrome browser process. startupCtx bounds browser
+// startup (e.g. MCP request cancellation) without tying the browser's
+// post-startup lifetime to startupCtx; nil defaults to context.Background().
+func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions) (*Browser, error) {
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, fmt.Errorf("launch browser: %w", err)
+	}
+	if (opts.UserDataDir != "") != (opts.ProfileDir != "") {
+		return nil, fmt.Errorf("launch browser: UserDataDir and ProfileDir must either both be set or both be empty")
+	}
+
 	allocOpts := chromedp.DefaultExecAllocatorOptions[:]
 	if opts.Headless {
 		allocOpts = append(allocOpts, chromedp.Headless)
@@ -88,26 +109,11 @@ func Launch(parentCtx context.Context, id string, opts LaunchOptions) (*Browser,
 
 	// Force-start the browser by running a no-op. chromedp creates the
 	// browser process lazily on the first Run call.
-	if err := chromedp.Run(browserCtx); err != nil {
-		browserCancel()
-		allocCancel()
+	if err := startBrowserContext(startupCtx, allocCancel, browserCtx, browserCancel); err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 
-	dl := collector.NewDownload(DefaultDownloadBuffer, opts.DownloadDir)
-
-	return &Browser{
-		ID:            id,
-		Mode:          ModeLaunch,
-		allocCancel:   allocCancel,
-		browserCtx:    browserCtx,
-		browserCancel: browserCancel,
-		Tabs: tab.NewManager(browserCtx, &tab.TabOptions{
-			Downloads:   dl,
-			DownloadDir: opts.DownloadDir,
-		}),
-		Downloads: dl,
-	}, nil
+	return newBrowser(id, ModeLaunch, allocCancel, browserCtx, browserCancel, opts.DownloadDir), nil
 }
 
 // ConnectOptions configures a connected browser.
@@ -116,31 +122,191 @@ type ConnectOptions struct {
 }
 
 // Connect connects to an existing Chrome browser via its remote debugging URL.
-func Connect(parentCtx context.Context, id string, url string, opts ConnectOptions) (*Browser, error) {
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(parentCtx, url)
+// startupCtx bounds connection setup without tying the browser's lifetime to it.
+func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, opts ConnectOptions) (*Browser, error) {
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
+	}
+
+	wsURL, err := resolveDebuggerURL(startupCtx, rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
+	}
+
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(parentCtx, wsURL, chromedp.NoModifyURL)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Force the connection.
-	if err := chromedp.Run(browserCtx); err != nil {
-		browserCancel()
-		allocCancel()
-		return nil, fmt.Errorf("connect to browser at %s: %w", url, err)
+	if err := startBrowserContext(startupCtx, allocCancel, browserCtx, browserCancel); err != nil {
+		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
 	}
 
-	dl := collector.NewDownload(DefaultDownloadBuffer, opts.DownloadDir)
+	return newBrowser(id, ModeConnect, allocCancel, browserCtx, browserCancel, opts.DownloadDir), nil
+}
 
+// startBrowserContext forces chromedp to allocate/connect browserCtx while
+// bounding startup by startupCtx without tying post-startup lifetime to it.
+//
+// chromedp's browserCancel receives from a 1-buffered allocated channel that is
+// only closed after Chrome starts; invoking browserCancel twice on an aborted
+// startup deadlocks. Wrapping cleanup in sync.OnceFunc guarantees at-most-once
+// cancellation and waits for any in-flight AfterFunc callback before returning.
+func startBrowserContext(
+	startupCtx context.Context,
+	allocCancel context.CancelFunc,
+	browserCtx context.Context,
+	browserCancel context.CancelFunc,
+) error {
+	cleanup := sync.OnceFunc(func() {
+		browserCancel()
+		allocCancel()
+	})
+	stopStartup := context.AfterFunc(startupCtx, cleanup)
+	err := chromedp.Run(browserCtx)
+	stopped := stopStartup()
+	if err != nil || !stopped {
+		cleanup()
+		if err == nil {
+			err = context.Cause(startupCtx)
+		}
+		return err
+	}
+	return nil
+}
+
+func newBrowser(
+	id string,
+	mode Mode,
+	allocCancel context.CancelFunc,
+	browserCtx context.Context,
+	browserCancel context.CancelFunc,
+	downloadDir string,
+) *Browser {
+	dl := collector.NewDownload(DefaultDownloadBuffer, downloadDir)
 	return &Browser{
 		ID:            id,
-		Mode:          ModeConnect,
+		Mode:          mode,
 		allocCancel:   allocCancel,
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
 		Tabs: tab.NewManager(browserCtx, &tab.TabOptions{
 			Downloads:   dl,
-			DownloadDir: opts.DownloadDir,
+			DownloadDir: downloadDir,
 		}),
 		Downloads: dl,
-	}, nil
+	}
+}
+
+// resolveDebuggerURL converts an HTTP(S) or base WebSocket Chrome remote
+// debugging URL into a direct /devtools/browser/... WebSocket URL.
+// Doing this explicitly avoids chromedp's unchecked type assertion on
+// /json/version responses missing webSocketDebuggerUrl and respects ctx.
+func resolveDebuggerURL(ctx context.Context, rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	switch u.Scheme {
+	case "ws", "wss", "http", "https":
+	default:
+		return "", fmt.Errorf("unsupported URL scheme %q (want http, https, ws, or wss)", u.Scheme)
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return "", fmt.Errorf("missing host in URL %q", rawURL)
+	}
+	port := u.Port()
+
+	resolveCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	// Direct /devtools/browser/ WebSocket URL.
+	if (u.Scheme == "ws" || u.Scheme == "wss") && strings.Contains(u.Path, "/devtools/browser/") {
+		// For plaintext ws://, rewrite non-localhost/non-IP hostnames to IP
+		// literals because Chrome rejects non-IP Host headers on debugging
+		// sockets. Never rewrite wss:// (would break TLS SNI and cert checks).
+		if u.Scheme == "ws" {
+			resolvedHost, err := resolvePlaintextHost(resolveCtx, hostname, port)
+			if err != nil {
+				return "", err
+			}
+			u.Host = resolvedHost
+		}
+		return u.String(), nil
+	}
+
+	versionScheme := "http"
+	versionHost := u.Host
+	if u.Scheme == "https" || u.Scheme == "wss" {
+		versionScheme = "https"
+	} else {
+		// Plaintext http:// (or ws:// base URL): rewrite non-IP hostnames
+		// to IP literals so Chrome's /json/version accepts the Host header.
+		resolvedHost, err := resolvePlaintextHost(resolveCtx, hostname, port)
+		if err != nil {
+			return "", err
+		}
+		versionHost = resolvedHost
+	}
+
+	versionURL := (&url.URL{
+		Scheme:   versionScheme,
+		User:     u.User,
+		Host:     versionHost,
+		Path:     "/json/version",
+		RawQuery: u.RawQuery,
+	}).String()
+
+	req, err := http.NewRequestWithContext(resolveCtx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s returned status %d", versionURL, resp.StatusCode)
+	}
+
+	var payload struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("decode %s: %w", versionURL, err)
+	}
+	if payload.WebSocketDebuggerURL == "" {
+		return "", fmt.Errorf("%s response missing webSocketDebuggerUrl", versionURL)
+	}
+	return payload.WebSocketDebuggerURL, nil
+}
+
+// resolvePlaintextHost resolves non-localhost, non-IP hostnames to an IP
+// literal and formats host[:port] with IPv6 brackets when needed.
+func resolvePlaintextHost(ctx context.Context, hostname, port string) (string, error) {
+	if hostname != "localhost" {
+		if _, err := netip.ParseAddr(hostname); err != nil {
+			addrs, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
+			if err != nil {
+				return "", fmt.Errorf("resolve host %q: %w", hostname, err)
+			}
+			if len(addrs) == 0 {
+				return "", fmt.Errorf("resolve host %q: no addresses found", hostname)
+			}
+			hostname = addrs[0].IP.String()
+		}
+	}
+	if port != "" {
+		return net.JoinHostPort(hostname, port), nil
+	}
+	if strings.Contains(hostname, ":") {
+		return "[" + hostname + "]", nil
+	}
+	return hostname, nil
 }
 
 // Context returns the browser's root chromedp context.
@@ -155,9 +321,11 @@ func (b *Browser) Alive() bool {
 }
 
 // Close shuts down the browser. In launch mode, this kills the Chrome
-// process. In connect mode, it disconnects.
+// process. In connect mode, it disconnects. Safe to call multiple times.
 func (b *Browser) Close() {
-	b.Tabs.CloseAll()
-	b.browserCancel()
-	b.allocCancel()
+	b.closeOnce.Do(func() {
+		b.Tabs.CloseAll()
+		b.browserCancel()
+		b.allocCancel()
+	})
 }

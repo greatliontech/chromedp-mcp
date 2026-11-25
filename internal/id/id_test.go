@@ -8,10 +8,10 @@ import (
 
 func TestGenerateFormat(t *testing.T) {
 	id := Generate()
-	if len(id) != 8 {
-		t.Errorf("Generate() = %q, want 8 hex characters (len=%d)", id, len(id))
+	if len(id) != 12 {
+		t.Errorf("Generate() = %q, want 12 hex characters (len=%d)", id, len(id))
 	}
-	matched, err := regexp.MatchString(`^[0-9a-f]{8}$`, id)
+	matched, err := regexp.MatchString(`^[0-9a-f]{12}$`, id)
 	if err != nil {
 		t.Fatalf("regexp error: %v", err)
 	}

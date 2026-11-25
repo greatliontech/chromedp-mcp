@@ -3,17 +3,28 @@ package tab
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/performancetimeline"
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
+
+// ErrNotFound is returned when a tab ID does not exist in a Manager.
+var ErrNotFound = errors.New("tab not found")
+
+// defaultTabInfoTimeout bounds Target.getTargetInfo calls in Tab.Info/URL/Title
+// so a wedged browser target cannot block tab_list indefinitely.
+const defaultTabInfoTimeout = 2 * time.Second
 
 // DefaultConsoleBuffer is the default console log buffer size.
 const DefaultConsoleBuffer = 1000
@@ -112,7 +123,15 @@ type TabOptions struct {
 
 // New creates a new tab from a parent browser context. It creates a new
 // Chrome target, starts event listeners, and initializes collectors.
-func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
+// startupCtx bounds initialization (e.g. MCP request cancellation) without
+// tying the tab's post-init lifetime to it; nil defaults to context.Background().
+func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, fmt.Errorf("tab init: %w", err)
+	}
 	ctx, cancel := chromedp.NewContext(parentCtx)
 
 	t := &Tab{
@@ -205,6 +224,9 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 	// Initialize the tab: enable performance timeline and (optionally)
 	// downloads. We need to run a chromedp action to trigger the target
 	// allocation (chromedp creates the target lazily on the first Run call).
+	// chromedp already enables Page and Runtime domains on target attach.
+	cancelOnce := sync.OnceFunc(cancel)
+	stopStartup := context.AfterFunc(startupCtx, cancelOnce)
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		if err := performancetimeline.Enable([]string{
 			"largest-contentful-paint",
@@ -219,12 +241,6 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 		if err := network.Enable().
 			WithMaxPostDataSize(int64(collector.MaxInlineRequestBody)).
 			Do(ctx); err != nil {
-			return err
-		}
-		// Page.enable so frameNavigated and navigatedWithinDocument
-		// events deliver to the tab's listener for the URL change
-		// collector.
-		if err := page.Enable().Do(ctx); err != nil {
 			return err
 		}
 		// Register the DOM mutation observer for every new document.
@@ -276,8 +292,12 @@ func New(parentCtx context.Context, id string, opts *TabOptions) (*Tab, error) {
 		}
 		return nil
 	}))
-	if err != nil {
-		cancel()
+	stopped := stopStartup()
+	if err != nil || !stopped {
+		cancelOnce()
+		if err == nil {
+			err = context.Cause(startupCtx)
+		}
 		return nil, fmt.Errorf("tab init: %w", err)
 	}
 
@@ -296,22 +316,51 @@ func (t *Tab) Close() {
 	t.cancel()
 }
 
-// URL returns the current URL of the tab.
-func (t *Tab) URL() (string, error) {
-	var url string
-	err := chromedp.Run(t.ctx, chromedp.Location(&url))
-	if err != nil {
-		return "", err
+// Info returns the tab's current URL and title via CDP Target.getTargetInfo.
+// Unlike Runtime.evaluate (chromedp.Location/Title), Target.getTargetInfo runs
+// in Chrome's browser process and does not block when the renderer is paused by
+// a JS alert/confirm/prompt dialog or infinite loop.
+func (t *Tab) Info(ctx context.Context) (url, title string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return url, nil
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	runCtx, cancel := context.WithTimeout(t.ctx, defaultTabInfoTimeout)
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+
+	var info *target.Info
+	err = chromedp.Run(runCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var e error
+		info, e = target.GetTargetInfo().Do(ctx)
+		return e
+	}))
+	if err != nil {
+		return "", "", err
+	}
+	if info == nil {
+		return "", "", nil
+	}
+	title = info.Title
+	// Chrome reports "about:blank" as the TargetInfo title for an untitled
+	// blank tab; normalize to empty string to match document.title.
+	if info.URL == "about:blank" && title == "about:blank" {
+		title = ""
+	}
+	return info.URL, title, nil
+}
+
+// URL returns the current URL of the tab.
+func (t *Tab) URL(ctx context.Context) (string, error) {
+	url, _, err := t.Info(ctx)
+	return url, err
 }
 
 // Title returns the current title of the tab.
-func (t *Tab) Title() (string, error) {
-	var title string
-	err := chromedp.Run(t.ctx, chromedp.Title(&title))
-	if err != nil {
-		return "", err
-	}
-	return title, nil
+func (t *Tab) Title(ctx context.Context) (string, error) {
+	_, title, err := t.Info(ctx)
+	return title, err
 }

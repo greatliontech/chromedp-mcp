@@ -84,7 +84,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			launchOpts.ProfileDir = p.Dir
 		}
 
-		b, err := mgr.Launch(launchOpts)
+		b, err := mgr.Launch(ctx, launchOpts)
 		if err != nil {
 			return nil, BrowserLaunchOutput{}, err
 		}
@@ -98,7 +98,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			ReadOnlyHint: false,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserConnectInput) (*mcp.CallToolResult, BrowserConnectOutput, error) {
-		b, err := mgr.Connect(input.URL, browser.ConnectOptions{
+		b, err := mgr.Connect(ctx, input.URL, browser.ConnectOptions{
 			DownloadDir: opts.DownloadDir,
 		})
 		if err != nil {

@@ -34,13 +34,7 @@ func registerDownloadTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetDownloadsOutput{}, err
 		}
-		var b *browser.Browser
-		var err error
-		if input.Browser != "" {
-			b, err = mgr.Get(input.Browser)
-		} else {
-			b, err = mgr.Active()
-		}
+		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
 			return nil, GetDownloadsOutput{}, err
 		}

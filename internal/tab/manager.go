@@ -10,11 +10,14 @@ import (
 
 // Manager manages the set of open tabs within a single browser and tracks
 // which tab is active.
+//
+// The active tab is always the tail of order (order[len(order)-1]), so there
+// is a single source of truth for MRU ordering and active selection.
 type Manager struct {
 	mu        sync.RWMutex
 	tabs      map[string]*Tab
-	activeID  string
-	order     []string // MRU order (most recent last)
+	order     []string // MRU order (most recent last; tail is active)
+	closed    bool
 	parentCtx context.Context
 	tabOpts   *TabOptions
 }
@@ -29,29 +32,49 @@ func NewManager(parentCtx context.Context, opts *TabOptions) *Manager {
 	}
 }
 
-// NewTab creates a new tab, optionally navigating to a URL. The new tab
-// becomes the active tab.
-func (m *Manager) NewTab() (*Tab, error) {
-	newID := id.Generate()
-	t, err := New(m.parentCtx, newID, m.tabOpts)
+// NewTab creates a new tab and makes it the active tab. ctx bounds tab
+// initialization (e.g. MCP request cancellation) without tying the tab's
+// lifetime to ctx.
+func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
+	m.mu.RLock()
+	closed := m.closed
+	m.mu.RUnlock()
+	if closed {
+		return nil, fmt.Errorf("tab manager is closed")
+	}
+
+	t, err := New(m.parentCtx, ctx, "", m.tabOpts)
 	if err != nil {
 		return nil, err
 	}
+
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		t.Close()
+		return nil, fmt.Errorf("tab manager is closed")
+	}
+	var newID string
+	for {
+		newID = id.Generate()
+		if _, exists := m.tabs[newID]; !exists {
+			break
+		}
+	}
+	t.ID = newID
 	m.tabs[newID] = t
-	m.activeID = newID
 	m.order = append(m.order, newID)
 	m.mu.Unlock()
 	return t, nil
 }
 
-// Get returns a tab by ID. Returns an error if not found.
+// Get returns a tab by ID. Returns an error wrapping ErrNotFound if not found.
 func (m *Manager) Get(id string) (*Tab, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t, ok := m.tabs[id]
 	if !ok {
-		return nil, fmt.Errorf("tab %q not found", id)
+		return nil, fmt.Errorf("tab %q: %w", id, ErrNotFound)
 	}
 	return t, nil
 }
@@ -60,10 +83,11 @@ func (m *Manager) Get(id string) (*Tab, error) {
 func (m *Manager) Active() *Tab {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.activeID == "" {
+	activeID := m.activeIDLocked()
+	if activeID == "" {
 		return nil
 	}
-	return m.tabs[m.activeID]
+	return m.tabs[activeID]
 }
 
 // Activate sets a tab as the active tab by ID.
@@ -71,9 +95,8 @@ func (m *Manager) Activate(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.tabs[id]; !ok {
-		return fmt.Errorf("tab %q not found", id)
+		return fmt.Errorf("tab %q: %w", id, ErrNotFound)
 	}
-	m.activeID = id
 	m.touchLocked(id)
 	return nil
 }
@@ -82,41 +105,49 @@ func (m *Manager) Activate(id string) error {
 // tab was the active tab, the most recently used remaining tab becomes active.
 func (m *Manager) Close(id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	t, ok := m.tabs[id]
 	if !ok {
-		return fmt.Errorf("tab %q not found", id)
+		m.mu.Unlock()
+		return fmt.Errorf("tab %q: %w", id, ErrNotFound)
 	}
-	t.Close()
 	delete(m.tabs, id)
 	m.removeFromOrder(id)
-	if m.activeID == id {
-		if len(m.order) > 0 {
-			m.activeID = m.order[len(m.order)-1]
-		} else {
-			m.activeID = ""
-		}
-	}
+	m.mu.Unlock()
+
+	t.Close()
 	return nil
 }
 
-// List returns info about all open tabs.
-func (m *Manager) List() []TabInfo {
-	// Copy tab pointers and the active ID under the lock, then release
-	// before calling URL/Title which do CDP I/O over websocket. This
-	// avoids holding the lock during potentially slow network calls.
-	m.mu.RLock()
-	tabs := make([]*Tab, 0, len(m.tabs))
-	for _, t := range m.tabs {
-		tabs = append(tabs, t)
+// List returns info about all open tabs in deterministic MRU order
+// (oldest to most recently used). Returns an error if ctx is cancelled.
+func (m *Manager) List(ctx context.Context) ([]TabInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	activeID := m.activeID
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Snapshot tab pointers in deterministic order under the lock, then
+	// release before doing CDP I/O.
+	m.mu.RLock()
+	tabs := make([]*Tab, 0, len(m.order))
+	for _, oid := range m.order {
+		if t, ok := m.tabs[oid]; ok {
+			tabs = append(tabs, t)
+		}
+	}
+	activeID := m.activeIDLocked()
 	m.mu.RUnlock()
 
 	infos := make([]TabInfo, 0, len(tabs))
 	for _, t := range tabs {
-		url, _ := t.URL()
-		title, _ := t.Title()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		url, title, err := t.Info(ctx)
+		if err != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		infos = append(infos, TabInfo{
 			ID:     t.ID,
 			URL:    url,
@@ -124,19 +155,22 @@ func (m *Manager) List() []TabInfo {
 			Active: t.ID == activeID,
 		})
 	}
-	return infos
+	return infos, nil
 }
 
-// CloseAll closes all tabs.
+// CloseAll closes all tabs and marks the manager closed so concurrent in-flight
+// NewTab calls cannot leak live targets after shutdown.
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, t := range m.tabs {
+	m.closed = true
+	tabs := m.tabs
+	m.tabs = make(map[string]*Tab)
+	m.order = nil
+	m.mu.Unlock()
+
+	for _, t := range tabs {
 		t.Close()
 	}
-	m.tabs = make(map[string]*Tab)
-	m.activeID = ""
-	m.order = nil
 }
 
 // Len returns the number of open tabs.
@@ -165,6 +199,15 @@ func (m *Manager) Resolve(id string) (*Tab, error) {
 		return t, nil
 	}
 	return nil, fmt.Errorf("no open tabs — use tab_new to create one")
+}
+
+// activeIDLocked returns the active tab ID (the MRU tail), or "" when empty.
+// Must be called with m.mu held (read or write).
+func (m *Manager) activeIDLocked() string {
+	if len(m.order) == 0 {
+		return ""
+	}
+	return m.order[len(m.order)-1]
 }
 
 // touchLocked moves an ID to the end of the MRU order. Must be called with mu held.

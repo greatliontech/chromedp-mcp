@@ -177,7 +177,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Pre-launch a browser so tests don't each pay the startup cost.
-	_, err = mgr.Launch(browser.LaunchOptions{
+	_, err = mgr.Launch(ctx, browser.LaunchOptions{
 		Headless:    true,
 		Width:       1280,
 		Height:      720,

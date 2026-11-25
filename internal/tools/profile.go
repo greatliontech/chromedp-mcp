@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -46,9 +45,6 @@ func registerProfileTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, BrowserListProfilesOutput, error) {
-		if userDataDir == "" {
-			return nil, BrowserListProfilesOutput{}, fmt.Errorf("no Chrome/Chromium user data directory found")
-		}
 		all, err := profile.Discover(userDataDir)
 		if err != nil {
 			return nil, BrowserListProfilesOutput{}, err

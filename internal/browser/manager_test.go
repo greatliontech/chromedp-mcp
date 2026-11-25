@@ -2,9 +2,17 @@ package browser
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
 var testCtx context.Context
@@ -21,7 +29,7 @@ func TestManagerLaunchAndGet(t *testing.T) {
 	mgr := NewManager(testCtx)
 	defer mgr.CloseAll()
 
-	b, err := mgr.Launch(LaunchOptions{Headless: true})
+	b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -49,11 +57,11 @@ func TestManagerActive(t *testing.T) {
 		t.Error("Active() with no browsers should return error")
 	}
 
-	b1, err := mgr.Launch(LaunchOptions{Headless: true})
+	b1, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b1: %v", err)
 	}
-	b2, err := mgr.Launch(LaunchOptions{Headless: true})
+	b2, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b2: %v", err)
 	}
@@ -65,6 +73,15 @@ func TestManagerActive(t *testing.T) {
 	}
 	if active.ID != b2.ID {
 		t.Errorf("Active = %q, want %q (most recent)", active.ID, b2.ID)
+	}
+
+	// Get(b1) must NOT silently change the active browser.
+	if _, err := mgr.Get(b1.ID); err != nil {
+		t.Fatalf("Get(b1): %v", err)
+	}
+	active, _ = mgr.Active()
+	if active.ID != b2.ID {
+		t.Errorf("Get(b1) changed Active to %q, want %q", active.ID, b2.ID)
 	}
 
 	// Close b2 — active should fall back to b1.
@@ -104,11 +121,11 @@ func TestManagerList(t *testing.T) {
 	mgr := NewManager(testCtx)
 	defer mgr.CloseAll()
 
-	b1, err := mgr.Launch(LaunchOptions{Headless: true})
+	b1, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b1: %v", err)
 	}
-	b2, err := mgr.Launch(LaunchOptions{Headless: true})
+	b2, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b2: %v", err)
 	}
@@ -117,36 +134,44 @@ func TestManagerList(t *testing.T) {
 	if len(infos) != 2 {
 		t.Fatalf("List returned %d browsers, want 2", len(infos))
 	}
-
-	// Verify active flag.
-	idToInfo := map[string]BrowserInfo{}
-	for _, info := range infos {
-		idToInfo[info.ID] = info
+	// Deterministic MRU order: b1 oldest, b2 active at tail.
+	if infos[0].ID != b1.ID || infos[1].ID != b2.ID {
+		t.Errorf("List order = [%q, %q], want [%q, %q]", infos[0].ID, infos[1].ID, b1.ID, b2.ID)
 	}
-	if !idToInfo[b2.ID].Active {
-		t.Error("b2 should be active")
-	}
-	if idToInfo[b1.ID].Active {
+	if infos[0].Active {
 		t.Error("b1 should not be active")
+	}
+	if !infos[1].Active {
+		t.Error("b2 should be active")
 	}
 }
 
-func TestManagerPruneDeadBrowsers(t *testing.T) {
+func TestManagerPruneDeadBrowsersClosesResources(t *testing.T) {
 	mgr := NewManager(testCtx)
 	defer mgr.CloseAll()
 
-	b, err := mgr.Launch(LaunchOptions{Headless: true})
+	b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 
-	// Kill the browser from outside the manager.
-	b.Close()
+	// Simulate Chrome disconnecting (browserCtx cancelled) while allocCancel
+	// has not yet been called; verify pruning invokes b.Close() -> allocCancel.
+	var allocClosed atomic.Bool
+	origAllocCancel := b.allocCancel
+	b.allocCancel = func() {
+		allocClosed.Store(true)
+		origAllocCancel()
+	}
+	b.browserCancel()
 
-	// Active should prune the dead browser and return error.
+	// Active should prune the dead browser, invoke allocCancel, and return error.
 	_, err = mgr.Active()
 	if err == nil {
-		t.Error("Active() should fail after browser was killed")
+		t.Error("Active() should fail after browser died")
+	}
+	if !allocClosed.Load() {
+		t.Error("pruning dead browser did not close allocCancel")
 	}
 
 	infos := mgr.List()
@@ -155,35 +180,72 @@ func TestManagerPruneDeadBrowsers(t *testing.T) {
 	}
 }
 
-func TestManagerMRUOrder(t *testing.T) {
+func TestManagerGetDeadBrowserClosesResources(t *testing.T) {
 	mgr := NewManager(testCtx)
 	defer mgr.CloseAll()
 
-	b1, err := mgr.Launch(LaunchOptions{Headless: true})
+	b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	var allocClosed atomic.Bool
+	origAllocCancel := b.allocCancel
+	b.allocCancel = func() {
+		allocClosed.Store(true)
+		origAllocCancel()
+	}
+	b.browserCancel()
+
+	if _, err := mgr.Get(b.ID); err == nil {
+		t.Fatal("Get() on dead browser should return error")
+	}
+	if !allocClosed.Load() {
+		t.Error("Get() on dead browser did not close allocCancel")
+	}
+}
+
+func TestManagerMRUOrderAndActivate(t *testing.T) {
+	mgr := NewManager(testCtx)
+	defer mgr.CloseAll()
+
+	b1, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b1: %v", err)
 	}
-	b2, err := mgr.Launch(LaunchOptions{Headless: true})
+	b2, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b2: %v", err)
 	}
-	b3, err := mgr.Launch(LaunchOptions{Headless: true})
+	b3, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
 		t.Fatalf("Launch b3: %v", err)
 	}
 
-	// Active is b3 (most recent). Close it — should fall back to b2.
-	mgr.Close(b3.ID)
+	// Activate b1; MRU order becomes [b2, b3, b1].
+	if err := mgr.Activate(b1.ID); err != nil {
+		t.Fatalf("Activate(b1): %v", err)
+	}
 	active, _ := mgr.Active()
-	if active.ID != b2.ID {
-		t.Errorf("after closing b3, active = %q, want %q", active.ID, b2.ID)
+	if active.ID != b1.ID {
+		t.Fatalf("after Activate(b1), active = %q, want %q", active.ID, b1.ID)
 	}
 
-	// Close b2 — should fall back to b1.
-	mgr.Close(b2.ID)
+	// Close b1 — should fall back to b3 (most recently used remaining).
+	if err := mgr.Close(b1.ID); err != nil {
+		t.Fatalf("Close b1: %v", err)
+	}
 	active, _ = mgr.Active()
-	if active.ID != b1.ID {
-		t.Errorf("after closing b2, active = %q, want %q", active.ID, b1.ID)
+	if active.ID != b3.ID {
+		t.Errorf("after closing b1, active = %q, want %q", active.ID, b3.ID)
+	}
+
+	// Close b3 — should fall back to b2.
+	if err := mgr.Close(b3.ID); err != nil {
+		t.Fatalf("Close b3: %v", err)
+	}
+	active, _ = mgr.Active()
+	if active.ID != b2.ID {
+		t.Errorf("after closing b3, active = %q, want %q", active.ID, b2.ID)
 	}
 }
 
@@ -194,7 +256,7 @@ func TestManagerConcurrentListAndClose(t *testing.T) {
 	const numBrowsers = 5
 	ids := make([]string, numBrowsers)
 	for i := 0; i < numBrowsers; i++ {
-		b, err := mgr.Launch(LaunchOptions{Headless: true})
+		b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 		if err != nil {
 			t.Fatalf("Launch %d: %v", i, err)
 		}
@@ -232,63 +294,237 @@ func TestManagerConcurrentListAndClose(t *testing.T) {
 	}
 }
 
-func TestManagerCloseTabAcrossBrowsers(t *testing.T) {
+func TestManagerMultiBrowserResolveActivateAndCloseTab(t *testing.T) {
 	mgr := NewManager(testCtx)
 	defer mgr.CloseAll()
 
-	b, err := mgr.Launch(LaunchOptions{Headless: true})
+	b1, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
 	if err != nil {
-		t.Fatalf("Launch: %v", err)
+		t.Fatalf("Launch b1: %v", err)
 	}
-
-	tab, err := b.Tabs.NewTab()
-	if err != nil {
-		t.Fatalf("NewTab: %v", err)
-	}
-
-	// CloseTab should find the tab across browsers.
-	if err := mgr.CloseTab(tab.ID); err != nil {
-		t.Fatalf("CloseTab: %v", err)
-	}
-
-	// Tab should be gone.
-	err = mgr.CloseTab(tab.ID)
-	if err == nil {
-		t.Error("second CloseTab should fail (tab already closed)")
-	}
-}
-
-func TestManagerActivateTabAcrossBrowsers(t *testing.T) {
-	mgr := NewManager(testCtx)
-	defer mgr.CloseAll()
-
-	b, err := mgr.Launch(LaunchOptions{Headless: true})
-	if err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-
-	t1, err := b.Tabs.NewTab()
+	t1, err := b1.Tabs.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t1: %v", err)
 	}
-	t2, err := b.Tabs.NewTab()
+
+	b2, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
+	if err != nil {
+		t.Fatalf("Launch b2: %v", err)
+	}
+	t2, err := b2.Tabs.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab t2: %v", err)
 	}
 
-	// Active should be t2.
-	active := b.Tabs.Active()
-	if active.ID != t2.ID {
-		t.Errorf("active = %q, want %q", active.ID, t2.ID)
+	// b2 is active, but ResolveTab("", t1.ID) must still find t1 in b1.
+	got, err := mgr.ResolveTab("", t1.ID)
+	if err != nil {
+		t.Fatalf("ResolveTab('', t1) across browsers: %v", err)
+	}
+	if got.ID != t1.ID {
+		t.Errorf("ResolveTab('', t1) = %q, want %q", got.ID, t1.ID)
+	}
+	// ResolveTab with explicit tab ID must not switch the active browser.
+	activeBrowser, _ := mgr.Active()
+	if activeBrowser.ID != b2.ID {
+		t.Errorf("ResolveTab changed active browser to %q, want %q", activeBrowser.ID, b2.ID)
 	}
 
-	// Activate t1 via manager.
+	// ActivateTab(t1) must activate t1 AND switch the active browser to b1
+	// so default-tab calls (ResolveTab("", "")) now resolve to t1.
 	if err := mgr.ActivateTab(t1.ID); err != nil {
-		t.Fatalf("ActivateTab: %v", err)
+		t.Fatalf("ActivateTab(t1): %v", err)
+	}
+	activeBrowser, _ = mgr.Active()
+	if activeBrowser.ID != b1.ID {
+		t.Errorf("after ActivateTab(t1), active browser = %q, want %q", activeBrowser.ID, b1.ID)
+	}
+	defaultTab, err := mgr.ResolveTab("", "")
+	if err != nil {
+		t.Fatalf("ResolveTab('', ''): %v", err)
+	}
+	if defaultTab.ID != t1.ID {
+		t.Errorf("after ActivateTab(t1), default tab = %q, want %q", defaultTab.ID, t1.ID)
 	}
 
-	active = b.Tabs.Active()
-	if active.ID != t1.ID {
-		t.Errorf("after activate, active = %q, want %q", active.ID, t1.ID)
+	// CloseTab must find and close t2 in the non-active browser b2.
+	if err := mgr.CloseTab(t2.ID); err != nil {
+		t.Fatalf("CloseTab(t2): %v", err)
+	}
+	if err := mgr.CloseTab(t2.ID); err == nil {
+		t.Error("second CloseTab(t2) should fail")
+	}
+}
+
+func TestManagerCloseAllBlocksSubsequentLaunch(t *testing.T) {
+	mgr := NewManager(testCtx)
+	mgr.CloseAll()
+
+	if _, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true}); err == nil {
+		t.Fatal("Launch after CloseAll should fail")
+	}
+	if _, err := mgr.Connect(context.Background(), "http://127.0.0.1:1", ConnectOptions{}); err == nil {
+		t.Fatal("Connect after CloseAll should fail")
+	}
+}
+
+func TestManagerConcurrentCloseAllAndLaunch(t *testing.T) {
+	mgr := NewManager(testCtx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, _ = mgr.Launch(context.Background(), LaunchOptions{Headless: true})
+	}()
+	time.Sleep(15 * time.Millisecond)
+	mgr.CloseAll()
+	wg.Wait()
+
+	if infos := mgr.List(); len(infos) != 0 {
+		t.Errorf("List() after concurrent CloseAll = %d, want 0", len(infos))
+	}
+}
+
+func TestManagerNoBrowserTabErrorsAndSentinel(t *testing.T) {
+	mgr := NewManager(testCtx)
+	defer mgr.CloseAll()
+
+	if err := mgr.CloseTab("missing"); err == nil || !strings.Contains(err.Error(), "no browser running") {
+		t.Errorf("CloseTab with no browsers = %v, want no browser running", err)
+	}
+	if err := mgr.ActivateTab("missing"); err == nil || !strings.Contains(err.Error(), "no browser running") {
+		t.Errorf("ActivateTab with no browsers = %v, want no browser running", err)
+	}
+
+	b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if err := mgr.CloseTab("missing"); !errors.Is(err, tab.ErrNotFound) {
+		t.Errorf("CloseTab(missing) = %v, want tab.ErrNotFound", err)
+	}
+	if err := mgr.ActivateTab("missing"); !errors.Is(err, tab.ErrNotFound) {
+		t.Errorf("ActivateTab(missing) = %v, want tab.ErrNotFound", err)
+	}
+	// Closing a dead browser directly by ID via Close() succeeds cleanly.
+	b.browserCancel()
+	if err := mgr.Close(b.ID); err != nil {
+		t.Errorf("Close(dead browser) = %v, want nil", err)
+	}
+}
+
+func TestLaunchValidationAndCancellation(t *testing.T) {
+	mgr := NewManager(testCtx)
+	defer mgr.CloseAll()
+
+	// Half-specified profile options must error rather than silently launching ephemeral.
+	if _, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true, UserDataDir: "/tmp/x"}); err == nil {
+		t.Error("Launch with UserDataDir only should fail")
+	}
+	if _, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true, ProfileDir: "Default"}); err == nil {
+		t.Error("Launch with ProfileDir only should fail")
+	}
+
+	// Pre-cancelled startup context must abort before launching Chrome.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := mgr.Launch(ctx, LaunchOptions{Headless: true}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Launch with cancelled ctx = %v, want context.Canceled", err)
+	}
+
+	// Mid-flight cancellation (exercises context.AfterFunc while Chrome is starting)
+	// must return promptly without deadlocking on chromedp's browserCancel.
+	for _, delay := range []time.Duration{1 * time.Millisecond, 10 * time.Millisecond} {
+		midCtx, midCancel := context.WithTimeout(context.Background(), delay)
+		done := make(chan error, 1)
+		go func() {
+			b, err := mgr.Launch(midCtx, LaunchOptions{Headless: true})
+			if b != nil {
+				_ = mgr.Close(b.ID)
+			}
+			done <- err
+		}()
+		select {
+		case <-done:
+			// Returned cleanly (either cancelled or launched quickly); no deadlock.
+		case <-time.After(10 * time.Second):
+			midCancel()
+			t.Fatalf("Launch with mid-flight %v timeout deadlocked", delay)
+		}
+		midCancel()
+	}
+}
+
+func TestResolveDebuggerURL(t *testing.T) {
+	// Direct /devtools/browser/ ws URL with IP literal passes through.
+	direct := "ws://127.0.0.1:9222/devtools/browser/abc-123"
+	got, err := resolveDebuggerURL(context.Background(), direct)
+	if err != nil || got != direct {
+		t.Fatalf("resolveDebuggerURL(direct) = (%q, %v), want (%q, nil)", got, err, direct)
+	}
+
+	// Direct wss:// URL preserves hostname (must NOT rewrite to IP, which breaks TLS SNI).
+	directWSS := "wss://chrome.invalid:9222/devtools/browser/abc-123?token=xyz"
+	got, err = resolveDebuggerURL(context.Background(), directWSS)
+	if err != nil || got != directWSS {
+		t.Fatalf("resolveDebuggerURL(wss) = (%q, %v), want (%q, nil)", got, err, directWSS)
+	}
+
+	// Direct ws:// with empty host is rejected.
+	if _, err := resolveDebuggerURL(context.Background(), "ws:///devtools/browser/abc"); err == nil {
+		t.Error("expected error for ws URL with empty host")
+	}
+
+	// Unsupported scheme is rejected.
+	if _, err := resolveDebuggerURL(context.Background(), "ftp://127.0.0.1:9222"); err == nil {
+		t.Error("expected error for unsupported scheme")
+	}
+
+	// resolvePlaintextHost handles missing port and IPv6 literals.
+	if h, err := resolvePlaintextHost(context.Background(), "127.0.0.1", ""); err != nil || h != "127.0.0.1" {
+		t.Errorf("resolvePlaintextHost(127.0.0.1, '') = (%q, %v)", h, err)
+	}
+	if h, err := resolvePlaintextHost(context.Background(), "::1", ""); err != nil || h != "[::1]" {
+		t.Errorf("resolvePlaintextHost(::1, '') = (%q, %v)", h, err)
+	}
+	if h, err := resolvePlaintextHost(context.Background(), "::1", "9222"); err != nil || h != "[::1]:9222" {
+		t.Errorf("resolvePlaintextHost(::1, 9222) = (%q, %v)", h, err)
+	}
+
+	// HTTP endpoint returning JSON without webSocketDebuggerUrl must return
+	// an error rather than panicking inside chromedp.
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Browser":"Chrome"}`))
+	}))
+	defer badSrv.Close()
+
+	_, err = resolveDebuggerURL(context.Background(), badSrv.URL)
+	if err == nil || !strings.Contains(err.Error(), "webSocketDebuggerUrl") {
+		t.Fatalf("resolveDebuggerURL(missing field) err = %v, want webSocketDebuggerUrl error", err)
+	}
+
+	// Valid /json/version endpoint resolves cleanly and preserves query params.
+	var gotQuery string
+	goodSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/xyz"}`))
+	}))
+	defer goodSrv.Close()
+
+	got, err = resolveDebuggerURL(context.Background(), goodSrv.URL+"/?token=secret")
+	if err != nil {
+		t.Fatalf("resolveDebuggerURL(good) err = %v", err)
+	}
+	if got != "ws://127.0.0.1:9222/devtools/browser/xyz" {
+		t.Errorf("resolveDebuggerURL(good) = %q, want ws://127.0.0.1:9222/devtools/browser/xyz", got)
+	}
+	if gotQuery != "token=secret" {
+		t.Errorf("/json/version RawQuery = %q, want token=secret", gotQuery)
 	}
 }

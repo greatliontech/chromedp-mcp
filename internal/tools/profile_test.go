@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/profile"
 )
 
 // profileHarness creates a standalone MCP server+client with profile support
@@ -212,5 +213,52 @@ func TestBrowserListProfilesBadLocalState(t *testing.T) {
 	result := ph.callTool(t, "browser_list_profiles", nil)
 	if !result.IsError {
 		t.Fatal("expected error with invalid Local State JSON")
+	}
+}
+
+func TestBrowserLaunchProfileMissingUserDataDir(t *testing.T) {
+	// Point XDG_CONFIG_HOME at an empty directory so DefaultUserDataDir() returns ""
+	// on Linux without mutating process CWD (the shared harness serves ./testdata).
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if dir := profile.DefaultUserDataDir(); dir != "" {
+		t.Skipf("platform DefaultUserDataDir() returned %q despite empty XDG_CONFIG_HOME", dir)
+	}
+
+	ctx, cancel := context.WithCancel(harness.ctx)
+	mgr := browser.NewManager(ctx)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+	Register(srv, mgr, &Options{
+		AllowedProfiles: []string{"Work"},
+		UserDataDir:     "",
+	})
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	go func() { _ = srv.Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() {
+		mgr.CloseAll()
+		cancel()
+	})
+
+	callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer callCancel()
+	res, err := session.CallTool(callCtx, &mcp.CallToolParams{
+		Name:      "browser_launch",
+		Arguments: map[string]any{"profile": "Work"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error when userDataDir is empty")
+	}
+	// profile.Discover("") must reject an empty userDataDir rather than
+	// attempting to open "./Local State" in CWD.
+	if !strings.Contains(contentText(res), "no Chrome/Chromium user data directory found") {
+		t.Errorf("error = %q, want 'no Chrome/Chromium user data directory found'", contentText(res))
 	}
 }

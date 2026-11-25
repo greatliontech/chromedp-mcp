@@ -47,11 +47,11 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "tab_new",
 		Description: "Create a new browser tab, optionally navigating to a URL. The new tab becomes the active tab.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabNewInput) (*mcp.CallToolResult, TabNewOutput, error) {
-		b, err := resolveBrowser(mgr, input.Browser)
+		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
 			return nil, TabNewOutput{}, err
 		}
-		t, err := b.Tabs.NewTab()
+		t, err := b.Tabs.NewTab(ctx)
 		if err != nil {
 			return nil, TabNewOutput{}, err
 		}
@@ -60,9 +60,16 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 			tctx, tcancel := tabContext(ctx, t.Context())
 			defer tcancel()
 			if err := chromedp.Run(tctx, chromedp.Navigate(input.URL)); err != nil {
+				// Roll back the freshly created tab so a failed tab_new does not
+				// leak an orphaned blank tab or hijack the active tab.
+				_ = b.Tabs.Close(t.ID)
 				return nil, TabNewOutput{}, err
 			}
-			out.URL = input.URL
+			if finalURL, err := t.URL(ctx); err == nil && finalURL != "" {
+				out.URL = finalURL
+			} else {
+				out.URL = input.URL
+			}
 		}
 		return nil, out, nil
 	})
@@ -75,11 +82,15 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabListInput) (*mcp.CallToolResult, TabListOutput, error) {
-		b, err := resolveBrowser(mgr, input.Browser)
+		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
 			return nil, TabListOutput{}, err
 		}
-		return nil, TabListOutput{Tabs: b.Tabs.List()}, nil
+		tabs, err := b.Tabs.List(ctx)
+		if err != nil {
+			return nil, TabListOutput{}, err
+		}
+		return nil, TabListOutput{Tabs: tabs}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -107,13 +118,4 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		return nil, struct{}{}, nil
 	})
-}
-
-// resolveBrowser returns the browser for the given ID, or the active browser
-// when id is empty. Returns an error if no browser is running.
-func resolveBrowser(mgr *browser.Manager, id string) (*browser.Browser, error) {
-	if id != "" {
-		return mgr.Get(id)
-	}
-	return mgr.Active()
 }

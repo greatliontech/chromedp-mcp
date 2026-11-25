@@ -3,11 +3,13 @@
 package profile
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 )
 
 // Profile holds the mapping between a Chrome profile's directory name
@@ -34,6 +36,9 @@ type profileInfo struct {
 // Discover reads the "Local State" file in the given user data directory
 // and returns all profiles found in it.
 func Discover(userDataDir string) ([]Profile, error) {
+	if userDataDir == "" {
+		return nil, fmt.Errorf("no Chrome/Chromium user data directory found")
+	}
 	data, err := os.ReadFile(filepath.Join(userDataDir, "Local State"))
 	if err != nil {
 		return nil, fmt.Errorf("read Local State: %w", err)
@@ -55,6 +60,12 @@ func Discover(userDataDir string) ([]Profile, error) {
 			Name: name,
 		})
 	}
+	slices.SortFunc(profiles, func(a, b Profile) int {
+		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Dir, b.Dir)
+	})
 	return profiles, nil
 }
 
