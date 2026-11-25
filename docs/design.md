@@ -295,13 +295,14 @@ Query the DOM and return information about matching elements.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
+| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
 | `selector` | string | yes | CSS selector |
 | `limit` | int | no | Max elements to return (default 10) |
 | `attributes` | bool | no | Include element attributes (default `true`) |
 | `computed_style` | []string | no | List of CSS property names to include computed values for |
 | `outer_html` | bool | no | Include outer HTML (default `false`) |
 | `text` | bool | no | Include text content (default `true`) |
-| `bbox` | bool | no | Include bounding box dimensions (default `false`) |
+| `bbox` | bool | no | Include bounding box dimensions (default `false`). Coordinates are relative to the targeted frame's viewport when `frame` is set. |
 
 Returns: array of matched elements with the requested fields.
 
@@ -312,6 +313,7 @@ Get the HTML content of the page or a subtree.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
+| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
 | `selector` | string | no | CSS selector to scope to a subtree. If omitted, returns the full page. |
 | `outer` | bool | no | Return outer HTML (default `true`). If `false`, returns inner HTML. |
 
@@ -322,7 +324,19 @@ Get the visible text content of the page or an element.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
+| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
 | `selector` | string | no | CSS selector. If omitted, returns text of the entire page body. |
+| `hidden` | bool | no | Include hidden text (`textContent`) instead of visible text (`innerText`, default `false`) |
+
+#### `list_frames`
+
+List all frames in a tab, including the main frame, same-origin in-process iframes (`reachable: true`), and known out-of-process cross-origin iframes (`reachable: false`). Same-origin frame IDs can be passed to the optional `frame` parameter on `evaluate`, `query`, `get_html`, and `get_text`; cross-origin OOPIFs return a clear error. Fails fast if a JavaScript modal dialog is open (since `Page.getFrameTree` runs in the renderer). Note: because `Page.getFrameTree` omits OOPIFs and Chrome does not emit `frameDetached(remove)` on this session when an already-swapped OOPIF element is removed directly from the top frame, pre-existing OOPIFs on `browser_connect`-adopted tabs are not visible until navigation, and a directly removed top-level OOPIF persists in `list_frames` until top-frame navigation (descendant OOPIFs of a detached/navigated/swapped subframe are pruned immediately).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+
+Returns: `{frames}` array of `{id, parent_id?, name?, url?, security_origin?, is_main, reachable}` objects.
 
 #### `get_accessibility_tree`
 
@@ -453,6 +467,7 @@ Execute JavaScript in the page context. When a selector is provided, the first m
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
+| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
 | `expression` | string | yes | JavaScript expression to evaluate. When selector is set, the element is available as `el`. Use `return` to produce a value. |
 | `selector` | string | no | CSS selector. If provided, the first matched element is available as `el` in the expression. |
 | `timeout` | int | no | Max time in milliseconds to wait for selector (default 5000). Only used when `selector` is set. |
@@ -991,7 +1006,7 @@ chromedp-mcp/
       errors.go         # JS error collector (runtime.EventExceptionThrown)
       network.go        # Network request/response collector (request lifecycle events)
       performance.go    # Performance timeline collector (LCP, layout shifts)
-      execcontext.go    # Per-frame main-world JS execution contexts (for cross-frame DOM mutation counts)
+      execcontext.go    # Per-frame main-world JS execution contexts and frame hierarchy (observation & frame targeting)
       dialog.go         # Active JavaScript modal dialog state per tab
     tools/
       browser.go        # browser_launch, browser_connect, browser_activate, browser_close, browser_list
@@ -1000,6 +1015,7 @@ chromedp-mcp/
       navigation.go     # navigate, reload, go_back, go_forward, wait_for
       visual.go         # screenshot, pdf, set_viewport
       dom.go            # query, get_html, get_text, get_accessibility_tree
+      frames.go         # list_frames and same-origin iframe evaluation/wait helpers
       console.go        # get_console_logs, get_js_errors, clear_console
       buffers.go        # clear_buffers
       network.go        # get_network_requests, get_response_body
@@ -1104,7 +1120,7 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Waiting (`wait_for`) | true | false | true |
 | Visual (`screenshot`, `pdf`) | true | false | true |
 | Visual (`set_viewport`) | false | false | true |
-| DOM Inspection (`query`, `get_html`, `get_text`, `get_accessibility_tree`) | true | false | true |
+| DOM Inspection (`query`, `get_html`, `get_text`, `get_accessibility_tree`, `list_frames`) | true | false | true |
 | Console/Errors (`get_console_logs`, `get_js_errors`) | false | false | false |
 | Console (`clear_console`, `clear_buffers`) | false | false | true |
 | Network (`get_network_requests`, `get_websocket_frames`) | false | false | false |

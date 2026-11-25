@@ -16,6 +16,7 @@ import (
 // EvaluateInput is the input for evaluate.
 type EvaluateInput struct {
 	SelectorInput
+	Frame          string `json:"frame,omitempty" jsonschema:"Optional frame ID from list_frames to target a same-origin iframe instead of the main frame."`
 	Expression     string `json:"expression" jsonschema:"JavaScript expression to evaluate. Without a selector, evaluated directly as an expression (do not use top-level 'return'). When a selector is provided, runs as a function body with the matched element as 'el' — use 'return' to produce a value (e.g. 'return el.textContent')."`
 	Selector       string `json:"selector,omitempty" jsonschema:"CSS selector. If provided, the first matched element is available as 'el' in the expression."`
 	AwaitPromise   *bool  `json:"await_promise,omitempty" jsonschema:"Wait for Promise to resolve (default true)"`
@@ -54,6 +55,10 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, EvaluateOutput{}, err
 		}
+		uniqueCtxID, err := resolveFrameContext(t, input.Frame, input.Selector != "")
+		if err != nil {
+			return nil, EvaluateOutput{}, err
+		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
@@ -63,22 +68,22 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 			// Wait for the element using selectorContext, then execute
 			// the expression with the element as the first argument.
 			sctx, cancel := selectorContext(tctx, input.Timeout)
-			defer cancel()
-
-			if err := chromedp.Do(sctx, chromedp.WaitReady(chromedp.CSS(input.Selector))); err != nil {
-				return nil, EvaluateOutput{}, selectorError(tctx, input.Selector, err)
+			uniqueCtxID, err = waitForSelector(sctx, tctx, t, uniqueCtxID, input.Frame, input.Selector)
+			cancel()
+			if err != nil {
+				return nil, EvaluateOutput{}, err
 			}
 
-			// Wrap in an IIFE with a newline before closing the inner function
-			// so a trailing '//' comment in input.Expression never comments out '})(el);'.
-			qSel := jsQuote(input.Selector)
-			expr = fmt.Sprintf("(function() {\nvar el = document.querySelector(%s);\nif (!el) throw new Error('selector ' + %s + ' matched no elements');\nreturn (function(el) {\n%s\n})(el);\n})()", qSel, qSel, input.Expression)
+			// Newline before closing inner function prevents a trailing '//'
+			// comment in input.Expression from commenting out '})(el);'.
+			expr = frameElementJS(input.Selector, fmt.Sprintf("return (function(el) {\n%s\n})(el);", input.Expression))
 		}
 
-		var evalOpts []chromedp.EvaluateOption
+		var extraOpts []chromedp.EvaluateOption
 		if input.AwaitPromise == nil || *input.AwaitPromise {
-			evalOpts = append(evalOpts, chromedp.EvalAwaitPromise)
+			extraOpts = append(extraOpts, chromedp.EvalAwaitPromise)
 		}
+		evalOpts := evalOptsForFrame(uniqueCtxID, extraOpts...)
 
 		result, err := chromedp.Run(tctx, chromedp.Evaluate[any](expr, evalOpts...))
 		if err != nil {

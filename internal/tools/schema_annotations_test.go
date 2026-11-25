@@ -78,6 +78,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"get_html":                {true, false, true},
 		"get_text":                {true, false, true},
 		"get_accessibility_tree":  {true, false, true},
+		"list_frames":             {true, false, true},
 		"get_response_body":       {true, false, true},
 		"get_request_body":        {true, false, true},
 		"get_cookies":             {true, false, true},

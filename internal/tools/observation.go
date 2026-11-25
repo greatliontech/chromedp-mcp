@@ -2,11 +2,9 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
@@ -200,8 +198,8 @@ func openObservation(ctx context.Context, t *tab.Tab, windowMs int) *observation
 	defer anchorCancel()
 	for _, ec := range ordered {
 		o.framesAtOpen[ec.FrameID] = struct{}{}
-		var now float64
-		if err := evalInContext(anchorCtx, ec.UniqueID, `performance.now()`, &now); err != nil {
+		now, err := evalInContext[float64](anchorCtx, ec.UniqueID, `performance.now()`)
+		if err != nil {
 			o.anchorFailed = true
 			continue
 		}
@@ -320,11 +318,7 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 			return count;
 		})()`, anchor)
 
-		var n int
-		if err := evalInContext(readCtx, uniqueID, js, &n); err != nil {
-			return 0, err
-		}
-		return n, nil
+		return evalInContext[int](readCtx, uniqueID, js)
 	}
 
 	// Read the top frame FIRST so a replaced or dialog-blocked main document
@@ -356,7 +350,7 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 }
 
 // evalInContext evaluates expr in one specific execution context, by CDP's
-// system-unique context ID, and unmarshals the result into dst.
+// system-unique context ID, and decodes the result as T.
 //
 // chromedp.Evaluate always targets the page's *current* top-frame context,
 // which is wrong twice over here: it cannot see an iframe's buffer, and
@@ -369,24 +363,10 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 // dom_mutations_unavailable/partial instead of hanging the action tool.
 const evalInContextTimeout = 1 * time.Second
 
-func evalInContext(ctx context.Context, uniqueContextID, expr string, dst any) error {
+func evalInContext[T any](ctx context.Context, uniqueContextID, expr string) (T, error) {
 	evalCtx, cancel := context.WithTimeout(ctx, evalInContextTimeout)
 	defer cancel()
-	res, err := chromedp.Call(evalCtx, runtime.Evaluate, runtime.EvaluateParams{
-		Expression:      expr,
-		UniqueContextID: uniqueContextID,
-		ReturnByValue:   new(true),
-	})
-	if err != nil {
-		return err
-	}
-	if res.ExceptionDetails != nil {
-		return fmt.Errorf("evaluate in context %s: %s", uniqueContextID, res.ExceptionDetails.Text)
-	}
-	if res.Result == nil || len(res.Result.Value) == 0 {
-		return fmt.Errorf("evaluate in context %s: no value", uniqueContextID)
-	}
-	return json.Unmarshal([]byte(res.Result.Value), dst)
+	return chromedp.Run(evalCtx, chromedp.Evaluate[T](expr, evalInUniqueContext(uniqueContextID)))
 }
 
 // countConsoleSince counts console entries received at or after t.

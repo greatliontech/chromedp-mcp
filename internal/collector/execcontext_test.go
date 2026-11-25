@@ -234,7 +234,7 @@ func TestExecContextsObservedFrameIsNotUnobserved(t *testing.T) {
 // count on that tab reports "unavailable" forever.
 func TestExecContextsSeedFrameTree(t *testing.T) {
 	e := NewExecContexts()
-	e.SeedFrameTree("top", "loader-init", []string{"top", "child"})
+	e.SeedFrameTree("top", "loader-init", map[string]string{"top": "", "child": "top"})
 	e.HandleExecutionContextCreated(created("u-top", "top", true))
 
 	contexts, unobserved := e.Snapshot()
@@ -243,6 +243,9 @@ func TestExecContextsSeedFrameTree(t *testing.T) {
 	}
 	if unobserved != 1 {
 		t.Errorf("unobservedFrames = %d, want 1 (the seeded child has no context yet)", unobserved)
+	}
+	if kf := e.KnownFrames(); kf["child"] != "top" {
+		t.Errorf("seeded child parent = %q, want %q", kf["child"], "top")
 	}
 }
 
@@ -479,7 +482,7 @@ func TestExecContextsRejectsEmptyFrameIDDeterministicOrderAndSeedLoaderID(t *tes
 	}
 
 	// SeedFrameTree with loaderID enables bfcache stash/restore of the initial document.
-	e.SeedFrameTree("top", "loader-init", []string{"top", "child-oopif"})
+	e.SeedFrameTree("top", "loader-init", map[string]string{"top": "", "child-oopif": "top"})
 	e.HandleExecutionContextCreated(created("u-first", "top", true))
 	e.HandleExecutionContextCreated(created("u-second", "top", true))
 
@@ -524,8 +527,126 @@ func TestExecContextsSeedFrameTreeNoOpAfterNavigationAndEmptyFrameIDRejected(t *
 	e.HandleExecutionContextCreated(created("u-top", "top", true))
 
 	// Stale SeedFrameTree from loader-1 must NOT inject departed child frames into loader-2.
-	e.SeedFrameTree("top", "loader-1", []string{"top", "old-child"})
+	e.SeedFrameTree("top", "loader-1", map[string]string{"top": "", "old-child": "top"})
 	if _, unobserved := e.Snapshot(); unobserved != 0 {
 		t.Errorf("stale SeedFrameTree polluted newer document frames: unobserved = %d, want 0", unobserved)
+	}
+}
+
+func TestExecContextsPrunesDescendantOOPIFsOnSubframeDetachNavAndSwap(t *testing.T) {
+	buildTree := func() *ExecContexts {
+		e := NewExecContexts()
+		e.HandleFrameNavigated(navigatedTyped("main", "", "L1", page.NavigationTypeNavigation))
+		e.HandleExecutionContextCreated(created("u-main", "main", true))
+		e.HandleFrameAttached(&page.EventFrameAttached{FrameID: "child", ParentFrameID: "main"})
+		e.HandleExecutionContextCreated(created("u-child", "child", true))
+		e.HandleFrameAttached(&page.EventFrameAttached{FrameID: "oopif", ParentFrameID: "child"})
+		e.HandleFrameDetached(&page.EventFrameDetached{FrameID: "oopif", Reason: page.FrameDetachedReasonSwap})
+		e.HandleFrameAttached(&page.EventFrameAttached{FrameID: "grandchild", ParentFrameID: "oopif"})
+		e.HandleFrameDetached(&page.EventFrameDetached{FrameID: "grandchild", Reason: page.FrameDetachedReasonSwap})
+		return e
+	}
+
+	// (a) Parent subframe removed -> child, oopif, and grandchild all pruned.
+	e := buildTree()
+	e.HandleFrameDetached(&page.EventFrameDetached{FrameID: "child", Reason: page.FrameDetachedReasonRemove})
+	kf := e.KnownFrames()
+	if len(kf) != 1 || kf["main"] != "" {
+		t.Errorf("after child remove, KnownFrames = %v, want only main", kf)
+	}
+	if _, unobserved := e.Snapshot(); unobserved != 0 {
+		t.Errorf("after child remove, unobserved = %d, want 0", unobserved)
+	}
+
+	// (b) Parent subframe navigates -> child retained, old descendant OOPIFs pruned.
+	e = buildTree()
+	e.HandleFrameNavigated(navigatedTyped("child", "main", "L2", page.NavigationTypeNavigation))
+	kf = e.KnownFrames()
+	if len(kf) != 2 || kf["child"] != "main" {
+		t.Errorf("after child navigate, KnownFrames = %v, want main + child", kf)
+	}
+	if _, unobserved := e.Snapshot(); unobserved != 0 {
+		t.Errorf("after child navigate, unobserved = %d, want 0", unobserved)
+	}
+
+	// (c) Parent subframe swaps cross-origin -> child retained (as OOPIF), descendants pruned.
+	e = buildTree()
+	e.HandleExecutionContextDestroyed(&runtime.EventExecutionContextDestroyed{ExecutionContextUniqueID: "u-child"})
+	e.HandleFrameDetached(&page.EventFrameDetached{FrameID: "child", Reason: page.FrameDetachedReasonSwap})
+	kf = e.KnownFrames()
+	if len(kf) != 2 || kf["child"] != "main" {
+		t.Errorf("after child swap, KnownFrames = %v, want main + child", kf)
+	}
+	if _, unobserved := e.Snapshot(); unobserved != 1 {
+		t.Errorf("after child swap, unobserved = %d, want 1 (child only)", unobserved)
+	}
+}
+
+func TestExecContextsContextForFrameAndKnownFrames(t *testing.T) {
+	e := NewExecContexts()
+	e.HandleFrameNavigated(navigatedTyped("main", "", "loader-1", page.NavigationTypeNavigation))
+	e.HandleExecutionContextCreated(created("u-main", "main", true))
+
+	// Same-origin subframe with two overlapping contexts: ContextForFrame must
+	// select the newest (highest-seq) context.
+	e.HandleFrameAttached(&page.EventFrameAttached{
+		FrameID:       cdp.FrameID("sub-same"),
+		ParentFrameID: cdp.FrameID("main"),
+	})
+	e.HandleExecutionContextCreated(created("u-sub-old", "sub-same", true))
+	e.HandleExecutionContextCreated(created("u-sub-new", "sub-same", true))
+
+	// Cross-origin OOPIF: attaches under main then swaps out (no execution context).
+	e.HandleFrameAttached(&page.EventFrameAttached{
+		FrameID:       cdp.FrameID("sub-oopif"),
+		ParentFrameID: cdp.FrameID("main"),
+	})
+	e.HandleFrameDetached(&page.EventFrameDetached{
+		FrameID: cdp.FrameID("sub-oopif"),
+		Reason:  page.FrameDetachedReasonSwap,
+	})
+
+	// Empty frame ID.
+	if _, reachable, known, swapped := e.ContextForFrame(""); reachable || known || swapped {
+		t.Errorf("ContextForFrame('') = (%v, %v, %v), want (false, false, false)", reachable, known, swapped)
+	}
+
+	// Main frame lookup.
+	ec, reachable, known, swapped := e.ContextForFrame("main")
+	if !reachable || !known || swapped || ec.UniqueID != "u-main" || !ec.IsMain {
+		t.Fatalf("ContextForFrame('main') = (%+v, %v, %v, %v), want u-main IsMain=true swapped=false", ec, reachable, known, swapped)
+	}
+
+	// Same-origin subframe returns newest context.
+	ec, reachable, known, swapped = e.ContextForFrame("sub-same")
+	if !reachable || !known || swapped || ec.UniqueID != "u-sub-new" || ec.IsMain {
+		t.Fatalf("ContextForFrame('sub-same') = (%+v, %v, %v, %v), want u-sub-new IsMain=false swapped=false", ec, reachable, known, swapped)
+	}
+
+	// OOPIF is known=true, reachable=false, swapped=true.
+	if _, reachable, known, swapped := e.ContextForFrame("sub-oopif"); reachable || !known || !swapped {
+		t.Fatalf("ContextForFrame('sub-oopif') = (reachable=%v, known=%v, swapped=%v), want (false, true, true)", reachable, known, swapped)
+	}
+
+	// Transient same-origin navigation gap (context destroyed, not swapped): known=true, reachable=false, swapped=false.
+	e.HandleExecutionContextDestroyed(&runtime.EventExecutionContextDestroyed{ExecutionContextUniqueID: "u-sub-old"})
+	e.HandleExecutionContextDestroyed(&runtime.EventExecutionContextDestroyed{ExecutionContextUniqueID: "u-sub-new"})
+	if _, reachable, known, swapped := e.ContextForFrame("sub-same"); reachable || !known || swapped {
+		t.Fatalf("ContextForFrame('sub-same' mid-nav) = (reachable=%v, known=%v, swapped=%v), want (false, true, false)", reachable, known, swapped)
+	}
+
+	// Unknown frame is known=false, reachable=false, swapped=false.
+	if _, reachable, known, swapped := e.ContextForFrame("bogus"); reachable || known || swapped {
+		t.Fatalf("ContextForFrame('bogus') = (reachable=%v, known=%v, swapped=%v), want (false, false, false)", reachable, known, swapped)
+	}
+
+	// KnownFrames preserves parent IDs and returns a defensive copy.
+	kf := e.KnownFrames()
+	if kf["main"] != "" || kf["sub-same"] != "main" || kf["sub-oopif"] != "main" {
+		t.Fatalf("KnownFrames() = %v, want main->'', sub-same->main, sub-oopif->main", kf)
+	}
+	kf["injected"] = "main"
+	if _, ok := e.KnownFrames()["injected"]; ok {
+		t.Error("KnownFrames() leaked mutable internal map")
 	}
 }

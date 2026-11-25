@@ -291,20 +291,20 @@ func newTab(parentCtx, startupCtx context.Context, id string, targetID target.ID
 		// frameAttached event stream, which is why ExecContexts keeps a
 		// frame that merely swapped away rather than dropping it.
 		if treeRes, err := cdp.Call(ctx, tgt, page.GetFrameTree, cdp.Empty{}); err == nil && treeRes.FrameTree != nil && treeRes.FrameTree.Frame != nil {
-			var ids []string
+			frames := make(map[string]string)
 			var walk func(*page.FrameTree)
 			walk = func(n *page.FrameTree) {
 				if n == nil || n.Frame == nil {
 					return
 				}
-				ids = append(ids, string(n.Frame.ID))
+				frames[string(n.Frame.ID)] = string(n.Frame.ParentID)
 				for _, c := range n.ChildFrames {
 					walk(c)
 				}
 			}
 			walk(treeRes.FrameTree)
 			top := treeRes.FrameTree.Frame
-			t.ExecContexts.SeedFrameTree(string(top.ID), string(top.LoaderID), ids)
+			t.ExecContexts.SeedFrameTree(string(top.ID), string(top.LoaderID), frames)
 			t.URLChanges.Seed(top.ID, top.URL+top.URLFragment)
 		}
 		return nil

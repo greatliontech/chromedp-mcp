@@ -14,7 +14,7 @@ This affects the common case, not an exotic one: third-party ads, embeds, paymen
 
 The frame is not invisible. It announces itself with `Page.frameAttached` *before* it swaps into its own process, and it then leaves our session with `Page.frameDetached` reason `swap` — which is deliberately **not** treated as removal, because that event is our only evidence the frame exists. (`Page.getFrameTree` does not list out-of-process frames at all, so the event stream is the sole source.) The server therefore knows such a frame exists and knows it cannot see inside it.
 
-`dom_mutations` therefore reports what it could see and sets **`dom_mutations_partial: true`**, meaning "this is a lower bound". It never reports a confident `0` for mutations it simply could not observe.
+`dom_mutations` therefore reports what it could see and sets **`dom_mutations_partial: true`**, meaning "this is a lower bound". It never reports a confident `0` for mutations it simply could not observe. Likewise, `list_frames` surfaces known cross-origin OOPIFs with `reachable: false`, and passing an OOPIF ID to `evaluate`/`query`/`get_html`/`get_text` returns an explicit out-of-process error rather than silently targeting the main frame.
 
 The other observation signals are unaffected: `network_requests`, `console_messages`, `js_errors`, and `url_changed` are not frame-scoped and do cover out-of-process frames.
 

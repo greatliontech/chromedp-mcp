@@ -46,10 +46,12 @@ type ExecContexts struct {
 	nextSeq uint64
 	// byUnique is keyed by ExecContext.UniqueID.
 	byUnique map[string]ExecContext
-	// frames is every frame we know exists, whether or not we hold an
+	// frames maps every frame ID we know exists to its parent frame ID and
+	// whether it swapped out-of-process (OOPIF), whether or not we hold an
 	// execution context for it. Comparing this set against byUnique is what
 	// lets observation say "some frames were not observable" instead of
-	// reporting a confident zero for them.
+	// reporting a confident zero for them, and lets list_frames surface known
+	// cross-origin OOPIFs.
 	//
 	// The only evidence we ever get for an out-of-process (cross-origin)
 	// iframe is the frameAttached that arrives BEFORE it swaps out of our
@@ -57,7 +59,7 @@ type ExecContexts struct {
 	// contexts live on a CDP session we are not attached to. So this set is
 	// built from the event stream, and a frame is never dropped merely
 	// because it swapped away — see HandleFrameDetached.
-	frames map[string]struct{}
+	frames map[string]frameMeta
 	// mainFrameID is the top-level frame. A frame is top-level exactly
 	// when it has no parent.
 	mainFrameID string
@@ -87,10 +89,15 @@ type ExecContexts struct {
 	frameSetUnknown bool
 }
 
+type frameMeta struct {
+	parentID string
+	swapped  bool
+}
+
 // retainedFrames is a stashed document's frame set, kept in case the
 // document comes back via the back/forward cache.
 type retainedFrames struct {
-	frames map[string]struct{}
+	frames map[string]frameMeta
 	// unknown is true when the set could not be fully enumerated when it was
 	// stashed. Restoring must preserve that admission rather than present
 	// the set as complete.
@@ -107,7 +114,7 @@ const maxRetainedFrameSets = 32
 func NewExecContexts() *ExecContexts {
 	return &ExecContexts{
 		byUnique: make(map[string]ExecContext),
-		frames:   make(map[string]struct{}),
+		frames:   make(map[string]frameMeta),
 		retained: make(map[string]retainedFrames),
 	}
 }
@@ -138,6 +145,10 @@ func (e *ExecContexts) HandleExecutionContextCreated(ev *runtime.EventExecutionC
 		UniqueID: ev.Context.UniqueID,
 		FrameID:  aux.FrameID,
 		seq:      e.nextSeq,
+	}
+	if m, ok := e.frames[aux.FrameID]; ok && m.swapped {
+		m.swapped = false
+		e.frames[aux.FrameID] = m
 	}
 }
 
@@ -196,8 +207,10 @@ func (e *ExecContexts) HandleFrameNavigated(ev *page.EventFrameNavigated) {
 
 	id := string(ev.Frame.ID)
 	if ev.Frame.ParentID != "" {
-		// A subframe navigating within the current document.
-		e.frames[id] = struct{}{}
+		// A subframe navigating within the current document replaces its
+		// document and all previous descendants (including nested OOPIFs).
+		e.pruneDescendantsLocked(id)
+		e.frames[id] = frameMeta{parentID: string(ev.Frame.ParentID)}
 		return
 	}
 
@@ -225,19 +238,19 @@ func (e *ExecContexts) HandleFrameNavigated(ev *page.EventFrameNavigated) {
 			// enumerate them — and an out-of-process iframe would be
 			// invisible. Say the frame set is unknown rather than claim a
 			// complete count.
-			e.frames = make(map[string]struct{})
+			e.frames = make(map[string]frameMeta)
 			e.frameSetUnknown = true
 		}
 	} else {
 		// A fresh document: its frames announce themselves from here on, so
 		// the set we build is complete.
-		e.frames = make(map[string]struct{})
+		e.frames = make(map[string]frameMeta)
 		e.frameSetUnknown = false
 	}
 
 	e.mainFrameID = id
 	e.currentLoaderID = loader
-	e.frames[id] = struct{}{}
+	e.frames[id] = frameMeta{}
 }
 
 // stashLocked retains a frame set under its document's loader ID, evicting
@@ -248,7 +261,7 @@ func (e *ExecContexts) HandleFrameNavigated(ev *page.EventFrameNavigated) {
 // set to a complete one would report a confident, complete DOM count for a
 // document with a frame it cannot see — the exact silent-wrong-count failure
 // the partial flag exists to prevent.
-func (e *ExecContexts) stashLocked(loaderID string, frames map[string]struct{}, unknown bool) {
+func (e *ExecContexts) stashLocked(loaderID string, frames map[string]frameMeta, unknown bool) {
 	if _, exists := e.retained[loaderID]; exists {
 		// Refresh its FIFO position: a document we keep returning to should
 		// not be evicted ahead of colder ones.
@@ -277,7 +290,7 @@ func (e *ExecContexts) HandleFrameAttached(ev *page.EventFrameAttached) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.frames[string(ev.FrameID)] = struct{}{}
+	e.frames[string(ev.FrameID)] = frameMeta{parentID: string(ev.ParentFrameID)}
 }
 
 // HandleFrameDetached drops a frame that has been removed from the tree.
@@ -296,23 +309,75 @@ func (e *ExecContexts) HandleFrameAttached(ev *page.EventFrameAttached) {
 // cannot see. Keeping it — with no execution context — is what makes it
 // count as an unobserved frame.
 func (e *ExecContexts) HandleFrameDetached(ev *page.EventFrameDetached) {
-	if ev == nil || ev.FrameID == "" || ev.Reason == page.FrameDetachedReasonSwap {
+	if ev == nil || ev.FrameID == "" {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.frames, string(ev.FrameID))
+	id := string(ev.FrameID)
+	// Prune strict descendants on both remove and swap: when a subframe leaves
+	// this process or the DOM, its previously-swapped descendant OOPIFs no
+	// longer receive frameDetached(remove) on this session.
+	e.pruneDescendantsLocked(id)
+	if ev.Reason == page.FrameDetachedReasonSwap {
+		if m, ok := e.frames[id]; ok {
+			m.swapped = true
+			e.frames[id] = m
+		}
+		return
+	}
+	delete(e.frames, id)
+}
+
+// pruneDescendantsLocked removes all strict descendants of ancestorID from
+// e.frames (walking parent links with cycle protection). Caller must hold e.mu.
+func (e *ExecContexts) pruneDescendantsLocked(ancestorID string) {
+	if ancestorID == "" {
+		return
+	}
+	var toDelete []string
+	for id := range e.frames {
+		if id == ancestorID {
+			continue
+		}
+		if e.isDescendantLocked(id, ancestorID) {
+			toDelete = append(toDelete, id)
+		}
+	}
+	for _, id := range toDelete {
+		delete(e.frames, id)
+	}
+}
+
+func (e *ExecContexts) isDescendantLocked(frameID, ancestorID string) bool {
+	visited := make(map[string]struct{}, 4)
+	cur := frameID
+	for {
+		meta, ok := e.frames[cur]
+		if !ok || meta.parentID == "" {
+			return false
+		}
+		if meta.parentID == ancestorID {
+			return true
+		}
+		if _, seen := visited[meta.parentID]; seen {
+			return false
+		}
+		visited[meta.parentID] = struct{}{}
+		cur = meta.parentID
+	}
 }
 
 // SeedFrameTree primes the registry from an initial Page.getFrameTree, so
-// the main frame is known without waiting for a navigation. A tab that is
-// never navigated (it sits on about:blank) would otherwise have no main
-// frame, and every DOM mutation count on it would report "unavailable".
+// the main frame and initial child-to-parent edges are known without waiting
+// for a navigation. A tab that is never navigated (it sits on about:blank)
+// would otherwise have no main frame, and every DOM mutation count on it
+// would report "unavailable".
 //
 // This is a seed, not a source of truth for the frame set: getFrameTree
 // does NOT list out-of-process iframes. Those are learned only from the
 // frameAttached event stream.
-func (e *ExecContexts) SeedFrameTree(mainFrameID, loaderID string, frameIDs []string) {
+func (e *ExecContexts) SeedFrameTree(mainFrameID, loaderID string, frames map[string]string) {
 	if mainFrameID == "" {
 		return
 	}
@@ -326,11 +391,55 @@ func (e *ExecContexts) SeedFrameTree(mainFrameID, loaderID string, frameIDs []st
 	}
 	e.mainFrameID = mainFrameID
 	e.currentLoaderID = loaderID
-	for _, id := range frameIDs {
+	e.frames[mainFrameID] = frameMeta{}
+	for id, parentID := range frames {
 		if id != "" {
-			e.frames[id] = struct{}{}
+			e.frames[id] = frameMeta{parentID: parentID}
 		}
 	}
+}
+
+// ContextForFrame returns the newest main-world execution context for frameID.
+// known reports whether frameID is a known frame of the current document even
+// when no execution context is attached in this session. swapped is true when
+// Chrome explicitly detached the frame with reason "swap" (cross-origin OOPIF),
+// distinguishing permanent out-of-process frames from transient same-origin
+// subframe navigations between executionContextDestroyed and Created.
+func (e *ExecContexts) ContextForFrame(frameID string) (ec ExecContext, reachable, known, swapped bool) {
+	if frameID == "" {
+		return ExecContext{}, false, false, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	var best ExecContext
+	for _, c := range e.byUnique {
+		if c.FrameID != frameID {
+			continue
+		}
+		if !reachable || c.seq > best.seq {
+			best = c
+			reachable = true
+		}
+	}
+	if reachable {
+		best.IsMain = e.mainFrameID != "" && best.FrameID == e.mainFrameID
+		return best, true, true, false
+	}
+	meta, ok := e.frames[frameID]
+	return ExecContext{}, false, ok, meta.swapped
+}
+
+// KnownFrames returns a defensive copy of all currently known frame IDs mapped
+// to their parent frame ID (empty for the top-level frame or unknown parent).
+func (e *ExecContexts) KnownFrames() map[string]string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make(map[string]string, len(e.frames))
+	for id, meta := range e.frames {
+		out[id] = meta.parentID
+	}
+	return out
 }
 
 // Snapshot returns the known main-world contexts, plus the number of

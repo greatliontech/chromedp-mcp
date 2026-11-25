@@ -17,6 +17,7 @@ import (
 // QueryInput is the input for query.
 type QueryInput struct {
 	SelectorInput
+	Frame         string   `json:"frame,omitempty" jsonschema:"Optional frame ID from list_frames to target a same-origin iframe instead of the main frame."`
 	Selector      string   `json:"selector" jsonschema:"CSS selector"`
 	Limit         int      `json:"limit,omitempty" jsonschema:"Max elements to return (default 10)"`
 	Attributes    *bool    `json:"attributes,omitempty" jsonschema:"Include element attributes (default true)"`
@@ -54,6 +55,7 @@ type QueryOutput struct {
 // GetHTMLInput is the input for get_html.
 type GetHTMLInput struct {
 	SelectorInput
+	Frame    string `json:"frame,omitempty" jsonschema:"Optional frame ID from list_frames to target a same-origin iframe instead of the main frame."`
 	Selector string `json:"selector,omitempty" jsonschema:"CSS selector to scope to a subtree. If omitted returns the full page."`
 	Outer    *bool  `json:"outer,omitempty" jsonschema:"Return outer HTML (default true). If false returns inner HTML."`
 }
@@ -66,6 +68,7 @@ type GetHTMLOutput struct {
 // GetTextInput is the input for get_text.
 type GetTextInput struct {
 	SelectorInput
+	Frame    string `json:"frame,omitempty" jsonschema:"Optional frame ID from list_frames to target a same-origin iframe instead of the main frame."`
 	Selector string `json:"selector,omitempty" jsonschema:"CSS selector. If omitted returns text of the entire page body."`
 	Hidden   bool   `json:"hidden,omitempty" jsonschema:"Include text from hidden elements (default false). When false uses innerText (visible text only). When true uses textContent (all DOM text)."`
 }
@@ -117,6 +120,10 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, QueryOutput{}, err
 		}
+		uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
+		if err != nil {
+			return nil, QueryOutput{}, err
+		}
 
 		limit := input.Limit
 		if limit == 0 {
@@ -133,8 +140,9 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		// Wait for at least one matching element within the selector timeout,
 		// then run the snapshot evaluation on tctx so post-wait DOM reading
 		// cannot trip selectorError with a misleading "not visible" message.
-		if err := chromedp.Do(sctx, chromedp.WaitReady(chromedp.CSS(input.Selector))); err != nil {
-			return nil, QueryOutput{}, selectorError(tctx, input.Selector, err)
+		uniqueCtxID, err = waitForSelector(sctx, tctx, t, uniqueCtxID, input.Frame, input.Selector)
+		if err != nil {
+			return nil, QueryOutput{}, err
 		}
 
 		// Snapshot all requested properties in a single renderer evaluation
@@ -197,7 +205,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			return {elements: elements, total: all.length};
 		})()`, jsQuote(input.Selector), limit, includeAttrs, includeText, input.OuterHTML, string(stylePropsJSON), input.BBox)
 
-		out, err := chromedp.Run(tctx, chromedp.Evaluate[QueryOutput](js))
+		out, err := chromedp.Run(tctx, chromedp.Evaluate[QueryOutput](js, evalOptsForFrame(uniqueCtxID)...))
 		if err != nil {
 			return nil, QueryOutput{}, err
 		}
@@ -219,6 +227,10 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, GetHTMLOutput{}, err
 		}
+		uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
+		if err != nil {
+			return nil, GetHTMLOutput{}, err
+		}
 
 		selector := input.Selector
 		if selector == "" {
@@ -226,18 +238,22 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		outer := input.Outer == nil || *input.Outer
-		var html string
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
-		if outer {
-			html, err = chromedp.Run(sctx, chromedp.OuterHTML(chromedp.CSS(selector)))
-		} else {
-			html, err = chromedp.Run(sctx, chromedp.InnerHTML(chromedp.CSS(selector)))
-		}
+		uniqueCtxID, err = waitForSelector(sctx, tctx, t, uniqueCtxID, input.Frame, selector)
 		if err != nil {
-			return nil, GetHTMLOutput{}, selectorError(tctx, selector, err)
+			return nil, GetHTMLOutput{}, err
+		}
+		prop := "outerHTML"
+		if !outer {
+			prop = "innerHTML"
+		}
+		js := frameElementJS(selector, fmt.Sprintf(`return el.%s || "";`, prop))
+		html, err := chromedp.Run(tctx, chromedp.Evaluate[string](js, evalOptsForFrame(uniqueCtxID)...))
+		if err != nil {
+			return nil, GetHTMLOutput{}, err
 		}
 		return nil, GetHTMLOutput{HTML: html}, nil
 	})
@@ -254,6 +270,10 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, GetTextOutput{}, err
 		}
+		uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
+		if err != nil {
+			return nil, GetTextOutput{}, err
+		}
 
 		selector := input.Selector
 		if selector == "" {
@@ -264,15 +284,21 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
-		var action chromedp.Action[string]
-		if input.Hidden {
-			action = chromedp.TextContent(chromedp.CSS(selector))
-		} else {
-			action = chromedp.Text(chromedp.CSS(selector))
-		}
-		text, err := chromedp.Run(sctx, action)
+		uniqueCtxID, err = waitForSelector(sctx, tctx, t, uniqueCtxID, input.Frame, selector)
 		if err != nil {
-			return nil, GetTextOutput{}, selectorError(tctx, selector, err)
+			return nil, GetTextOutput{}, err
+		}
+		var body string
+		if input.Hidden {
+			body = `return el.textContent || "";`
+		} else {
+			// Match chromedp's js/text.js visibility check (offsetWidth/Height or client rects).
+			body = `return (el.offsetWidth || el.offsetHeight || el.getClientRects().length) ? (el.innerText || "") : "";`
+		}
+		js := frameElementJS(selector, body)
+		text, err := chromedp.Run(tctx, chromedp.Evaluate[string](js, evalOptsForFrame(uniqueCtxID)...))
+		if err != nil {
+			return nil, GetTextOutput{}, err
 		}
 		return nil, GetTextOutput{Text: text}, nil
 	})

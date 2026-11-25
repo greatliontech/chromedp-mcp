@@ -153,6 +153,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `get_html`               | Get inner/outer HTML of the page or a subtree                                |
 | `get_text`               | Get visible text content                                                     |
 | `get_accessibility_tree` | Get the accessibility tree (token-efficient page structure)                  |
+| `list_frames`            | List frames and same-origin/OOPIF reachability (for optional `frame` param)  |
 
 ### Interaction
 
