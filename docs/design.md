@@ -35,7 +35,7 @@ This means the LLM can:
 
 #### `browser_launch`
 
-Launch a new Chrome instance managed by the server.
+Launch a new Chrome instance managed by the server. Connects at the browser CDP level and automatically attaches Chrome's initial default `"page"` target (or restored profile tabs, falling back to opening one tab if none attach) as a managed active tab, so `navigate` and tab tools work immediately without calling `tab_new` first.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -44,7 +44,7 @@ Launch a new Chrome instance managed by the server.
 | `height` | int | no | Initial viewport height (default 1080) |
 | `profile` | string | no | Chrome profile display name to use (e.g. `"Work"`). Must be in the allowed profiles list. Use `browser_list_profiles` to see available profiles. Requires `--allowed-profiles` to be configured. |
 
-Returns: browser ID.
+Returns: `{browser_id, tabs}` where `tabs` is the array of attached initial tabs (`{id, url, title, active}`).
 
 When `profile` is specified, the browser is launched with `--user-data-dir` and `--profile-directory` pointing to the real Chrome profile. This gives the browser access to the profile's cookies, sessions, extensions, and other stored data. When omitted, a temporary ephemeral profile is used (default behavior).
 
@@ -143,7 +143,7 @@ If the active tab is closed, the most recently used remaining tab becomes active
 
 ### Explicit Browser and Tab Lifecycle
 
-No implicit auto-creation. If no browser exists when a tool that requires one is called, an error is returned telling the LLM to call `browser_launch` or `browser_connect`. Similarly, if no tab exists, the error tells the LLM to call `tab_new`.
+No implicit auto-creation. If no browser exists when a tool that requires one is called, an error is returned telling the LLM to call `browser_launch` or `browser_connect`. `browser_launch` attaches Chrome's initial default tab (and `browser_connect` adopts existing open tabs) so tab-scoped tools work immediately; if all tabs are later closed (or a connected browser has zero open tabs), calling a tab tool returns an error telling the LLM to call `tab_new`.
 
 ## Event Collectors
 
@@ -1226,15 +1226,15 @@ type RingBuffer[T any] struct {
 ### Lifecycle
 
 1. **Startup**: Create `browser.Manager` (empty — no browser yet). Create MCP `Server`. Register all tools. Run `server.Run(ctx, StdioTransport)`.
-2. **First tool call**: If no browser exists, the tool returns an error telling the LLM to call `browser_launch` or `browser_connect`. Same for missing tabs.
-3. **Browser creation**: `browser_launch` calls `chromedp.NewExecAllocator` + `chromedp.NewContext`. `browser_connect` resolves `/json/version` when needed and calls `remote.NewAllocator` + `chromedp.NewContext`. Both create a `tab.Manager` for the browser.
+2. **First tool call**: If no browser exists, the tool returns an error telling the LLM to call `browser_launch` or `browser_connect`. If a browser has zero open tabs, tab-scoped tools return an error telling the LLM to call `tab_new`.
+3. **Browser creation**: `browser_launch` calls `chromedp.NewExecAllocator` + `chromedp.NewContext` and starts Chrome at the browser CDP level via `chromedp.Targets`, attaching Chrome's initial default page target(s) into `tab.Manager` (falling back to `NewTab` if none attach). `browser_connect` resolves `/json/version` when needed, calls `remote.NewAllocator` + `chromedp.NewContext`, queries `chromedp.Targets`, and adopts existing open page targets into `tab.Manager` without spawning a blank tab.
 4. **Tab creation**: `tab.Manager.NewTab()` calls `chromedp.NewContext(browserCtx, chromedp.WithListener(...))`, creates collectors, attaches CDP event listeners before target startup, and returns the tab ID.
-5. **Tool execution**: Tool handler resolves the target tab (explicit ID → active tab → auto-create), executes chromedp actions on the tab's context, reads from collectors as needed, returns the result.
-6. **Shutdown**: Server context is cancelled. All tab contexts cancelled (closing targets). All browser contexts cancelled (killing launched Chromes, disconnecting from connected ones).
+5. **Tool execution**: Tool handler resolves the target tab (explicit ID → active tab, erroring if none exist), executes chromedp actions on the tab's context, reads from collectors as needed, returns the result.
+6. **Shutdown**: Server context is cancelled. Attached tabs detach cleanly (leaving user tabs open in connected browsers) while server-created tabs close; all browser contexts are cancelled (killing launched Chromes, disconnecting from connected ones).
 
 ### Error Handling
 
-- No browser exists and auto-launch fails: return tool error describing the failure.
+- No browser exists: return tool error instructing the caller to call `browser_launch` or `browser_connect`.
 - Invalid browser/tab ID: return tool error with the ID and list of valid IDs.
 - Selector not found: return tool error with the selector.
 - Navigation timeout: return tool error with the URL and timeout duration.

@@ -112,7 +112,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 
 | Tool                     | Description                                                                         |
 | ------------------------ | ----------------------------------------------------------------------------------- |
-| `browser_launch`         | Launch a new Chrome instance (headless by default), optionally with a user profile  |
+| `browser_launch`         | Launch a new Chrome instance (headless by default) and attach its default tab, optionally with a user profile |
 | `browser_connect`        | Connect to a running Chrome via remote debugging URL and adopt its open tabs        |
 | `browser_activate`       | Set a managed browser as the active browser                                         |
 | `browser_close`          | Close a browser (kills process or disconnects, preserving adopted user tabs)        |
@@ -283,7 +283,7 @@ For full parameter documentation, see [docs/design.md](docs/design.md).
 
 ## How It Works
 
-- **No implicit browser creation.** If no browser is running when a tool is called, an error tells the LLM to call `browser_launch` or `browser_connect` first. Same for tabs.
+- **No implicit browser or tab auto-creation.** If no browser is running when a tool is called, an error tells the LLM to call `browser_launch` or `browser_connect` first. `browser_launch` attaches Chrome's initial default tab (and `browser_connect` adopts existing open tabs) so `navigate` works immediately; if all tabs are closed, tools ask for `tab_new`.
 - **Multiple browsers and tabs.** The most recently used browser/tab is the active one. Tools default to the active browser and tab unless an ID is specified.
 - **Background event collectors.** Console logs, JS errors, network requests, and performance data are captured automatically per tab in ring buffers, available on demand via drain (read + clear) or peek (read only) modes.
 - **MCP request cancellation.** All tool handlers respect client disconnection — if the MCP client drops the connection, in-flight CDP operations terminate immediately.

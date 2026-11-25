@@ -23,7 +23,8 @@ type BrowserLaunchInput struct {
 
 // BrowserLaunchOutput is the output for browser_launch.
 type BrowserLaunchOutput struct {
-	BrowserID string `json:"browser_id"`
+	BrowserID string        `json:"browser_id"`
+	Tabs      []tab.TabInfo `json:"tabs"`
 }
 
 // BrowserConnectInput is the input for browser_connect.
@@ -57,10 +58,22 @@ type BrowserListOutput struct {
 	Browsers []browser.BrowserInfo `json:"browsers"`
 }
 
+func listBrowserTabs(ctx context.Context, b *browser.Browser) []tab.TabInfo {
+	// Fetch tab metadata under a short detached deadline once the browser is
+	// registered so a late caller cancel does not mask open tabs as empty.
+	listCtx, listCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	tabs, err := b.Tabs.List(listCtx)
+	listCancel()
+	if err != nil || tabs == nil {
+		return []tab.TabInfo{}
+	}
+	return tabs
+}
+
 func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_launch",
-		Description: "Launch a new Chrome browser instance managed by the server.",
+		Description: "Launch a new Chrome browser instance managed by the server. Automatically attaches Chrome's initial default tab as the active tab so navigate and tab tools work immediately without calling tab_new first.",
 		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserLaunchInput) (*mcp.CallToolResult, BrowserLaunchOutput, error) {
 		if input.Width < 0 || input.Height < 0 {
@@ -98,7 +111,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		if err != nil {
 			return nil, BrowserLaunchOutput{}, err
 		}
-		return nil, BrowserLaunchOutput{BrowserID: b.ID}, nil
+		return nil, BrowserLaunchOutput{BrowserID: b.ID, Tabs: listBrowserTabs(ctx, b)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -116,16 +129,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		if err != nil {
 			return nil, BrowserConnectOutput{}, err
 		}
-		// Once Connect succeeds and registers the browser, fetch its adopted
-		// tab metadata under a short detached deadline so a late caller cancel
-		// does not silently mask adopted tabs as an empty list.
-		listCtx, listCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		tabs, err := b.Tabs.List(listCtx)
-		listCancel()
-		if err != nil {
-			tabs = []tab.TabInfo{}
-		}
-		return nil, BrowserConnectOutput{BrowserID: b.ID, Tabs: tabs}, nil
+		return nil, BrowserConnectOutput{BrowserID: b.ID, Tabs: listBrowserTabs(ctx, b)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

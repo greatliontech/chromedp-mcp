@@ -1113,21 +1113,36 @@ func TestUploadFilesEmptyPaths(t *testing.T) {
 // ===========================================================================
 
 func TestTabCloseLastErrors(t *testing.T) {
+	// Capture active harness browser to restore afterward.
+	initList := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	var origBrowser string
+	for _, br := range initList.Browsers {
+		if br.Active {
+			origBrowser = br.ID
+			break
+		}
+	}
+
 	// Launch a separate browser so we don't mess with the shared harness browser.
 	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
-	defer callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
-		"browser": b.BrowserID,
-	})
+	defer func() {
+		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+			"browser": b.BrowserID,
+		})
+		if origBrowser != "" {
+			callTool[struct{}](t, "browser_activate", map[string]any{"browser": origBrowser})
+		}
+	}()
 
-	// Create a tab in the new browser.
-	tab := callTool[TabNewOutput](t, "tab_new", map[string]any{
-		"browser": b.BrowserID,
-	})
+	if len(b.Tabs) != 1 {
+		t.Fatalf("browser_launch returned %d tabs, want 1 default tab", len(b.Tabs))
+	}
+	defaultTabID := b.Tabs[0].ID
 
-	// Close the only tab.
-	callTool[struct{}](t, "tab_close", map[string]any{"tab": tab.TabID})
+	// Close the only (default) tab.
+	callTool[struct{}](t, "tab_close", map[string]any{"tab": defaultTabID})
 
 	// tab_list should show 0 tabs.
 	list := callTool[TabListOutput](t, "tab_list", map[string]any{
@@ -1137,12 +1152,18 @@ func TestTabCloseLastErrors(t *testing.T) {
 		t.Errorf("after closing last tab, tab_list shows %d tabs, want 0", len(list.Tabs))
 	}
 
-	// A tool call referencing the closed tab should error.
-	errText := callToolExpectErr(t, "evaluate", map[string]any{
-		"tab":        tab.TabID,
+	// Default-tab tool call must error rather than silently auto-creating a tab.
+	if errText := callToolExpectErr(t, "evaluate", map[string]any{
 		"expression": "1+1",
-	})
-	if errText == "" {
+	}); !strings.Contains(errText, "no open tabs") {
+		t.Errorf("default-tab evaluate with 0 tabs err = %q, want 'no open tabs'", errText)
+	}
+
+	// A tool call referencing the closed tab ID should also error.
+	if errText := callToolExpectErr(t, "evaluate", map[string]any{
+		"tab":        defaultTabID,
+		"expression": "1+1",
+	}); errText == "" {
 		t.Error("evaluate on closed tab should error")
 	}
 }

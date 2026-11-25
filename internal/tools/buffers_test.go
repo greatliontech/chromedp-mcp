@@ -239,13 +239,16 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 	tabInB1 := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabInB1)
 
-	// Launch a second browser with 0 open tabs.
+	// Launch a second browser and close its initial default tab so it has 0 open tabs.
 	b2Out := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
 	b2ID := b2Out.BrowserID
 	defer func() {
 		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": b2ID})
 		callTool[struct{}](t, "browser_activate", map[string]any{"browser": b1ID})
 	}()
+	for _, tb := range b2Out.Tabs {
+		callTool[struct{}](t, "tab_close", map[string]any{"tab": tb.ID})
+	}
 
 	b2, err := harness.mgr.Resolve(b2ID)
 	if err != nil {

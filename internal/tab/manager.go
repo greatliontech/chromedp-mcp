@@ -60,9 +60,10 @@ func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
 	return t, nil
 }
 
-// AttachTarget attaches to an existing Chrome target (preserving it on
-// browser disconnect) and registers it as the active tab. If the target is
-// already tracked, returns the existing Tab.
+// AttachTarget attaches to an existing Chrome target (using WithDetachOnCancel
+// so failed attaches, concurrent dedup, and browser disconnect preserve the
+// target, while Close closes it explicitly via CloseTarget) and registers it
+// as the active tab. If the target is already tracked, returns the existing Tab.
 func (m *Manager) AttachTarget(ctx context.Context, targetID target.ID) (*Tab, error) {
 	m.mu.RLock()
 	if m.closed {

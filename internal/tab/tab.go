@@ -156,10 +156,11 @@ func New(parentCtx, startupCtx context.Context, id string) (*Tab, error) {
 	return newTab(parentCtx, startupCtx, id, "", false)
 }
 
-// Attach attaches to an existing Chrome page target (e.g., an already-open tab
-// in a browser connected via browser_connect) without creating a new target.
-// Adopted tabs use WithDetachOnCancel so disconnecting the browser leaves the
-// user's tab open in Chrome.
+// Attach attaches to an existing Chrome page target (such as Chrome's initial
+// default tab on browser_launch or an already-open tab on browser_connect)
+// without creating a new target. Uses WithDetachOnCancel so failed attaches,
+// concurrent dedup, and browser disconnect never destroy pre-existing targets,
+// while explicit tab_close closes the target via CloseTarget.
 func Attach(parentCtx, startupCtx context.Context, id string, targetID target.ID) (*Tab, error) {
 	if targetID == "" {
 		return nil, fmt.Errorf("tab attach: target ID is required")

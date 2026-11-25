@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/chromedp"
+
 	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
@@ -45,6 +47,45 @@ func TestManagerLaunchAndGet(t *testing.T) {
 	}
 	if got.ID != b.ID {
 		t.Errorf("Get returned browser %q, want %q", got.ID, b.ID)
+	}
+
+	// Launch must adopt Chrome's initial default page target into b.Tabs
+	// without leaving an extra untracked blank tab behind.
+	activeTab := b.Tabs.Active()
+	if activeTab == nil {
+		t.Fatal("launched browser has no active default tab")
+	}
+	countPageTargets := func() int {
+		t.Helper()
+		infos, err := chromedp.Targets(b.browserCtx)
+		if err != nil {
+			t.Fatalf("chromedp.Targets: %v", err)
+		}
+		n := 0
+		for _, info := range infos {
+			if isAttachablePageTarget(info) {
+				n++
+			}
+		}
+		return n
+	}
+	if n := countPageTargets(); n != 1 {
+		t.Errorf("Chrome page targets after Launch = %d, want 1", n)
+	}
+
+	// Closing the managed default tab must close the Chrome target (not detach),
+	// leaving 0 page targets while keeping the browser alive for NewTab.
+	if err := b.Tabs.Close(activeTab.ID); err != nil {
+		t.Fatalf("Close default tab: %v", err)
+	}
+	if b.Tabs.Active() != nil {
+		t.Error("expected Active() == nil after closing default tab")
+	}
+	if n := countPageTargets(); n != 0 {
+		t.Errorf("Chrome page targets after closing managed default tab = %d, want 0", n)
+	}
+	if _, err := b.Tabs.NewTab(context.Background()); err != nil {
+		t.Fatalf("NewTab after closing default tab failed: %v", err)
 	}
 }
 

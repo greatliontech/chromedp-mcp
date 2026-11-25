@@ -111,11 +111,13 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
-	// Force-start the browser by running a no-op. chromedp creates the
-	// browser process lazily on the first Do call.
-	if _, err := runBrowserStartup(startupCtx, allocCancel, browserCancel, func() (struct{}, error) {
-		return struct{}{}, chromedp.Do(browserCtx)
-	}); err != nil {
+	// Start Chrome at the browser CDP level via chromedp.Targets (NOT
+	// chromedp.Do) so browserCtx does not bind Chrome's initial default tab as
+	// an untracked target; instead we discover it and register it in b.Tabs.
+	targets, err := runBrowserStartup(startupCtx, allocCancel, browserCancel, func() ([]*target.Info, error) {
+		return waitForInitialPageTargets(browserCtx, initialTargetWaitTimeout)
+	})
+	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 
@@ -124,6 +126,19 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 		browserCancel()
 		allocCancel()
 		return nil, fmt.Errorf("launch browser: %w", err)
+	}
+
+	if err := adoptPageTargets(startupCtx, b, targets); err != nil {
+		b.Close()
+		return nil, fmt.Errorf("launch browser: %w", err)
+	}
+	// Guarantee a launched browser starts with at least one active tab even if
+	// Chrome started with zero attachable page targets.
+	if b.Tabs.Active() == nil {
+		if _, err := b.Tabs.NewTab(startupCtx); err != nil {
+			b.Close()
+			return nil, fmt.Errorf("launch browser: open initial tab: %w", err)
+		}
 	}
 	return b, nil
 }
@@ -184,32 +199,82 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 
 	// Adopt pre-existing page targets (excluding prerender targets) with
 	// WithDetachOnCancel so they are immediately inspectable via tab_list and
-	// preserved on browser_close. Each target gets a bounded attach timeout so
-	// a tab with an open JS dialog, DevTools breakpoint, or wedged renderer
-	// (which blocks chromedp's initial Runtime.evaluate("self") handshake) is
-	// skipped instead of hanging connect.
+	// preserved on browser_close.
+	if err := adoptPageTargets(startupCtx, b, targets); err != nil {
+		b.Close()
+		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
+	}
+	return b, nil
+}
+
+// initialTargetWaitTimeout bounds how long Launch polls Target.getTargets
+// after Chrome finishes starting while waiting for its initial default page
+// target to register (chromedp.Targets notes the initial target may lag
+// briefly behind browser startup).
+const initialTargetWaitTimeout = 1 * time.Second
+
+// adoptTargetTimeout bounds per-target attachment during Launch/Connect so a
+// single wedged or dialog-paused tab does not hang startup.
+const adoptTargetTimeout = 3 * time.Second
+
+func waitForInitialPageTargets(browserCtx context.Context, timeout time.Duration) ([]*target.Info, error) {
+	// First call triggers ExecAllocator.Allocate (spawning Chrome + CDP
+	// handshake); start the target-lag poll deadline only AFTER Chrome is up
+	// so slow cold starts never exhaust the retry window on iteration 1.
+	targets, err := chromedp.Targets(browserCtx)
+	if err != nil {
+		return nil, err
+	}
 	for _, info := range targets {
-		if info == nil || info.Type != "page" || info.Subtype != "" || info.TargetID == "" {
+		if isAttachablePageTarget(info) {
+			return targets, nil
+		}
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-browserCtx.Done():
+			timer.Stop()
+			return nil, browserCtx.Err()
+		}
+		targets, err = chromedp.Targets(browserCtx)
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range targets {
+			if isAttachablePageTarget(info) {
+				return targets, nil
+			}
+		}
+	}
+	return targets, nil
+}
+
+func isAttachablePageTarget(info *target.Info) bool {
+	return info != nil && info.Type == "page" && info.Subtype == "" && info.TargetID != ""
+}
+
+// adoptPageTargets attaches each pre-existing page target (excluding prerender
+// targets) into b.Tabs via AttachTarget (WithDetachOnCancel) under a bounded
+// per-target timeout so a wedged or dialog-paused tab is detached and skipped
+// rather than destroyed or hanging startup. Explicit tab_close closes attached
+// targets via Tab.CloseTarget.
+func adoptPageTargets(startupCtx context.Context, b *Browser, targets []*target.Info) error {
+	for _, info := range targets {
+		if !isAttachablePageTarget(info) {
 			continue
 		}
 		attachCtx, attachCancel := context.WithTimeout(startupCtx, adoptTargetTimeout)
 		_, err := b.Tabs.AttachTarget(attachCtx, info.TargetID)
 		attachCancel()
-		if err != nil {
-			if startupCtx.Err() != nil {
-				b.Close()
-				return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, context.Cause(startupCtx))
-			}
-			// Skip targets that disappeared, refused attachment, or timed out.
+		if err != nil && startupCtx.Err() != nil {
+			return context.Cause(startupCtx)
 		}
 	}
-	return b, nil
+	return nil
 }
-
-// adoptTargetTimeout bounds per-target attachment during Connect so a single
-// wedged or dialog-paused tab in the user's Chrome does not hang browser_connect
-// or exhaust the overall startup context.
-const adoptTargetTimeout = 3 * time.Second
 
 // runBrowserStartup runs fn to allocate/connect browserCtx while bounding
 // startup by startupCtx without tying post-startup lifetime to it.
