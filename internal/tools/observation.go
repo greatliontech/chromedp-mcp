@@ -151,6 +151,18 @@ func openObservation(ctx context.Context, t *tab.Tab, windowMs int) *observation
 	if windowMs <= 0 {
 		return nil
 	}
+	// Fast-path when a JS modal dialog is already open: Runtime.evaluate would
+	// block until evalInContextTimeout expires, so skip snapshotting and
+	// anchoring immediately.
+	if t.Dialog != nil && t.Dialog.Open() {
+		return &observation{
+			tab:          t,
+			windowMs:     windowMs,
+			anchorFailed: true,
+			since:        time.Now(),
+		}
+	}
+
 	contexts, unobserved := t.ExecContexts.Snapshot()
 	o := &observation{
 		tab:              t,
@@ -273,6 +285,9 @@ func (o *observation) close(ctx context.Context) *ObservedActivity {
 // action that in fact did something we simply were not looking at.
 func (o *observation) countMutations(ctx context.Context) (count int, unavailable, partial bool) {
 	if len(o.anchors) == 0 || o.mainCtxID == "" {
+		return 0, true, false
+	}
+	if o.tab.Dialog != nil && o.tab.Dialog.Open() {
 		return 0, true, false
 	}
 

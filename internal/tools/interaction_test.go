@@ -9,6 +9,9 @@ import (
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 func TestClickRightDoubleClickDispatchesRightButton(t *testing.T) {
@@ -199,11 +202,25 @@ func TestClickOpeningAlertDoesNotHang(t *testing.T) {
 	defer handleDialog(t, tabID, map[string]any{"accept": true})
 
 	pre := ClickOutput{PointerEvents: "auto", Visible: true}
+
+	// Fast-path: when Dialog collector knows a dialog is open, finalizeClickState
+	// returns immediately without stalling for the 500ms probe timeout.
 	start := time.Now()
-	got := finalizeClickState(tabObj.Context(), "h1", pre)
+	fast := finalizeClickState(tabObj.Context(), tabObj.Dialog, "h1", pre)
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Errorf("finalizeClickState with open Dialog took %v, want immediate short-circuit", elapsed)
+	}
+	if !fast.Visible || fast.Warning != "" {
+		t.Errorf("finalizeClickState fast-path = %+v, want Visible=true Warning=\"\"", fast)
+	}
+
+	// Defense-in-depth fallback: even if dialog state has not arrived yet (nil),
+	// the 500ms timeout bounds probeClickTarget cleanly.
+	start = time.Now()
+	got := finalizeClickState(tabObj.Context(), nil, "h1", pre)
 	elapsed := time.Since(start)
 	if elapsed < 350*time.Millisecond || elapsed > 2500*time.Millisecond {
-		t.Errorf("finalizeClickState against open alert took %v, want bounded ~500ms fallback", elapsed)
+		t.Errorf("finalizeClickState fallback against open alert took %v, want bounded ~500ms", elapsed)
 	}
 	if !got.Visible || got.Warning != "" {
 		t.Errorf("finalizeClickState fallback = %+v, want Visible=true Warning=\"\"", got)
@@ -695,5 +712,137 @@ func TestHandleDialogPromptTextAndEmptyString(t *testing.T) {
 	})
 	if string(out.Result) != `""` {
 		t.Errorf("empty text prompt result = %s, want %q", out.Result, "")
+	}
+}
+
+func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	waitDialogOpen := func(wantType string) (GetDialogOutput, string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			rawRes := callToolRaw(t, "get_dialog", map[string]any{"tab": tabID})
+			if rawRes.IsError {
+				t.Fatalf("get_dialog returned error: %+v", rawRes.Content)
+			}
+			var rawJSON string
+			for _, c := range rawRes.Content {
+				if tc, ok := c.(*mcp.TextContent); ok {
+					rawJSON = tc.Text
+					break
+				}
+			}
+			var d GetDialogOutput
+			if err := json.Unmarshal([]byte(rawJSON), &d); err != nil {
+				t.Fatalf("unmarshal get_dialog: %v", err)
+			}
+			if d.Open {
+				if d.Dialog == nil {
+					t.Fatalf("get_dialog Open=true with nil Dialog: %s", rawJSON)
+				}
+				if d.Dialog.Type != wantType {
+					t.Fatalf("get_dialog type = %q, want %q", d.Dialog.Type, wantType)
+				}
+				return d, rawJSON
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %q dialog to appear in get_dialog", wantType)
+		return GetDialogOutput{}, ""
+	}
+
+	// Initially no dialog is open.
+	initState := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID})
+	if initState.Open || initState.Dialog != nil {
+		t.Fatalf("expected Open=false Dialog=nil initially, got %+v", initState)
+	}
+
+	// 1. Alert dialog with empty message verifies both message:"" and
+	// has_browser_handler:false are preserved in serialized JSON (not dropped
+	// by omitempty), and immediate post-handle_dialog get_dialog sees open=false
+	// without polling.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { alert(''); }, 20); true`,
+	})
+	d, rawJSON := waitDialogOpen("alert")
+	if d.Dialog.Message != "" || !strings.HasSuffix(d.Dialog.URL, "/page2.html") || d.Dialog.OpenedAt.IsZero() {
+		t.Errorf("unexpected alert dialog state: %+v", d.Dialog)
+	}
+	if !strings.Contains(rawJSON, `"message":""`) {
+		t.Errorf("get_dialog JSON omitted empty message: %s", rawJSON)
+	}
+	if !strings.Contains(rawJSON, `"has_browser_handler":`) {
+		t.Errorf("get_dialog JSON omitted has_browser_handler: %s", rawJSON)
+	}
+	// Verify false has_browser_handler and empty message are never dropped by omitempty.
+	falseOut, err := json.Marshal(GetDialogOutput{
+		Open: true,
+		Dialog: &collector.DialogState{
+			Type:              "alert",
+			Message:           "",
+			HasBrowserHandler: false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal GetDialogOutput: %v", err)
+	}
+	if !strings.Contains(string(falseOut), `"has_browser_handler":false`) || !strings.Contains(string(falseOut), `"message":""`) {
+		t.Errorf("GetDialogOutput JSON omitted false/empty fields: %s", falseOut)
+	}
+	callTool[struct{}](t, "handle_dialog", map[string]any{"tab": tabID, "accept": true})
+	// ClearIfSeq guarantees immediate follow-up get_dialog reports closed.
+	if after := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}); after.Open {
+		t.Fatalf("get_dialog immediately after handle_dialog still reported open: %+v", after)
+	}
+
+	// 2. Confirm dialog inspection + dismiss.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { window.__confirm = confirm('proceed?'); }, 20); true`,
+	})
+	d, _ = waitDialogOpen("confirm")
+	if d.Dialog.Message != "proceed?" {
+		t.Errorf("confirm message = %q, want %q", d.Dialog.Message, "proceed?")
+	}
+	callTool[struct{}](t, "handle_dialog", map[string]any{"tab": tabID, "accept": false})
+	if after := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}); after.Open {
+		t.Fatalf("get_dialog immediately after confirm dismiss still reported open: %+v", after)
+	}
+	if res := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__confirm`}); string(res.Result) != "false" {
+		t.Errorf("dismissed confirm result = %s, want false", res.Result)
+	}
+
+	// 3. Prompt dialog with omitted text preserves DefaultPrompt.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { window.__promptDef = prompt('Your name?', 'keep-default'); }, 20); true`,
+	})
+	d, _ = waitDialogOpen("prompt")
+	if d.Dialog.Message != "Your name?" || d.Dialog.DefaultPrompt != "keep-default" {
+		t.Errorf("prompt dialog state = %+v, want message='Your name?' default_prompt='keep-default'", d.Dialog)
+	}
+	callTool[struct{}](t, "handle_dialog", map[string]any{"tab": tabID, "accept": true})
+	if after := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}); after.Open {
+		t.Fatalf("get_dialog immediately after prompt accept still reported open: %+v", after)
+	}
+	if res := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptDef`}); string(res.Result) != `"keep-default"` {
+		t.Errorf("omitted text prompt result = %s, want %q", res.Result, "keep-default")
+	}
+
+	// 4. Prompt dialog with explicit empty string submits "".
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { window.__promptBlank = prompt('Your name?', 'keep-default'); }, 20); true`,
+	})
+	waitDialogOpen("prompt")
+	callTool[struct{}](t, "handle_dialog", map[string]any{"tab": tabID, "accept": true, "text": ""})
+	if after := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}); after.Open {
+		t.Fatalf("get_dialog immediately after empty prompt accept still reported open: %+v", after)
+	}
+	if res := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptBlank`}); string(res.Result) != `""` {
+		t.Errorf("explicit empty text prompt result = %s, want %q", res.Result, "")
 	}
 }

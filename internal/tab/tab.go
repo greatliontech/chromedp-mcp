@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/performancetimeline"
@@ -100,6 +101,8 @@ type Tab struct {
 	ID          string
 	ctx         context.Context
 	cancel      context.CancelFunc
+	targetID    target.ID
+	adopted     bool
 	Console     *collector.Console
 	JSErrors    *collector.JSErrors
 	Network     *collector.Network
@@ -109,6 +112,9 @@ type Tab struct {
 	// ExecContexts tracks each frame's main-world JS execution context, so
 	// activity observation can read the per-frame DOM mutation buffers.
 	ExecContexts *collector.ExecContexts
+	// Dialog tracks the active JavaScript modal dialog (alert, confirm,
+	// prompt, beforeunload) on this tab.
+	Dialog *collector.Dialog
 }
 
 // New creates a new tab from a parent browser context. It creates a new
@@ -116,6 +122,21 @@ type Tab struct {
 // startupCtx bounds initialization (e.g. MCP request cancellation) without
 // tying the tab's post-init lifetime to it; nil defaults to context.Background().
 func New(parentCtx, startupCtx context.Context, id string) (*Tab, error) {
+	return newTab(parentCtx, startupCtx, id, "", false)
+}
+
+// Attach attaches to an existing Chrome page target (e.g., an already-open tab
+// in a browser connected via browser_connect) without creating a new target.
+// Adopted tabs use WithDetachOnCancel so disconnecting the browser leaves the
+// user's tab open in Chrome.
+func Attach(parentCtx, startupCtx context.Context, id string, targetID target.ID) (*Tab, error) {
+	if targetID == "" {
+		return nil, fmt.Errorf("tab attach: target ID is required")
+	}
+	return newTab(parentCtx, startupCtx, id, targetID, true)
+}
+
+func newTab(parentCtx, startupCtx context.Context, id string, targetID target.ID, adopted bool) (*Tab, error) {
 	if startupCtx == nil {
 		startupCtx = context.Background()
 	}
@@ -124,6 +145,8 @@ func New(parentCtx, startupCtx context.Context, id string) (*Tab, error) {
 	}
 	t := &Tab{
 		ID:       id,
+		targetID: targetID,
+		adopted:  adopted,
 		Console:  collector.NewConsole(DefaultConsoleBuffer),
 		JSErrors: collector.NewJSErrors(DefaultErrorBuffer),
 		Network:  collector.NewNetwork(DefaultNetworkBuffer),
@@ -135,76 +158,98 @@ func New(parentCtx, startupCtx context.Context, id string) (*Tab, error) {
 		URLChanges:   collector.NewURLChanges(DefaultURLChangesBuffer),
 		Performance:  collector.NewPerformance(DefaultPerformanceBuffer, 50),
 		ExecContexts: collector.NewExecContexts(),
+		Dialog:       collector.NewDialog(),
 	}
 
 	// Register CDP event listeners via WithListener so they are attached
 	// before the target processes its first message (catching initial
 	// Runtime.executionContextCreated events too). Listeners run synchronously
 	// in chromedp's event dispatcher and must not block.
-	ctx, cancel := chromedp.NewContext(parentCtx, chromedp.WithListener(func(ev any) {
-		switch ev := ev.(type) {
-		case *runtime.EventConsoleAPICalled:
-			t.Console.Handle(ev)
-		case *runtime.EventExceptionThrown:
-			t.JSErrors.Handle(ev)
-		case *network.EventRequestWillBeSent:
-			t.Network.HandleRequestWillBeSent(ev)
-		case *network.EventResponseReceived:
-			t.Network.HandleResponseReceived(ev)
-		case *network.EventLoadingFinished:
-			t.Network.HandleLoadingFinished(ev)
-		case *network.EventLoadingFailed:
-			t.Network.HandleLoadingFailed(ev)
-		case *network.EventWebSocketCreated:
-			t.WebSocket.HandleCreated(ev)
-		case *network.EventWebSocketWillSendHandshakeRequest:
-			t.WebSocket.HandleHandshakeRequest(ev)
-		case *network.EventWebSocketHandshakeResponseReceived:
-			t.WebSocket.HandleHandshakeResponse(ev)
-		case *network.EventWebSocketFrameSent:
-			t.WebSocket.HandleFrameSent(ev)
-		case *network.EventWebSocketFrameReceived:
-			t.WebSocket.HandleFrameReceived(ev)
-		case *network.EventWebSocketFrameError:
-			t.WebSocket.HandleFrameError(ev)
-		case *network.EventWebSocketClosed:
-			t.WebSocket.HandleClosed(ev)
-		case *page.EventFrameNavigated:
-			t.URLChanges.HandleFrameNavigated(ev)
-			t.ExecContexts.HandleFrameNavigated(ev)
-		case *page.EventFrameAttached:
-			t.ExecContexts.HandleFrameAttached(ev)
-		case *page.EventFrameDetached:
-			t.ExecContexts.HandleFrameDetached(ev)
-		case *page.EventNavigatedWithinDocument:
-			t.URLChanges.HandleNavigatedWithinDocument(ev)
-		case *runtime.EventExecutionContextCreated:
-			t.ExecContexts.HandleExecutionContextCreated(ev)
-		case *runtime.EventExecutionContextDestroyed:
-			t.ExecContexts.HandleExecutionContextDestroyed(ev)
-		case *runtime.EventExecutionContextsCleared:
-			t.ExecContexts.HandleExecutionContextsCleared()
-		case *performancetimeline.EventTimelineEventAdded:
-			t.Performance.HandleTimelineEvent(ev)
-		}
-	}))
+	ctxOpts := []chromedp.ContextOption{
+		chromedp.WithListener(func(ev any) {
+			switch ev := ev.(type) {
+			case *runtime.EventConsoleAPICalled:
+				t.Console.Handle(ev)
+			case *runtime.EventExceptionThrown:
+				t.JSErrors.Handle(ev)
+			case *network.EventRequestWillBeSent:
+				t.Network.HandleRequestWillBeSent(ev)
+			case *network.EventResponseReceived:
+				t.Network.HandleResponseReceived(ev)
+			case *network.EventLoadingFinished:
+				t.Network.HandleLoadingFinished(ev)
+			case *network.EventLoadingFailed:
+				t.Network.HandleLoadingFailed(ev)
+			case *network.EventWebSocketCreated:
+				t.WebSocket.HandleCreated(ev)
+			case *network.EventWebSocketWillSendHandshakeRequest:
+				t.WebSocket.HandleHandshakeRequest(ev)
+			case *network.EventWebSocketHandshakeResponseReceived:
+				t.WebSocket.HandleHandshakeResponse(ev)
+			case *network.EventWebSocketFrameSent:
+				t.WebSocket.HandleFrameSent(ev)
+			case *network.EventWebSocketFrameReceived:
+				t.WebSocket.HandleFrameReceived(ev)
+			case *network.EventWebSocketFrameError:
+				t.WebSocket.HandleFrameError(ev)
+			case *network.EventWebSocketClosed:
+				t.WebSocket.HandleClosed(ev)
+			case *page.EventFrameNavigated:
+				t.URLChanges.HandleFrameNavigated(ev)
+				t.ExecContexts.HandleFrameNavigated(ev)
+				t.Dialog.HandleFrameNavigated(ev)
+			case *page.EventFrameAttached:
+				t.ExecContexts.HandleFrameAttached(ev)
+			case *page.EventFrameDetached:
+				t.ExecContexts.HandleFrameDetached(ev)
+				t.Dialog.HandleFrameDetached(ev)
+			case *page.EventNavigatedWithinDocument:
+				t.URLChanges.HandleNavigatedWithinDocument(ev)
+			case *page.EventJavascriptDialogOpening:
+				t.Dialog.HandleOpening(ev)
+			case *page.EventJavascriptDialogClosed:
+				t.Dialog.HandleClosed(ev)
+			case *inspector.EventTargetCrashed:
+				t.Dialog.Clear()
+			case *runtime.EventExecutionContextCreated:
+				t.ExecContexts.HandleExecutionContextCreated(ev)
+			case *runtime.EventExecutionContextDestroyed:
+				t.ExecContexts.HandleExecutionContextDestroyed(ev)
+			case *runtime.EventExecutionContextsCleared:
+				t.ExecContexts.HandleExecutionContextsCleared()
+			case *performancetimeline.EventTimelineEventAdded:
+				t.Performance.HandleTimelineEvent(ev)
+			}
+		}),
+	}
+	if targetID != "" {
+		ctxOpts = append(ctxOpts, chromedp.WithTargetID(targetID))
+	}
+	if adopted {
+		ctxOpts = append(ctxOpts, chromedp.WithDetachOnCancel())
+	}
+
+	ctx, cancel := chromedp.NewContext(parentCtx, ctxOpts...)
 	t.ctx = ctx
 	t.cancel = cancel
 
 	// Initialize the tab: enable performance timeline and configure Network
 	// and DOM mutation observation. We need to run a chromedp action to
-	// trigger the target allocation (chromedp creates the target lazily on
-	// the first Do call). chromedp already enables Page and Runtime domains
-	// on target attach.
+	// trigger the target allocation/attach (chromedp attaches lazily on the
+	// first Do call). chromedp already enables Page and Runtime domains on
+	// target attach.
 	cancelOnce := sync.OnceFunc(cancel)
 	stopStartup := context.AfterFunc(startupCtx, cancelOnce)
 	err := chromedp.Do(ctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+		if t.targetID == "" {
+			t.targetID = tgt.TargetID
+		}
 		if _, err := cdp.Call(ctx, tgt, performancetimeline.Enable, performancetimeline.EnableParams{
 			EventTypes: []string{
 				"largest-contentful-paint",
 				"layout-shift",
 			},
-		}); err != nil {
+		}); err != nil && !adopted {
 			return err
 		}
 		// Re-enable Network with MaxPostDataSize so requestWillBeSent
@@ -224,13 +269,15 @@ func New(parentCtx, startupCtx context.Context, id string) (*Tab, error) {
 		}); err != nil {
 			return err
 		}
-		// Also evaluate on the current document so observation works
-		// on tabs that already have a document loaded — e.g.,
-		// browser_connect attaches to a Chrome that already has tabs
-		// open. The script's `if (window.__mcpMutationObserverInstalled)
-		// return;` guard makes the eval a no-op when the script also
-		// runs via addScriptToEvaluateOnNewDocument on a fresh document.
-		if _, err := chromedp.Evaluate[chromedp.Void](domMutationObserverScript)(ctx, tgt); err != nil {
+		// Also evaluate on the current document so observation works on tabs
+		// that already have a document loaded (e.g., adopted browser_connect
+		// tabs). On adopted tabs, bound and make this best-effort so a tab on
+		// a restricted URL (e.g. chrome://) where evaluation fails still attaches.
+		if adopted {
+			evalCtx, evalCancel := context.WithTimeout(ctx, time.Second)
+			_, _ = chromedp.Evaluate[chromedp.Void](domMutationObserverScript)(evalCtx, tgt)
+			evalCancel()
+		} else if _, err := chromedp.Evaluate[chromedp.Void](domMutationObserverScript)(ctx, tgt); err != nil {
 			return err
 		}
 		// Seed the frame and URL registries so the main frame and initial URL
@@ -280,10 +327,57 @@ func (t *Tab) Context() context.Context {
 	return t.ctx
 }
 
-// Close closes the tab by cancelling its context, which closes the
-// underlying Chrome target.
+// Close cancels the tab's context. For server-created tabs this closes the
+// Chrome target; for adopted tabs (WithDetachOnCancel) it detaches and leaves
+// the user's tab open in Chrome.
 func (t *Tab) Close() {
 	t.cancel()
+}
+
+// closeTargetWaitTimeout bounds the post-CloseTarget poll waiting for Chrome
+// to drop an explicitly closed adopted target (matching chromedp's own wait
+// for server-created targets).
+const closeTargetWaitTimeout = 500 * time.Millisecond
+
+// CloseTarget explicitly closes the underlying Chrome target, including for
+// adopted tabs where Close() alone only detaches. Used by explicit tab_close.
+func (t *Tab) CloseTarget(browserCtx context.Context) {
+	t.cancel()
+	if !t.adopted || t.targetID == "" || browserCtx == nil || browserCtx.Err() != nil {
+		return
+	}
+	closeCtx, cancel := context.WithTimeout(browserCtx, 2*time.Second)
+	defer cancel()
+	if _, err := chromedp.CallBrowser(closeCtx, target.CloseTarget, target.CloseTargetParams{
+		TargetID: t.targetID,
+	}); err != nil {
+		return
+	}
+	waitCtx, waitCancel := context.WithTimeout(closeCtx, closeTargetWaitTimeout)
+	defer waitCancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		targets, err := chromedp.Targets(waitCtx)
+		if err != nil {
+			return
+		}
+		found := false
+		for _, info := range targets {
+			if info != nil && info.TargetID == t.targetID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-waitCtx.Done():
+			return
+		}
+	}
 }
 
 // Info returns the tab's current URL and title via CDP Target.getTargetInfo.

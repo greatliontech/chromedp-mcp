@@ -16,6 +16,7 @@ import (
 	"time"
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/remote"
 
@@ -112,7 +113,9 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 
 	// Force-start the browser by running a no-op. chromedp creates the
 	// browser process lazily on the first Do call.
-	if err := startBrowserContext(startupCtx, allocCancel, browserCtx, browserCancel); err != nil {
+	if _, err := runBrowserStartup(startupCtx, allocCancel, browserCancel, func() (struct{}, error) {
+		return struct{}{}, chromedp.Do(browserCtx)
+	}); err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 
@@ -147,8 +150,8 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 
 	allocCtx, rawAllocCancel := remote.NewAllocator(parentCtx, wsURL, remote.NoModifyURL)
 	// remote.NewAllocator's cancel does not call Allocator.Wait (unlike
-	// NewExecAllocator). Only call Wait AFTER startBrowserContext returns (and
-	// in Close) — never inside startBrowserContext's AfterFunc, which would race
+	// NewExecAllocator). Only call Wait AFTER runBrowserStartup returns (and
+	// in Close) — never inside runBrowserStartup's AfterFunc, which would race
 	// Allocator.Wait() against remote.Allocator.Allocate()'s wg.Go on early cancel.
 	waitAlloc := func() {
 		if c := chromedp.FromContext(allocCtx); c != nil && c.Allocator != nil {
@@ -157,8 +160,13 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 	}
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
-	// Force the connection.
-	if err := startBrowserContext(startupCtx, rawAllocCancel, browserCtx, browserCancel); err != nil {
+	// Connect at the browser CDP level via chromedp.Targets (NOT chromedp.Do)
+	// so connecting never spawns an untracked blank tab in the user's Chrome,
+	// while discovering all pre-existing page targets in the same round trip.
+	targets, err := runBrowserStartup(startupCtx, rawAllocCancel, browserCancel, func() ([]*target.Info, error) {
+		return chromedp.Targets(browserCtx)
+	})
+	if err != nil {
 		waitAlloc()
 		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
 	}
@@ -173,37 +181,65 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 		allocCancel()
 		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
 	}
+
+	// Adopt pre-existing page targets (excluding prerender targets) with
+	// WithDetachOnCancel so they are immediately inspectable via tab_list and
+	// preserved on browser_close. Each target gets a bounded attach timeout so
+	// a tab with an open JS dialog, DevTools breakpoint, or wedged renderer
+	// (which blocks chromedp's initial Runtime.evaluate("self") handshake) is
+	// skipped instead of hanging connect.
+	for _, info := range targets {
+		if info == nil || info.Type != "page" || info.Subtype != "" || info.TargetID == "" {
+			continue
+		}
+		attachCtx, attachCancel := context.WithTimeout(startupCtx, adoptTargetTimeout)
+		_, err := b.Tabs.AttachTarget(attachCtx, info.TargetID)
+		attachCancel()
+		if err != nil {
+			if startupCtx.Err() != nil {
+				b.Close()
+				return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, context.Cause(startupCtx))
+			}
+			// Skip targets that disappeared, refused attachment, or timed out.
+		}
+	}
 	return b, nil
 }
 
-// startBrowserContext forces chromedp to allocate/connect browserCtx while
-// bounding startup by startupCtx without tying post-startup lifetime to it.
+// adoptTargetTimeout bounds per-target attachment during Connect so a single
+// wedged or dialog-paused tab in the user's Chrome does not hang browser_connect
+// or exhaust the overall startup context.
+const adoptTargetTimeout = 3 * time.Second
+
+// runBrowserStartup runs fn to allocate/connect browserCtx while bounding
+// startup by startupCtx without tying post-startup lifetime to it.
 //
 // chromedp's browserCancel receives from a 1-buffered allocated channel that is
 // only closed after Chrome starts; invoking browserCancel twice on an aborted
 // startup deadlocks. Wrapping cleanup in sync.OnceFunc guarantees at-most-once
 // cancellation and waits for any in-flight AfterFunc callback before returning.
-func startBrowserContext(
+func runBrowserStartup[T any](
 	startupCtx context.Context,
 	allocCancel context.CancelFunc,
-	browserCtx context.Context,
 	browserCancel context.CancelFunc,
-) error {
+	fn func() (T, error),
+) (T, error) {
 	cleanup := sync.OnceFunc(func() {
 		browserCancel()
 		allocCancel()
 	})
 	stopStartup := context.AfterFunc(startupCtx, cleanup)
-	err := chromedp.Do(browserCtx)
+	res, err := fn()
 	stopped := stopStartup()
 	if err != nil || !stopped {
 		cleanup()
 		if err == nil {
 			err = context.Cause(startupCtx)
 		}
-		return err
+		var zero T
+		return zero, err
 	}
-	return nil
+	return res, nil
 }
 
 func newBrowser(

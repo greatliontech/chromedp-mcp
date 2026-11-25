@@ -17,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 // probeClickTarget reads the click-relevant state of an element via JS:
@@ -81,13 +82,18 @@ func clickWarning(state ClickOutput) string {
 }
 
 // finalizeClickState re-probes the target after dispatch under a short bounded
-// timeout (so a click that opens a JS alert/confirm/prompt dialog never hangs
-// the click tool) to surface post-click state changes (e.g. a button that
-// disabled itself in its handler), while preserving the pre-dispatch warning
-// so a button that hides or removes itself on click does not trigger a false
-// positive "element is not visible" warning.
-func finalizeClickState(ctx context.Context, selector string, pre ClickOutput) ClickOutput {
+// timeout (short-circuiting immediately when a JS dialog is already known to
+// be open so clicks opening alerts/confirms/prompts never stall) to surface
+// post-click state changes (e.g. a button that disabled itself in its handler),
+// while preserving the pre-dispatch warning so a button that hides or removes
+// itself on click does not trigger a false positive "element is not visible"
+// warning.
+func finalizeClickState(ctx context.Context, dialog *collector.Dialog, selector string, pre ClickOutput) ClickOutput {
 	warning := clickWarning(pre)
+	if dialog != nil && dialog.Open() {
+		pre.Warning = warning
+		return pre
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	post, found, err := probeClickTarget(probeCtx, selector)
@@ -267,11 +273,22 @@ type UploadFilesInput struct {
 	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the input.files change fires and return counts in 'observed'. Useful when an onchange handler kicks off the actual upload XHR. Default 0. Max 30000."`
 }
 
+// GetDialogInput is the input for get_dialog.
+type GetDialogInput struct {
+	TabInput
+}
+
+// GetDialogOutput is the output for get_dialog.
+type GetDialogOutput struct {
+	Open   bool                   `json:"open"`
+	Dialog *collector.DialogState `json:"dialog,omitempty"`
+}
+
 // HandleDialogInput is the input for handle_dialog.
 type HandleDialogInput struct {
 	TabInput
-	Accept bool   `json:"accept" jsonschema:"Accept or dismiss the dialog"`
-	Text   string `json:"text,omitempty" jsonschema:"Text to enter in a prompt dialog"`
+	Accept bool    `json:"accept" jsonschema:"Accept or dismiss the dialog"`
+	Text   *string `json:"text,omitempty" jsonschema:"Text to enter in a prompt dialog. Omit to keep the prompt's default value; pass empty string to submit empty."`
 }
 
 var (
@@ -420,7 +437,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			})); err != nil {
 				return nil, state, err
 			}
-			out := finalizeClickState(tctx, inp.Selector, state)
+			out := finalizeClickState(tctx, t.Dialog, inp.Selector, state)
 			out.Observed = obs.close(tctx)
 			return nil, out, nil
 		}
@@ -437,7 +454,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			if err := chromedp.Do(dispatchCtx, chromedp.DoubleClick(chromedp.CSS(inp.Selector))); err != nil {
 				return nil, state, selectorError(tctx, inp.Selector, err)
 			}
-			out := finalizeClickState(tctx, inp.Selector, state)
+			out := finalizeClickState(tctx, t.Dialog, inp.Selector, state)
 			out.Observed = obs.close(tctx)
 			return nil, out, nil
 		}
@@ -445,7 +462,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := chromedp.Do(dispatchCtx, chromedp.Click(chromedp.CSS(inp.Selector))); err != nil {
 			return nil, state, selectorError(tctx, inp.Selector, err)
 		}
-		out := finalizeClickState(tctx, inp.Selector, state)
+		out := finalizeClickState(tctx, t.Dialog, inp.Selector, state)
 		out.Observed = obs.close(tctx)
 		return nil, out, nil
 	})
@@ -970,8 +987,27 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_dialog",
+		Description: "Inspect the currently open JavaScript dialog (alert, confirm, prompt, beforeunload) on a tab without blocking on the renderer. Returns open=false when no dialog is active.",
+		Annotations: readOnlyAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp GetDialogInput) (*mcp.CallToolResult, GetDialogOutput, error) {
+		t, err := mgr.ResolveTab("", inp.Tab)
+		if err != nil {
+			return nil, GetDialogOutput{}, err
+		}
+		cur := t.Dialog.Current()
+		if cur == nil {
+			return nil, GetDialogOutput{Open: false}, nil
+		}
+		return nil, GetDialogOutput{
+			Open:   true,
+			Dialog: cur,
+		}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "handle_dialog",
-		Description: "Handle a JavaScript dialog (alert, confirm, prompt, beforeunload).",
+		Description: "Handle a JavaScript dialog (alert, confirm, prompt, beforeunload). For prompt dialogs, omit text to submit the prompt's default value or pass an explicit empty string to submit empty.",
 		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp HandleDialogInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", inp.Tab)
@@ -979,14 +1015,29 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
+		cur, seq := t.Dialog.Snapshot()
+		var promptText string
+		if inp.Accept {
+			if inp.Text != nil {
+				promptText = *inp.Text
+			} else if cur != nil && cur.Type == "prompt" {
+				promptText = cur.DefaultPrompt
+			}
+		}
+
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		if _, err := chromedp.Call(tctx, page.HandleJavaScriptDialog, page.HandleJavaScriptDialogParams{
 			Accept:     inp.Accept,
-			PromptText: inp.Text,
+			PromptText: promptText,
 		}); err != nil {
 			return nil, struct{}{}, err
 		}
+		// Clear the tracked dialog generation synchronously so immediate
+		// follow-up calls (get_dialog, click observe_window_ms) never race the
+		// async Page.javascriptDialogClosed event, while preserving any chained
+		// next dialog whose HandleOpening already advanced seq.
+		t.Dialog.ClearIfSeq(seq)
 		return nil, struct{}{}, nil
 	})
 }

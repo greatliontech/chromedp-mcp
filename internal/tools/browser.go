@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 	"github.com/greatliontech/chromedp-mcp/internal/profile"
+	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
 // BrowserLaunchInput is the input for browser_launch.
@@ -31,7 +33,13 @@ type BrowserConnectInput struct {
 
 // BrowserConnectOutput is the output for browser_connect.
 type BrowserConnectOutput struct {
-	BrowserID string `json:"browser_id"`
+	BrowserID string        `json:"browser_id"`
+	Tabs      []tab.TabInfo `json:"tabs"`
+}
+
+// BrowserActivateInput is the input for browser_activate.
+type BrowserActivateInput struct {
+	Browser string `json:"browser" jsonschema:"Browser ID to set as the active browser"`
 }
 
 // BrowserCloseInput is the input for browser_close.
@@ -95,7 +103,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_connect",
-		Description: "Connect to an already-running Chrome instance via its remote debugging URL.",
+		Description: "Connect to an already-running Chrome instance via its remote debugging URL. Automatically adopts existing open tabs (leaving them open on disconnect) without creating a blank tab.",
 		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserConnectInput) (*mcp.CallToolResult, BrowserConnectOutput, error) {
 		urlStr := strings.TrimSpace(input.URL)
@@ -108,7 +116,30 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		if err != nil {
 			return nil, BrowserConnectOutput{}, err
 		}
-		return nil, BrowserConnectOutput{BrowserID: b.ID}, nil
+		// Once Connect succeeds and registers the browser, fetch its adopted
+		// tab metadata under a short detached deadline so a late caller cancel
+		// does not silently mask adopted tabs as an empty list.
+		listCtx, listCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		tabs, err := b.Tabs.List(listCtx)
+		listCancel()
+		if err != nil {
+			tabs = []tab.TabInfo{}
+		}
+		return nil, BrowserConnectOutput{BrowserID: b.ID, Tabs: tabs}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "browser_activate",
+		Description: "Set a managed browser as the active browser by ID.",
+		Annotations: idempotentWriteAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserActivateInput) (*mcp.CallToolResult, struct{}, error) {
+		if input.Browser == "" {
+			return nil, struct{}{}, fmt.Errorf("browser ID is required")
+		}
+		if err := mgr.Activate(input.Browser); err != nil {
+			return nil, struct{}{}, err
+		}
+		return nil, struct{}{}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

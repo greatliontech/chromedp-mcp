@@ -2,8 +2,12 @@ package tab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/id"
 )
@@ -51,6 +55,56 @@ func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
 		t.Close()
 		return nil, fmt.Errorf("tab manager is closed")
 	}
+	m.registerTabLocked(t)
+	m.mu.Unlock()
+	return t, nil
+}
+
+// AttachTarget attaches to an existing Chrome target (preserving it on
+// browser disconnect) and registers it as the active tab. If the target is
+// already tracked, returns the existing Tab.
+func (m *Manager) AttachTarget(ctx context.Context, targetID target.ID) (*Tab, error) {
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return nil, fmt.Errorf("tab manager is closed")
+	}
+	for _, existing := range m.tabs {
+		if existing.targetID == targetID {
+			m.mu.RUnlock()
+			return existing, nil
+		}
+	}
+	m.mu.RUnlock()
+
+	t, err := Attach(m.parentCtx, ctx, "", targetID)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		t.Close()
+		return nil, fmt.Errorf("tab manager is closed")
+	}
+	for _, existing := range m.tabs {
+		if existing.targetID == targetID {
+			m.mu.Unlock()
+			t.Close()
+			return existing, nil
+		}
+	}
+	m.registerTabLocked(t)
+	m.mu.Unlock()
+	return t, nil
+}
+
+// registerTabLocked assigns a unique tab ID, inserts t at the MRU tail, and
+// watches for external target detachment (e.g. user closing an adopted tab in
+// Chrome or page calling window.close()) so dead tabs are pruned automatically.
+// Must be called with m.mu held for writing.
+func (m *Manager) registerTabLocked(t *Tab) {
 	var newID string
 	for {
 		newID = id.Generate()
@@ -61,8 +115,30 @@ func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
 	t.ID = newID
 	m.tabs[newID] = t
 	m.order = append(m.order, newID)
+
+	if detachedCh, err := chromedp.Detached(t.ctx); err == nil {
+		go func() {
+			select {
+			case <-detachedCh:
+				m.pruneDetached(newID, t)
+			case <-t.ctx.Done():
+			}
+		}()
+	}
+}
+
+// pruneDetached removes an externally detached tab from the manager and
+// cancels its context so dead targets never linger as ghost active tabs.
+func (m *Manager) pruneDetached(id string, t *Tab) {
+	m.mu.Lock()
+	if m.tabs[id] != t {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.tabs, id)
+	m.removeFromOrder(id)
 	m.mu.Unlock()
-	return t, nil
+	t.Close()
 }
 
 // Get returns a tab by ID. Returns an error wrapping ErrNotFound if not found.
@@ -100,6 +176,8 @@ func (m *Manager) Activate(id string) error {
 
 // Close closes a tab by ID and removes it from the manager. If the closed
 // tab was the active tab, the most recently used remaining tab becomes active.
+// For adopted tabs this also explicitly closes the Chrome target (unlike
+// CloseAll, which detaches adopted tabs on browser disconnect).
 func (m *Manager) Close(id string) error {
 	m.mu.Lock()
 	t, ok := m.tabs[id]
@@ -111,7 +189,7 @@ func (m *Manager) Close(id string) error {
 	m.removeFromOrder(id)
 	m.mu.Unlock()
 
-	t.Close()
+	t.CloseTarget(m.parentCtx)
 	return nil
 }
 
@@ -137,20 +215,34 @@ func (m *Manager) List(ctx context.Context) ([]TabInfo, error) {
 	m.mu.RUnlock()
 
 	infos := make([]TabInfo, 0, len(tabs))
+	anyActive := false
 	for _, t := range tabs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		url, title, err := t.Info(ctx)
-		if err != nil && ctx.Err() != nil {
-			return nil, ctx.Err()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if errors.Is(err, chromedp.ErrTargetDetached) || t.ctx.Err() != nil {
+				m.pruneDetached(t.ID, t)
+				continue
+			}
+		}
+		isActive := t.ID == activeID
+		if isActive {
+			anyActive = true
 		}
 		infos = append(infos, TabInfo{
 			ID:     t.ID,
 			URL:    url,
 			Title:  title,
-			Active: t.ID == activeID,
+			Active: isActive,
 		})
+	}
+	if !anyActive && len(infos) > 0 {
+		infos[len(infos)-1].Active = true
 	}
 	return infos, nil
 }

@@ -113,8 +113,9 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | Tool                     | Description                                                                         |
 | ------------------------ | ----------------------------------------------------------------------------------- |
 | `browser_launch`         | Launch a new Chrome instance (headless by default), optionally with a user profile  |
-| `browser_connect`        | Connect to a running Chrome via remote debugging URL                                |
-| `browser_close`          | Close a browser (kills process or disconnects)                                      |
+| `browser_connect`        | Connect to a running Chrome via remote debugging URL and adopt its open tabs        |
+| `browser_activate`       | Set a managed browser as the active browser                                         |
+| `browser_close`          | Close a browser (kills process or disconnects, preserving adopted user tabs)        |
 | `browser_list`           | List all managed browsers                                                           |
 | `browser_list_profiles`  | List available user profiles (requires `--allowed-profiles`)                        |
 
@@ -166,7 +167,8 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `focus`         | Focus an element                                    |
 | `press_key`     | Press a keyboard key with optional modifiers        |
 | `upload_files`  | Set files on a file input                           |
-| `handle_dialog` | Accept or dismiss JavaScript dialogs                |
+| `get_dialog`    | Inspect the currently open JavaScript dialog without blocking |
+| `handle_dialog` | Accept or dismiss JavaScript dialogs (preserving prompt defaults when text is omitted) |
 
 ### JavaScript
 

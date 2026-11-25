@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -526,5 +527,128 @@ func TestNewTabConcurrentCloseAll(t *testing.T) {
 
 	if mgr.Len() != 0 {
 		t.Errorf("Len() after concurrent CloseAll = %d, want 0", mgr.Len())
+	}
+}
+
+func TestAttachTargetValidationDedupAndClosed(t *testing.T) {
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	// Empty target ID must fail cleanly.
+	if _, err := mgr.AttachTarget(context.Background(), ""); err == nil {
+		t.Fatal("AttachTarget('') should return an error")
+	}
+
+	// Create a raw Chrome target outside mgr and adopt it via AttachTarget.
+	res, err := chromedp.CallBrowser(browserCtx, target.CreateTarget, target.CreateTargetParams{
+		URL: "about:blank",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	targetID := res.TargetID
+	defer func() {
+		_, _ = chromedp.CallBrowser(browserCtx, target.CloseTarget, target.CloseTargetParams{TargetID: targetID})
+	}()
+
+	t1, err := mgr.AttachTarget(context.Background(), targetID)
+	if err != nil {
+		t.Fatalf("AttachTarget: %v", err)
+	}
+	if t1.ID == "" || mgr.Len() != 1 {
+		t.Fatalf("after first AttachTarget: id=%q len=%d", t1.ID, mgr.Len())
+	}
+
+	// Second AttachTarget for the same targetID must deduplicate.
+	t2, err := mgr.AttachTarget(context.Background(), targetID)
+	if err != nil {
+		t.Fatalf("second AttachTarget: %v", err)
+	}
+	if t2 != t1 || mgr.Len() != 1 {
+		t.Fatalf("AttachTarget did not deduplicate: t1=%p t2=%p len=%d", t1, t2, mgr.Len())
+	}
+
+	// After CloseAll, AttachTarget must fail rather than register on a closed manager.
+	mgr.CloseAll()
+	if _, err := mgr.AttachTarget(context.Background(), targetID); err == nil {
+		t.Fatal("AttachTarget after CloseAll should return an error")
+	}
+	if mgr.Len() != 0 {
+		t.Errorf("Len() after CloseAll + AttachTarget = %d, want 0", mgr.Len())
+	}
+}
+
+func TestExternallyClosedTabIsPrunedAutomatically(t *testing.T) {
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	t1, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab t1: %v", err)
+	}
+	t2, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab t2: %v", err)
+	}
+	if active := mgr.Active(); active == nil || active.ID != t2.ID {
+		t.Fatalf("expected t2 active before external close, got %v", active)
+	}
+
+	// Simulate user closing t2 directly in Chrome (bypassing mgr.Close).
+	if _, err := chromedp.CallBrowser(browserCtx, target.CloseTarget, target.CloseTargetParams{
+		TargetID: t2.targetID,
+	}); err != nil {
+		t.Fatalf("external CloseTarget: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if mgr.Len() == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if mgr.Len() != 1 {
+		t.Fatalf("externally closed tab was not pruned: Len()=%d, want 1", mgr.Len())
+	}
+	active := mgr.Active()
+	if active == nil || active.ID != t1.ID {
+		t.Fatalf("Active() after external close = %v, want %q", active, t1.ID)
+	}
+	infos, err := mgr.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != t1.ID || !infos[0].Active {
+		t.Errorf("List() after external close = %+v, want only active %q", infos, t1.ID)
+	}
+}
+
+func TestListSkipsCancelledTabContext(t *testing.T) {
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	t1, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab t1: %v", err)
+	}
+	t2, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab t2: %v", err)
+	}
+
+	// Cancel t2's context directly (simulating a race where t2 is closed/pruned
+	// after List snapshots tabs but before t2.Info runs).
+	t2.Close()
+
+	infos, err := mgr.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != t1.ID || !infos[0].Active {
+		t.Errorf("List() with cancelled active tab = %+v, want only active %q", infos, t1.ID)
+	}
+	if mgr.Len() != 1 {
+		t.Errorf("Len() after List pruned cancelled tab = %d, want 1", mgr.Len())
 	}
 }

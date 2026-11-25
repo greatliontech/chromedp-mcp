@@ -60,15 +60,23 @@ Returns: array of `{name, dir}` objects where `name` is the display name and `di
 
 #### `browser_connect`
 
-Connect to an already-running Chrome instance via its remote debugging URL.
+Connect to an already-running Chrome instance via its remote debugging URL. Connects at the browser CDP level without creating a blank tab, and automatically adopts all existing open `"page"` targets (skipping prerender targets, and skipping wedged or dialog-paused targets that time out during attach rather than blocking connection).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `url` | string | yes | Chrome remote debugging URL (`ws://` or `http://`) |
 
-Returns: browser ID.
+Returns: `{browser_id, tabs}` where `tabs` lists the adopted open tabs (`{id, url, title, active}`).
 
-The server does not own the browser lifecycle in this mode. Disconnecting does not kill Chrome.
+The server does not own the browser lifecycle in this mode. Disconnecting via `browser_close` detaches from adopted user tabs (leaving them open in Chrome) and closes only tabs created by this server, without killing Chrome. Explicit `tab_close` closes the underlying Chrome target even for adopted tabs. Tabs closed externally in Chrome are automatically pruned from the tab manager.
+
+#### `browser_activate`
+
+Set a managed browser as the active browser by ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `browser` | string | yes | Browser ID to set as active |
 
 #### `browser_close`
 
@@ -149,6 +157,7 @@ The server registers CDP event listeners per tab that buffer events. These start
 | **JS Errors** | `runtime.EventExceptionThrown` | Ring buffer (default 500 entries) |
 | **Network** | `network.EventRequestWillBeSent`, `network.EventResponseReceived`, `network.EventLoadingFinished`, `network.EventLoadingFailed` | Ring buffer of request/response pairs (default 1000 entries). Response bodies captured lazily on demand. |
 | **Performance Timeline** | `performancetimeline.EventTimelineEventAdded` | Ring buffer, captures LCP and layout shift entries |
+| **Dialog** | `page.EventJavascriptDialogOpening`, `page.EventJavascriptDialogClosed` (plus crash/navigation/frame-detach clearing) | Tracks the single active JS modal dialog per tab without blocking on the renderer |
 
 Each collector supports two read modes, selected by the required `mode`
 parameter on the corresponding tool:
@@ -444,7 +453,7 @@ Returns: the evaluation result as JSON, or an error description if the evaluatio
 
 ### Interaction
 
-The nine action tools in this section — `click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files` — accept an optional `observe_window_ms` parameter (`handle_dialog` does not). When it is greater than zero, the tool observes browser activity across the action and returns the counts in an `observed` object on its result. See [Observation](#observation) for the semantics of that object and why observation is inline rather than a standalone tool.
+The nine action tools in this section — `click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files` — accept an optional `observe_window_ms` parameter (`get_dialog` and `handle_dialog` do not). When it is greater than zero, the tool observes browser activity across the action and returns the counts in an `observed` object on its result. See [Observation](#observation) for the semantics of that object and why observation is inline rather than a standalone tool.
 
 #### `click`
 
@@ -576,15 +585,25 @@ Set files on a file input element.
 
 Returns: `{observed}` — present only when `observe_window_ms > 0`.
 
+#### `get_dialog`
+
+Inspect the currently open JavaScript modal dialog (`alert`, `confirm`, `prompt`, `beforeunload`) on a tab without blocking on the renderer.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+
+Returns: `{open, dialog?}`. When `open` is `false`, `dialog` is omitted. When `open` is `true`, `dialog` contains `{type, message, default_prompt?, url?, has_browser_handler, opened_at}`.
+
 #### `handle_dialog`
 
-Handle a JavaScript dialog (alert, confirm, prompt, beforeunload).
+Handle a JavaScript dialog (alert, confirm, prompt, beforeunload). Clears the tracked dialog generation synchronously on success so immediate follow-up `get_dialog` or observation calls do not race the async close event (without clobbering a chained subsequent dialog).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 | `accept` | bool | yes | Accept or dismiss the dialog |
-| `text` | string | no | Text to enter in a prompt dialog |
+| `text` | string | no | Text to enter in a prompt dialog. When accepted, omit `text` to submit the prompt's `default_prompt` value, or pass `""` to submit an empty string. |
 
 ### Cookies
 
@@ -919,7 +938,7 @@ Observation never turns a successful action into an error: the action has alread
 | Flag | Meaning |
 |------|---------|
 | `truncated` | The window was cut short: the tab closed, or the client disconnected, before it elapsed. (A navigation does *not* truncate — it leaves the tab's context live.) The counts are partial, and **a false `has_any_effect` is not evidence the action did nothing**. |
-| `dom_mutations_unavailable` | The mutation count could not be attributed to the action, because the **top-frame** document was replaced during the window (or the page could not be read). `dom_mutations` is 0 and carries no information; use `url_changed` instead. |
+| `dom_mutations_unavailable` | The mutation count could not be attributed to the action, because the **top-frame** document was replaced during the window, a JavaScript modal dialog is open (blocking renderer evaluation; observation short-circuits immediately via the tab's Dialog state), or the page could not be read. `dom_mutations` is 0 and carries no information; use `url_changed` or `get_dialog` instead. |
 | `dom_mutations_partial` | `dom_mutations` is a **lower bound**: some frame's mutations could not be seen — a cross-origin (out-of-process) iframe, a frame created during the window, or a subframe replaced mid-window. The count is honest for the frames we could see. A zero here does **not** mean the DOM did not change. |
 
 All are omitted when false. `dom_mutations_unavailable` exists because the mutation buffer is per-document: when the page navigates, the buffer the window anchored against is gone, and the new document's parser-driven mutations are not the action's doing.
@@ -949,8 +968,9 @@ chromedp-mcp/
       network.go        # Network request/response collector (request lifecycle events)
       performance.go    # Performance timeline collector (LCP, layout shifts)
       execcontext.go    # Per-frame main-world JS execution contexts (for cross-frame DOM mutation counts)
+      dialog.go         # Active JavaScript modal dialog state per tab
     tools/
-      browser.go        # browser_launch, browser_connect, browser_close, browser_list
+      browser.go        # browser_launch, browser_connect, browser_activate, browser_close, browser_list
       profile.go        # browser_list_profiles
       tabs.go           # tab_new, tab_list, tab_activate, tab_close
       navigation.go     # navigate, reload, go_back, go_forward, wait_for
@@ -959,7 +979,7 @@ chromedp-mcp/
       console.go        # get_console_logs, get_js_errors, clear_console
       network.go        # get_network_requests, get_response_body
       js.go             # evaluate (with optional selector)
-      interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, handle_dialog
+      interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, get_dialog, handle_dialog
       cookies.go        # get_cookies, set_cookie, delete_cookies
       storage.go        # get_storage, set_storage, delete_storage, get_storage_keys
       performance.go    # get_performance_metrics, get_layout_shifts, get_coverage
@@ -1046,6 +1066,7 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Tool Category | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
 |---------------|----------------|-------------------|------------------|
 | Browser (`browser_launch`, `browser_connect`) | false | false | false |
+| Browser (`browser_activate`) | false | false | true |
 | Browser (`browser_list`) | true | false | true |
 | Browser (`browser_list_profiles`) | true | false | true |
 | Browser (`browser_close`) | false | true | false |
@@ -1066,7 +1087,8 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Network (peek mode) | true | false | true |
 | Network (`get_response_body`) | true | false | true |
 | JS Execution (`evaluate`) | false | false | false |
-| Interaction (`click`, `type`, etc.) | false | false | false |
+| Interaction (`get_dialog`) | true | false | true |
+| Interaction (`click`, `type`, `handle_dialog`, etc.) | false | false | false |
 | Cookies (`get_cookies`) | true | false | true |
 | Cookies (`set_cookie`) | false | false | true |
 | Cookies (`delete_cookies`) | false | true | false |

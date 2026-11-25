@@ -85,6 +85,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"get_storage_keys":        {true, false, true},
 		"get_performance_metrics": {true, false, true},
 		"get_coverage":            {true, false, true},
+		"get_dialog":              {true, false, true},
 
 		// Peek/drain buffer readers (must NOT claim ReadOnlyHint: true)
 		"get_console_logs":     {false, false, false},
@@ -116,6 +117,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"handle_dialog":   {false, false, false},
 
 		// Idempotent non-destructive writes
+		"browser_activate":              {false, false, true},
 		"tab_activate":                  {false, false, true},
 		"set_viewport":                  {false, false, true},
 		"clear_console":                 {false, false, true},
@@ -515,6 +517,7 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"get_websocket_frames", map[string]any{"mode": "peek", "request_id": ""}, "request_id"},
 		{"get_console_logs", map[string]any{"mode": "peek", "limit": -1}, "limit"},
 		{"click", map[string]any{"selector": ""}, "selector"},
+		{"browser_activate", map[string]any{"browser": ""}, "browser ID"},
 	}
 	for _, tc := range cases {
 		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
