@@ -179,13 +179,17 @@ func openObservation(ctx context.Context, t *tab.Tab, windowMs int) *observation
 		ordered = append(ordered, *main)
 	}
 
-	// Anchor every frame we can reach. A frame whose context dies between
-	// the snapshot and the read is simply not anchored: it contributes
-	// nothing rather than contributing a wrong number.
+	// Anchor every frame we can reach under one shared timeout budget so a
+	// blocked renderer with N same-origin iframes bounds total latency to
+	// evalInContextTimeout instead of N * evalInContextTimeout. A frame whose
+	// context dies between the snapshot and the read is simply not anchored: it
+	// contributes nothing rather than contributing a wrong number.
+	anchorCtx, anchorCancel := context.WithTimeout(ctx, evalInContextTimeout)
+	defer anchorCancel()
 	for _, ec := range ordered {
 		o.framesAtOpen[ec.FrameID] = struct{}{}
 		var now float64
-		if err := evalInContext(ctx, ec.UniqueID, `performance.now()`, &now); err != nil {
+		if err := evalInContext(anchorCtx, ec.UniqueID, `performance.now()`, &now); err != nil {
 			o.anchorFailed = true
 			continue
 		}
@@ -286,8 +290,10 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 		}
 	}
 
-	total := 0
-	for uniqueID, anchor := range o.anchors {
+	readCtx, readCancel := context.WithTimeout(ctx, evalInContextTimeout)
+	defer readCancel()
+
+	readFrame := func(uniqueID string, anchor float64) (int, error) {
 		js := fmt.Sprintf(`(function(){
 			var arr = window.__mcpMutationTimestamps || [];
 			var threshold = %v;
@@ -300,12 +306,30 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 		})()`, anchor)
 
 		var n int
-		if err := evalInContext(ctx, uniqueID, js, &n); err != nil {
-			// Context gone (frame navigated, removed, or the whole target
-			// died), or ctx already cancelled.
-			if uniqueID == o.mainCtxID {
-				return 0, true, false
-			}
+		if err := evalInContext(readCtx, uniqueID, js, &n); err != nil {
+			return 0, err
+		}
+		return n, nil
+	}
+
+	// Read the top frame FIRST so a replaced or dialog-blocked main document
+	// fails fast and returns unavailable without spending budget on subframes.
+	mainAnchor, ok := o.anchors[o.mainCtxID]
+	if !ok {
+		return 0, true, false
+	}
+	mainCount, err := readFrame(o.mainCtxID, mainAnchor)
+	if err != nil {
+		return 0, true, false
+	}
+	total := mainCount
+
+	for uniqueID, anchor := range o.anchors {
+		if uniqueID == o.mainCtxID {
+			continue
+		}
+		n, err := readFrame(uniqueID, anchor)
+		if err != nil {
 			// A subframe we anchored but can no longer read: its mutations
 			// are lost, so say so rather than quietly under-reporting.
 			partial = true
@@ -325,8 +349,15 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 // using the old document's anchor. Pinning the unique ID makes both
 // mistakes unrepresentable — a replaced context is an error, not a wrong
 // answer.
+// evalInContextTimeout bounds each observation-side Runtime.evaluate call so a
+// JS dialog (alert/confirm/prompt) or wedged renderer degrades cleanly to
+// dom_mutations_unavailable/partial instead of hanging the action tool.
+const evalInContextTimeout = 1 * time.Second
+
 func evalInContext(ctx context.Context, uniqueContextID, expr string, dst any) error {
-	res, err := chromedp.Call(ctx, runtime.Evaluate, runtime.EvaluateParams{
+	evalCtx, cancel := context.WithTimeout(ctx, evalInContextTimeout)
+	defer cancel()
+	res, err := chromedp.Call(evalCtx, runtime.Evaluate, runtime.EvaluateParams{
 		Expression:      expr,
 		UniqueContextID: uniqueContextID,
 		ReturnByValue:   new(true),

@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 	"unicode/utf8"
 
@@ -27,12 +29,9 @@ import (
 // semantics chromedp.Click uses via dom.QuerySelector, so the probed node
 // is the same node the dispatch will target unless the DOM mutates
 // between calls.
-//
-// Selector is JSON-quoted via Go's %q (which produces a valid JS string
-// literal too, since JSON ⊂ JS) to avoid string injection.
-func probeClickTarget(ctx context.Context, selector string) (ClickOutput, error) {
+func probeClickTarget(ctx context.Context, selector string) (ClickOutput, bool, error) {
 	js := fmt.Sprintf(`(function() {
-		var el = document.querySelector(%q);
+		var el = document.querySelector(%s);
 		if (!el) return null;
 		var cs = window.getComputedStyle(el);
 		var rect = el.getBoundingClientRect();
@@ -44,7 +43,7 @@ func probeClickTarget(ctx context.Context, selector string) (ClickOutput, error)
 				cs.visibility !== 'hidden' &&
 				rect.width > 0 && rect.height > 0,
 		};
-	})()`, selector)
+	})()`, jsQuote(selector))
 
 	type clickProbe struct {
 		Disabled      bool   `json:"disabled"`
@@ -54,53 +53,61 @@ func probeClickTarget(ctx context.Context, selector string) (ClickOutput, error)
 	}
 	raw, err := chromedp.Run(ctx, chromedp.Evaluate[*clickProbe](js))
 	if err != nil {
-		return ClickOutput{}, fmt.Errorf("probe %q: %w", selector, err)
+		return ClickOutput{}, false, fmt.Errorf("probe %q: %w", selector, err)
 	}
 	if raw == nil {
-		return ClickOutput{}, nil
+		return ClickOutput{}, false, nil
 	}
 	return ClickOutput{
 		Disabled:      raw.Disabled,
 		AriaDisabled:  raw.AriaDisabled,
 		PointerEvents: raw.PointerEvents,
 		Visible:       raw.Visible,
-	}, nil
+	}, true, nil
 }
 
-// annotateClickWarning attaches a Warning string to the output when the
-// click was dispatched but the target's state suggests the event was
-// likely swallowed (CSS pointer-events:none, hidden element). Disabled
-// and aria-disabled are reported as errors before reaching this point.
-func annotateClickWarning(state *ClickOutput) {
+// clickWarning returns a pre-dispatch warning string when the target's state
+// suggests the mouse event was likely swallowed (CSS pointer-events:none or
+// hidden element). Disabled and aria-disabled error before reaching dispatch.
+func clickWarning(state ClickOutput) string {
 	switch {
 	case state.PointerEvents == "none":
-		state.Warning = "element has pointer-events: none; the click was dispatched but the browser will not deliver mouse events to it"
+		return "element has pointer-events: none; the click was dispatched but the browser will not deliver mouse events to it"
 	case !state.Visible:
-		state.Warning = "element is not visible (display:none, visibility:hidden, or zero-size); the click was dispatched but no handler is likely to fire"
+		return "element is not visible (display:none, visibility:hidden, or zero-size); the click was dispatched but no handler is likely to fire"
+	default:
+		return ""
 	}
 }
 
-// finalizeClickState re-probes the target after dispatch so visible /
-// pointer_events / disabled flags reflect the post-click state, then
-// attaches the warning. This avoids false-positive warnings from a
-// pre-click probe taken before layout settled — and surfaces post-click
-// state changes (e.g. a button that disabled itself in its handler).
-// If the re-probe fails, fall back to the pre-click state we already
-// have so the caller still gets useful diagnostics.
+// finalizeClickState re-probes the target after dispatch under a short bounded
+// timeout (so a click that opens a JS alert/confirm/prompt dialog never hangs
+// the click tool) to surface post-click state changes (e.g. a button that
+// disabled itself in its handler), while preserving the pre-dispatch warning
+// so a button that hides or removes itself on click does not trigger a false
+// positive "element is not visible" warning.
 func finalizeClickState(ctx context.Context, selector string, pre ClickOutput) ClickOutput {
-	post, err := probeClickTarget(ctx, selector)
-	if err != nil {
-		annotateClickWarning(&pre)
+	warning := clickWarning(pre)
+	probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	post, found, err := probeClickTarget(probeCtx, selector)
+	if err != nil || !found {
+		pre.Warning = warning
 		return pre
 	}
-	annotateClickWarning(&post)
+	post.Warning = warning
 	return post
 }
 
-// elementCenter returns the viewport-relative center coordinates of an
-// element identified by its chromedp.Node. Uses DOM.getContentQuads which
-// returns viewport-relative quads.
-func elementCenter(ctx context.Context, tgt *chromedp.Target, node *chromedp.Node) (x, y float64, err error) {
+// scrollAndCenter scrolls node into the viewport (when needed) and returns its
+// viewport-relative center coordinates via DOM.getContentQuads.
+func scrollAndCenter(ctx context.Context, tgt *chromedp.Target, node *chromedp.Node) (x, y float64, err error) {
+	// Best-effort scroll into view so elements below/above the fold receive
+	// in-viewport coordinates for Input.dispatchMouseEvent. Ignore scroll errors
+	// (e.g. non-laid-out nodes) and let GetContentQuads report the authoritative error.
+	_, _ = cdp.Call(ctx, tgt, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{
+		BackendNodeID: node.BackendNodeID,
+	})
 	res, err := cdp.Call(ctx, tgt, dom.GetContentQuads, dom.GetContentQuadsParams{
 		BackendNodeID: node.BackendNodeID,
 	})
@@ -132,7 +139,9 @@ func init() {
 	// are UTF-8 encoded strings that may be multi-byte.
 	entries := map[string]string{
 		"Enter": kb.Enter, "Tab": kb.Tab, "Backspace": kb.Backspace,
-		"Delete": kb.Delete, "Escape": kb.Escape,
+		"Delete": kb.Delete, "Escape": kb.Escape, "Space": " ",
+		"Insert": kb.Insert, "Control": kb.Control, "Shift": kb.Shift,
+		"Alt": kb.Alt, "Meta": kb.Meta,
 		"ArrowDown": kb.ArrowDown, "ArrowLeft": kb.ArrowLeft,
 		"ArrowRight": kb.ArrowRight, "ArrowUp": kb.ArrowUp,
 		"Home": kb.Home, "End": kb.End,
@@ -200,7 +209,7 @@ type SelectOptionInput struct {
 	SelectorInput
 	Selector        string  `json:"selector" jsonschema:"CSS selector of the select element"`
 	Value           *string `json:"value,omitempty" jsonschema:"Option value to select"`
-	Label           string  `json:"label,omitempty" jsonschema:"Option visible text to select"`
+	Label           *string `json:"label,omitempty" jsonschema:"Option visible text to select"`
 	Index           *int    `json:"index,omitempty" jsonschema:"Option index to select"`
 	ObserveWindowMs int     `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity for this many ms after the selection change fires and return counts in 'observed'. Useful when select onchange triggers cascading dropdown loads or form-level network requests. Default 0 (no observation). Max 30000."`
 }
@@ -273,6 +282,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ClickOutput{}, err
 		}
+		switch inp.Button {
+		case "", "left", "right", "middle":
+		default:
+			return nil, ClickOutput{}, fmt.Errorf("invalid button %q: must be \"left\", \"right\", or \"middle\"", inp.Button)
+		}
+		if inp.ClickCount < 0 {
+			return nil, ClickOutput{}, fmt.Errorf("click_count must be >= 0, got %d", inp.ClickCount)
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
 			return nil, ClickOutput{}, err
@@ -290,7 +307,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := chromedp.Do(sctx, chromedp.WaitReady(chromedp.CSS(inp.Selector))); err != nil {
 			return nil, ClickOutput{}, selectorError(tctx, inp.Selector, err)
 		}
-		state, err := probeClickTarget(tctx, inp.Selector)
+		state, _, err := probeClickTarget(tctx, inp.Selector)
 		if err != nil {
 			return nil, ClickOutput{}, err
 		}
@@ -303,40 +320,46 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		// Wait for VISIBILITY before opening the window. The probe above
 		// only waited for the node to exist, but every dispatch path below
-		// waits for it to be visible (chromedp.Click and DoubleClick append
-		// NodeVisible; the raw-button path waits NodeVisible explicitly).
-		// Leaving that wait inside the window would attribute everything a
-		// page does while the element is still invisible — a modal fading
-		// in, a poll firing — to a click that has not been dispatched yet.
+		// waits for it to be visible. Leaving that wait inside the window
+		// would attribute everything a page does while the element is still
+		// invisible to a click that has not been dispatched yet.
 		//
 		// This runs after the disabled/aria-disabled checks so those still
-		// produce their crisp errors rather than a visibility timeout, and
-		// it is a no-op for the overwhelmingly common already-visible case.
+		// produce their crisp errors rather than a visibility timeout.
 		if err := chromedp.Do(sctx, chromedp.WaitVisible(chromedp.CSS(inp.Selector))); err != nil {
 			return nil, state, selectorError(tctx, inp.Selector, err)
 		}
-
-		// Open the window BEFORE dispatch so handler effects — sync
-		// handlers, microtasks fired during dispatch — are caught.
-		obs := openObservation(tctx, t, inp.ObserveWindowMs)
-
-		if inp.ClickCount == 2 {
-			if err := chromedp.Do(sctx, chromedp.DoubleClick(chromedp.CSS(inp.Selector))); err != nil {
-				return nil, state, selectorError(tctx, inp.Selector, err)
+		// Refresh pre-dispatch state if the element was not yet visible at the
+		// earlier probe (e.g. layout settled during WaitVisible) so pre-dispatch
+		// warnings and disabled checks reflect settled state.
+		if !state.Visible {
+			if settled, found, perr := probeClickTarget(tctx, inp.Selector); perr == nil && found {
+				state = settled
+				if state.Disabled {
+					return nil, state, fmt.Errorf("element %q is disabled; click was not dispatched", inp.Selector)
+				}
+				if state.AriaDisabled {
+					return nil, state, fmt.Errorf("element %q has aria-disabled=\"true\"; click was not dispatched", inp.Selector)
+				}
 			}
-			out := finalizeClickState(tctx, inp.Selector, state)
-			out.Observed = obs.close(tctx)
-			return nil, out, nil
 		}
 
-		// For non-standard buttons or click counts, use CDP
-		// input.DispatchMouseEvent for proper browser-level mouse events
-		// that trigger :hover/:active pseudo-classes.
-		if inp.Button == "right" || inp.Button == "middle" || inp.ClickCount > 2 {
-			// Wait for visible element.
-			nodes, err := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSS(inp.Selector), chromedp.NodeVisible))
+		isLeft := inp.Button == "" || inp.Button == "left"
+		// Handle non-left buttons and click_count > 2 via CDP DispatchMouseEvent
+		// BEFORE the left double-click fast path so right/middle double-clicks
+		// dispatch the requested button rather than a left double-click.
+		if !isLeft || inp.ClickCount > 2 {
+			// Resolve the target node under a fresh selector timeout BEFORE
+			// opening the observation window so a slow WaitVisible + re-probe
+			// cannot starve node lookup and lookup is not blamed on the click.
+			nodeCtx, ncancel := selectorContext(tctx, inp.Timeout)
+			nodes, err := chromedp.Run(nodeCtx, chromedp.Nodes(chromedp.CSS(inp.Selector), chromedp.NodeVisible))
+			ncancel()
 			if err != nil {
 				return nil, state, selectorError(tctx, inp.Selector, err)
+			}
+			if len(nodes) == 0 {
+				return nil, state, fmt.Errorf("selector %q matched no elements", inp.Selector)
 			}
 
 			var button input.MouseButton
@@ -349,12 +372,13 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				button = input.MouseButtonLeft
 			}
 			clickCount := inp.ClickCount
-			if clickCount <= 0 {
+			if clickCount == 0 {
 				clickCount = 1
 			}
 
+			obs := openObservation(tctx, t, inp.ObserveWindowMs)
 			if err := chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-				cx, cy, err := elementCenter(ctx, tgt, nodes[0])
+				cx, cy, err := scrollAndCenter(ctx, tgt, nodes[0])
 				if err != nil {
 					return err
 				}
@@ -388,7 +412,24 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, out, nil
 		}
 
-		if err := chromedp.Do(sctx, chromedp.Click(chromedp.CSS(inp.Selector))); err != nil {
+		// Open the window BEFORE dispatch so handler effects — sync
+		// handlers, microtasks fired during dispatch — are caught. Give
+		// dispatch a fresh selector timeout so a slow WaitVisible + probes +
+		// openObservation cannot starve it while still bounding missing nodes.
+		obs := openObservation(tctx, t, inp.ObserveWindowMs)
+		dispatchCtx, dcancel := selectorContext(tctx, inp.Timeout)
+		defer dcancel()
+
+		if inp.ClickCount == 2 {
+			if err := chromedp.Do(dispatchCtx, chromedp.DoubleClick(chromedp.CSS(inp.Selector))); err != nil {
+				return nil, state, selectorError(tctx, inp.Selector, err)
+			}
+			out := finalizeClickState(tctx, inp.Selector, state)
+			out.Observed = obs.close(tctx)
+			return nil, out, nil
+		}
+
+		if err := chromedp.Do(dispatchCtx, chromedp.Click(chromedp.CSS(inp.Selector))); err != nil {
 			return nil, state, selectorError(tctx, inp.Selector, err)
 		}
 		out := finalizeClickState(tctx, inp.Selector, state)
@@ -407,6 +448,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
+		if inp.Delay < 0 {
+			return nil, ActionOutput{}, fmt.Errorf("delay must be >= 0, got %d", inp.Delay)
+		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
 			return nil, ActionOutput{}, err
@@ -415,26 +459,31 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 
-		var steps []chromedp.Action[chromedp.Void]
+		var clearAction chromedp.Action[chromedp.Void]
 		if inp.Mode == TypeModeReplace {
-			// Use JS to clear the field value. chromedp.Clear only
-			// resets the HTML attribute, not the JS property, which
-			// means typed text may not actually be removed.
+			// Clear inputs/textareas via the native prototype value setter so
+			// framework controlled inputs (e.g. React) detect the change when
+			// 'input' fires, and clear contenteditable elements via textContent.
 			clearJS := fmt.Sprintf(`(function() {
-				var el = document.querySelector(%q);
-				if (el) { el.value = ''; el.dispatchEvent(new Event('input', {bubbles:true})); }
-			})()`, inp.Selector)
-			steps = append(steps, chromedp.Evaluate[chromedp.Void](clearJS))
-		}
-		if inp.Delay > 0 {
-			// Type character by character with delay.
-			steps = append(steps, chromedp.Focus(chromedp.CSS(inp.Selector)))
-			for _, ch := range inp.Text {
-				steps = append(steps, chromedp.KeyEvent(string(ch)))
-				steps = append(steps, chromedp.Sleep(time.Duration(inp.Delay)*time.Millisecond))
-			}
-		} else {
-			steps = append(steps, chromedp.SendKeys(chromedp.CSS(inp.Selector), inp.Text))
+				var el = document.querySelector(%s);
+				if (!el) return;
+				if (el.isContentEditable) {
+					el.textContent = '';
+					el.dispatchEvent(new Event('input', {bubbles: true}));
+					return;
+				}
+				var proto = el instanceof HTMLTextAreaElement
+					? HTMLTextAreaElement.prototype
+					: (el instanceof HTMLInputElement ? HTMLInputElement.prototype : null);
+				var desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+				if (desc && desc.set) {
+					desc.set.call(el, '');
+				} else {
+					el.value = '';
+				}
+				el.dispatchEvent(new Event('input', {bubbles: true}));
+			})()`, jsQuote(inp.Selector))
+			clearAction = chromedp.Evaluate[chromedp.Void](clearJS)
 		}
 
 		sctx, cancel := selectorContext(tctx, inp.Timeout)
@@ -442,10 +491,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		// Wait for the field BEFORE opening the window, so the wait for a
 		// still-loading page to produce it is not counted as the type's
 		// doing. The pre-wait must match the wait the dispatch performs
-		// internally — stronger would reject elements the tool used to
-		// accept, weaker would leave a wait inside the window. SendKeys
-		// (the delay==0 path) waits NodeVisible; chromedp.Focus (the
-		// delay>0 path) only waits NodeReady.
+		// internally: SendKeys waits NodeVisible; Focus waits NodeReady.
 		var preWait chromedp.Action[chromedp.Void]
 		if inp.Delay > 0 {
 			preWait = chromedp.WaitReady(chromedp.CSS(inp.Selector))
@@ -456,8 +502,40 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
-		if err := chromedp.Do(sctx, steps...); err != nil {
-			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+
+		// Bound selector-bearing actions (clear + Focus / SendKeys) with a
+		// fresh selector timeout so a page handler hiding or removing the
+		// target on clear cannot hang indefinitely on tctx. For delay > 0, run
+		// only the KeyEvent + Sleep loop on tctx so long strings are never
+		// aborted by the selector timeout.
+		dispatchCtx, dcancel := selectorContext(tctx, inp.Timeout)
+		defer dcancel()
+		if clearAction != nil {
+			if err := chromedp.Do(dispatchCtx, clearAction); err != nil {
+				return nil, ActionOutput{}, err
+			}
+		}
+		if inp.Delay > 0 {
+			if err := chromedp.Do(dispatchCtx, chromedp.Focus(chromedp.CSS(inp.Selector))); err != nil {
+				return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+			}
+			var keySteps []chromedp.Action[chromedp.Void]
+			runes := []rune(inp.Text)
+			for i, ch := range runes {
+				keySteps = append(keySteps, chromedp.KeyEvent(string(ch)))
+				if i < len(runes)-1 {
+					keySteps = append(keySteps, chromedp.Sleep(time.Duration(inp.Delay)*time.Millisecond))
+				}
+			}
+			if len(keySteps) > 0 {
+				if err := chromedp.Do(tctx, keySteps...); err != nil {
+					return nil, ActionOutput{}, err
+				}
+			}
+		} else {
+			if err := chromedp.Do(dispatchCtx, chromedp.SendKeys(chromedp.CSS(inp.Selector), inp.Text)); err != nil {
+				return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
+			}
 		}
 		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
@@ -469,24 +547,30 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
-		t, err := mgr.ResolveTab("", inp.Tab)
-		if err != nil {
-			return nil, ActionOutput{}, err
-		}
-
-		// Validate that exactly one selection criterion is provided.
+		// Validate selection criteria BEFORE waiting on the selector so
+		// invalid calls fail immediately.
 		criteria := 0
 		if inp.Value != nil {
 			criteria++
 		}
-		if inp.Label != "" {
+		if inp.Label != nil {
 			criteria++
 		}
 		if inp.Index != nil {
 			criteria++
 		}
+		if criteria == 0 {
+			return nil, ActionOutput{}, fmt.Errorf("exactly one of value, label, or index must be provided")
+		}
 		if criteria > 1 {
 			return nil, ActionOutput{}, fmt.Errorf("exactly one of value, label, or index must be provided, not multiple")
+		}
+		if inp.Index != nil && *inp.Index < 0 {
+			return nil, ActionOutput{}, fmt.Errorf("index out of range: must be >= 0, got %d", *inp.Index)
+		}
+		t, err := mgr.ResolveTab("", inp.Tab)
+		if err != nil {
+			return nil, ActionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -499,43 +583,39 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 
-		// Build a JS snippet to select by the appropriate attribute.
-		// Use option.selected = true instead of el.value = X so that
-		// <select multiple> elements are handled correctly.
-		var js string
-		if inp.Value != nil {
-			js = fmt.Sprintf(`(function() {
-				var sel = document.querySelector(%q);
-				if (!sel) throw new Error('element not found');
+		// Build a single JS snippet to select by value, label, or index.
+		// Verify the matched element is an HTMLSelectElement (handles both HTML
+		// and XHTML documents) and use option.selected = true so <select multiple>
+		// elements are handled correctly.
+		var selectBody string
+		switch {
+		case inp.Value != nil:
+			qVal := jsQuote(*inp.Value)
+			selectBody = fmt.Sprintf(`
 				var found = false;
 				for (var i = 0; i < sel.options.length; i++) {
-					if (sel.options[i].value === %q) { sel.options[i].selected = true; found = true; break; }
+					if (sel.options[i].value === %s) { sel.options[i].selected = true; found = true; break; }
 				}
-				if (!found) throw new Error('no option with value ' + %q);
-				sel.dispatchEvent(new Event('change', {bubbles: true}));
-			})()`, inp.Selector, *inp.Value, *inp.Value)
-		} else if inp.Label != "" {
-			js = fmt.Sprintf(`(function() {
-				var sel = document.querySelector(%q);
-				if (!sel) throw new Error('element not found');
+				if (!found) throw new Error('no option with value ' + %s);`, qVal, qVal)
+		case inp.Label != nil:
+			qLabel := jsQuote(*inp.Label)
+			selectBody = fmt.Sprintf(`
 				var found = false;
 				for (var i = 0; i < sel.options.length; i++) {
-					if (sel.options[i].text === %q) { sel.options[i].selected = true; found = true; break; }
+					if (sel.options[i].text === %s) { sel.options[i].selected = true; found = true; break; }
 				}
-				if (!found) throw new Error('no option with label ' + %q);
-				sel.dispatchEvent(new Event('change', {bubbles: true}));
-			})()`, inp.Selector, inp.Label, inp.Label)
-		} else if inp.Index != nil {
-			js = fmt.Sprintf(`(function() {
-				var sel = document.querySelector(%q);
-				if (!sel) throw new Error('element not found');
+				if (!found) throw new Error('no option with label ' + %s);`, qLabel, qLabel)
+		case inp.Index != nil:
+			selectBody = fmt.Sprintf(`
 				if (%d < 0 || %d >= sel.options.length) throw new Error('index out of range');
-				sel.options[%d].selected = true;
-				sel.dispatchEvent(new Event('change', {bubbles: true}));
-			})()`, inp.Selector, *inp.Index, *inp.Index, *inp.Index)
-		} else {
-			return nil, ActionOutput{}, fmt.Errorf("exactly one of value, label, or index must be provided")
+				sel.options[%d].selected = true;`, *inp.Index, *inp.Index, *inp.Index)
 		}
+		js := fmt.Sprintf(`(function() {
+			var sel = document.querySelector(%s);
+			if (!sel) throw new Error('element not found');
+			if (!(sel instanceof HTMLSelectElement)) throw new Error('element matched by selector is not a <select>');%s
+			sel.dispatchEvent(new Event('change', {bubbles: true}));
+		})()`, jsQuote(inp.Selector), selectBody)
 
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Do(tctx, chromedp.Evaluate[chromedp.Void](js)); err != nil {
@@ -570,12 +650,12 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		// native .submit() method used by chromedp.Submit). This allows
 		// JS submit handlers and e.preventDefault() to work correctly.
 		js := fmt.Sprintf(`(function() {
-			var el = document.querySelector(%q);
+			var el = document.querySelector(%s);
 			if (!el) throw new Error('element not found');
 			var form = el.nodeName === 'FORM' ? el : el.form || el.closest('form');
 			if (!form) throw new Error('no form found for selector');
 			form.requestSubmit();
-		})()`, inp.Selector)
+		})()`, jsQuote(inp.Selector))
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Do(tctx, chromedp.Evaluate[chromedp.Void](js)); err != nil {
 			return nil, ActionOutput{}, err
@@ -610,7 +690,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 				return nil, ScrollOutput{}, selectorError(tctx, inp.Selector, err)
 			}
 			obs = openObservation(tctx, t, inp.ObserveWindowMs)
-			err = chromedp.Do(sctx, chromedp.ScrollIntoView(chromedp.CSS(inp.Selector)))
+			dispatchCtx, dcancel := selectorContext(tctx, inp.Timeout)
+			defer dcancel()
+			err = chromedp.Do(dispatchCtx, chromedp.ScrollIntoView(chromedp.CSS(inp.Selector)))
 			if err != nil {
 				return nil, ScrollOutput{}, selectorError(tctx, inp.Selector, err)
 			}
@@ -667,7 +749,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
 		if err := chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-			cx, cy, err := elementCenter(ctx, tgt, nodes[0])
+			cx, cy, err := scrollAndCenter(ctx, tgt, nodes[0])
 			if err != nil {
 				return err
 			}
@@ -706,7 +788,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
-		if err := chromedp.Do(sctx, chromedp.Focus(chromedp.CSS(inp.Selector))); err != nil {
+		dispatchCtx, dcancel := selectorContext(tctx, inp.Timeout)
+		defer dcancel()
+		if err := chromedp.Do(dispatchCtx, chromedp.Focus(chromedp.CSS(inp.Selector))); err != nil {
 			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
@@ -740,9 +824,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 		}
 
-		// Resolve the key to a rune for kb.Encode. Named keys (Enter, Tab,
-		// ArrowDown, etc.) map to special chromedp runes. Single characters
-		// map directly.
+		// Resolve the key to a rune for chromedp.KeyEvent. Named keys (Enter,
+		// Tab, ArrowDown, etc.) map to special chromedp kb runes. Single
+		// characters map directly.
 		var r rune
 		if mapped, ok := namedKeys[inp.Key]; ok {
 			r = mapped
@@ -757,22 +841,17 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			r = decoded
 		}
 
-		// Use chromedp's kb.Encode to generate the full CDP event sequence
-		// (KeyDown + optional KeyChar + KeyUp) with correct code, virtual
-		// key codes, and text fields.
+		// chromedp.KeyEvent encodes the full CDP KeyDown/KeyChar/KeyUp sequence
+		// and omits KeyChar whenever Ctrl, Alt, or Meta is held so shortcuts
+		// (e.g. Ctrl+A, Meta+A) do not also type a literal character.
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		events := kb.Encode(r)
+		var opts []chromedp.KeyOption
+		if modifiers != 0 {
+			opts = append(opts, chromedp.KeyModifiers(modifiers))
+		}
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
-		if err := chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-			for _, ev := range events {
-				ev.Modifiers |= int64(modifiers)
-				if _, err := cdp.Call(ctx, tgt, input.DispatchKeyEvent, *ev); err != nil {
-					return err
-				}
-			}
-			return nil
-		})); err != nil {
+		if err := chromedp.Do(tctx, chromedp.KeyEvent(string(r), opts...)); err != nil {
 			return nil, ActionOutput{}, err
 		}
 		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
@@ -785,9 +864,29 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
-		t, err := mgr.ResolveTab("", inp.Tab)
+		b, t, err := mgr.ResolveTabWithBrowser("", inp.Tab)
 		if err != nil {
 			return nil, ActionOutput{}, err
+		}
+		for _, p := range inp.Paths {
+			if p == "" {
+				return nil, ActionOutput{}, fmt.Errorf("upload path must not be empty")
+			}
+			// Only validate against the local filesystem when this server
+			// launched Chrome locally; connected browsers may run on a remote
+			// host or container with a different filesystem.
+			if b.Mode == browser.ModeLaunch {
+				if !filepath.IsAbs(p) {
+					return nil, ActionOutput{}, fmt.Errorf("upload path %q must be an absolute path", p)
+				}
+				fi, err := os.Stat(p)
+				if err != nil {
+					return nil, ActionOutput{}, fmt.Errorf("upload path %q: %w", p, err)
+				}
+				if fi.IsDir() {
+					return nil, ActionOutput{}, fmt.Errorf("upload path %q is a directory, not a file", p)
+				}
+			}
 		}
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
@@ -799,7 +898,9 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 		obs := openObservation(tctx, t, inp.ObserveWindowMs)
-		if err := chromedp.Do(sctx, chromedp.SetUploadFiles(chromedp.CSS(inp.Selector), inp.Paths)); err != nil {
+		dispatchCtx, dcancel := selectorContext(tctx, inp.Timeout)
+		defer dcancel()
+		if err := chromedp.Do(dispatchCtx, chromedp.SetUploadFiles(chromedp.CSS(inp.Selector), inp.Paths)); err != nil {
 			return nil, ActionOutput{}, selectorError(tctx, inp.Selector, err)
 		}
 		return nil, ActionOutput{Observed: obs.close(tctx)}, nil

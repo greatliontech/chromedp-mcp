@@ -1,0 +1,699 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
+)
+
+func TestClickRightDoubleClickDispatchesRightButton(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			window.__events = [];
+			var btn = document.createElement('button');
+			btn.id = 'rt-dbl';
+			btn.textContent = 'Right Double';
+			btn.addEventListener('mousedown', function(e) {
+				window.__events.push({button: e.button, detail: e.detail});
+			});
+			btn.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+			document.body.appendChild(btn);
+		})()`,
+	})
+
+	callTool[ClickOutput](t, "click", map[string]any{
+		"tab":         tabID,
+		"selector":    "#rt-dbl",
+		"button":      "right",
+		"click_count": 2,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `window.__events`,
+	})
+	var events []struct {
+		Button int `json:"button"`
+		Detail int `json:"detail"`
+	}
+	if err := json.Unmarshal(out.Result, &events); err != nil {
+		t.Fatalf("unmarshal events: %v (raw: %s)", err, out.Result)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d mousedown events, want 2: %+v", len(events), events)
+	}
+	for i, ev := range events {
+		if ev.Button != 2 {
+			t.Errorf("event[%d].button = %d, want 2 (right button)", i, ev.Button)
+		}
+		if ev.Detail != i+1 {
+			t.Errorf("event[%d].detail = %d, want %d", i, ev.Detail, i+1)
+		}
+	}
+}
+
+func TestClickOffscreenRightButtonScrollsIntoView(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			window.__rightClicked = false;
+			var spacer = document.createElement('div');
+			spacer.style.height = '2500px';
+			document.body.appendChild(spacer);
+			var btn = document.createElement('button');
+			btn.id = 'below-fold-btn';
+			btn.textContent = 'Below Fold';
+			btn.addEventListener('mousedown', function(e) {
+				if (e.button === 2) window.__rightClicked = true;
+			});
+			btn.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+			document.body.appendChild(btn);
+		})()`,
+	})
+
+	callTool[ClickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#below-fold-btn",
+		"button":   "right",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `window.__rightClicked`,
+	})
+	if string(out.Result) != "true" {
+		t.Fatalf("offscreen right click did not reach target: __rightClicked = %s", out.Result)
+	}
+}
+
+func TestClickSelfHidingAndSelfRemovingNoFalseWarning(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			var hideBtn = document.createElement('button');
+			hideBtn.id = 'self-hide';
+			hideBtn.textContent = 'Hide Me';
+			hideBtn.addEventListener('click', function() { hideBtn.style.display = 'none'; });
+			document.body.appendChild(hideBtn);
+
+			var rmBtn = document.createElement('button');
+			rmBtn.id = 'self-remove';
+			rmBtn.textContent = 'Remove Me';
+			rmBtn.addEventListener('click', function() { rmBtn.remove(); });
+			document.body.appendChild(rmBtn);
+		})()`,
+	})
+
+	hideOut := callTool[ClickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#self-hide",
+	})
+	if hideOut.Warning != "" {
+		t.Errorf("self-hiding click produced false-positive warning: %q", hideOut.Warning)
+	}
+	if hideOut.Visible {
+		t.Errorf("expected post-click Visible=false for self-hiding button, got true")
+	}
+
+	rmOut := callTool[ClickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#self-remove",
+	})
+	if rmOut.Warning != "" {
+		t.Errorf("self-removing click produced false-positive warning: %q", rmOut.Warning)
+	}
+}
+
+func TestClickValidationRejectsInvalidButtonAndNegativeCount(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+		"button":   "side",
+	})
+	if !strings.Contains(errText, "invalid button") {
+		t.Errorf("expected invalid button error, got: %s", errText)
+	}
+
+	errText = callToolExpectErr(t, "click", map[string]any{
+		"tab":         tabID,
+		"selector":    "h1",
+		"click_count": -1,
+	})
+	if !strings.Contains(errText, "click_count") {
+		t.Errorf("expected click_count validation error, got: %s", errText)
+	}
+}
+
+func TestClickOpeningAlertDoesNotHang(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	tabObj, err := harness.mgr.ResolveTab("", tabID)
+	if err != nil {
+		t.Fatalf("ResolveTab: %v", err)
+	}
+
+	// Open an alert and wait until CDP confirms the dialog is active so
+	// finalizeClickState is guaranteed to execute against a blocked renderer.
+	dialogOpen := make(chan struct{}, 1)
+	lctx, lcancel := context.WithCancel(tabObj.Context())
+	defer lcancel()
+	if err := chromedp.Listen(lctx, func(ev any) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			select {
+			case dialogOpen <- struct{}{}:
+			default:
+			}
+		}
+	}); err != nil {
+		t.Fatalf("chromedp.Listen: %v", err)
+	}
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { alert('hello'); }, 10); true`,
+	})
+	select {
+	case <-dialogOpen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for alert dialog to open")
+	}
+	defer handleDialog(t, tabID, map[string]any{"accept": true})
+
+	pre := ClickOutput{PointerEvents: "auto", Visible: true}
+	start := time.Now()
+	got := finalizeClickState(tabObj.Context(), "h1", pre)
+	elapsed := time.Since(start)
+	if elapsed < 350*time.Millisecond || elapsed > 2500*time.Millisecond {
+		t.Errorf("finalizeClickState against open alert took %v, want bounded ~500ms fallback", elapsed)
+	}
+	if !got.Visible || got.Warning != "" {
+		t.Errorf("finalizeClickState fallback = %+v, want Visible=true Warning=\"\"", got)
+	}
+}
+
+func TestClickDelayedVisibilityRefreshClearsStaleHiddenWarning(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			window.__delayedClicked = false;
+			var btn = document.createElement('button');
+			btn.id = 'late-visible';
+			btn.textContent = 'Appear Later';
+			btn.style.display = 'none';
+			btn.addEventListener('click', function() { window.__delayedClicked = true; });
+			document.body.appendChild(btn);
+			setTimeout(function() { btn.style.display = 'block'; }, 150);
+		})()`,
+	})
+
+	out := callTool[ClickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#late-visible",
+		"timeout":  2000,
+	})
+	if !out.Visible {
+		t.Errorf("expected Visible=true after delayed reveal, got false")
+	}
+	if out.Warning != "" {
+		t.Errorf("delayed-visibility click produced stale hidden warning: %q", out.Warning)
+	}
+	clicked := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `window.__delayedClicked`,
+	})
+	if string(clicked.Result) != "true" {
+		t.Fatalf("expected click handler to fire, got %s", clicked.Result)
+	}
+}
+
+func TestHoverOffscreenElementScrollsIntoView(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			window.__hovered = false;
+			var spacer = document.createElement('div');
+			spacer.style.height = '2500px';
+			document.body.appendChild(spacer);
+			var target = document.createElement('div');
+			target.id = 'below-fold-hover';
+			target.style.width = '120px';
+			target.style.height = '40px';
+			target.textContent = 'Hover Me';
+			target.addEventListener('mouseover', function() { window.__hovered = true; });
+			document.body.appendChild(target);
+		})()`,
+	})
+
+	callTool[ActionOutput](t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#below-fold-hover",
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `window.__hovered && document.querySelector('#below-fold-hover').matches(':hover')`,
+	})
+	if string(out.Result) != "true" {
+		t.Fatalf("offscreen hover failed: result = %s", out.Result)
+	}
+}
+
+func TestTypeDelayExceedsSelectorTimeout(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			var inp = document.createElement('input');
+			inp.id = 'slow-type';
+			inp.value = 'old';
+			document.body.appendChild(inp);
+		})()`,
+	})
+
+	// 5 characters with 80ms inter-key delay (~320ms) exceeds timeout=200ms.
+	// Typing must run on tctx after the selector wait so delay typing is not aborted.
+	callTool[ActionOutput](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#slow-type",
+		"text":     "abcde",
+		"mode":     "replace",
+		"delay":    80,
+		"timeout":  200,
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `document.querySelector('#slow-type').value`,
+	})
+	if string(out.Result) != `"abcde"` {
+		t.Fatalf("typed value = %s, want %q", out.Result, "abcde")
+	}
+}
+
+func TestTypeReplaceContentEditableAndControlledInput(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			var ce = document.createElement('div');
+			ce.id = 'ce-box';
+			ce.contentEditable = 'true';
+			ce.textContent = 'existing content';
+			document.body.appendChild(ce);
+
+			// Simulate React's value tracker: an instance property overrides
+			// el.value so plain el.value = '' does not fire the native setter.
+			var inp = document.createElement('input');
+			inp.id = 'controlled-inp';
+			inp.value = 'stale';
+			window.__inputEventValues = [];
+			var nativeDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+			Object.defineProperty(inp, 'value', {
+				configurable: true,
+				get: function() { return nativeDesc.get.call(this); },
+				set: function(v) {
+					// Deliberately ignore instance setter to prove native prototype setter is used.
+					window.__instanceSetterCalled = true;
+				}
+			});
+			inp.addEventListener('input', function() {
+				window.__inputEventValues.push(nativeDesc.get.call(inp));
+			});
+			document.body.appendChild(inp);
+		})()`,
+	})
+
+	callTool[ActionOutput](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#ce-box",
+		"text":     "fresh",
+		"mode":     "replace",
+	})
+	ceOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `document.querySelector('#ce-box').textContent`,
+	})
+	if string(ceOut.Result) != `"fresh"` {
+		t.Errorf("contenteditable textContent = %s, want %q", ceOut.Result, "fresh")
+	}
+
+	callTool[ActionOutput](t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "#controlled-inp",
+		"text":     "ok",
+		"mode":     "replace",
+	})
+	inpOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `({
+			value: document.querySelector('#controlled-inp').value,
+			instanceCalled: !!window.__instanceSetterCalled,
+			events: window.__inputEventValues
+		})`,
+	})
+	var state struct {
+		Value          string   `json:"value"`
+		InstanceCalled bool     `json:"instanceCalled"`
+		Events         []string `json:"events"`
+	}
+	if err := json.Unmarshal(inpOut.Result, &state); err != nil {
+		t.Fatalf("unmarshal controlled input state: %v", err)
+	}
+	if state.Value != "ok" {
+		t.Errorf("controlled input value = %q, want %q", state.Value, "ok")
+	}
+	if state.InstanceCalled {
+		t.Errorf("expected native prototype setter to be called, not overridden instance setter")
+	}
+	if len(state.Events) == 0 || state.Events[0] != "" {
+		t.Errorf("expected first input event after clear to observe empty value, got %v", state.Events)
+	}
+}
+
+func TestTypeNegativeDelayRejected(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "type", map[string]any{
+		"tab":      tabID,
+		"selector": "body",
+		"text":     "hi",
+		"mode":     "replace",
+		"delay":    -5,
+	})
+	if !strings.Contains(errText, "delay") {
+		t.Errorf("expected delay validation error, got: %s", errText)
+	}
+}
+
+func TestTypeDetachedOnClearTimesOutCleanly(t *testing.T) {
+	for _, delay := range []int{0, 20} {
+		tabID := navigateToFixture(t, "page2.html")
+		callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			"tab": tabID,
+			"expression": `(function() {
+				var inp = document.createElement('input');
+				inp.id = 'vanish-inp';
+				inp.value = 'initial';
+				inp.addEventListener('input', function() { inp.remove(); });
+				document.body.appendChild(inp);
+			})()`,
+		})
+
+		start := time.Now()
+		errText := callToolExpectErr(t, "type", map[string]any{
+			"tab":      tabID,
+			"selector": "#vanish-inp",
+			"text":     "next",
+			"mode":     "replace",
+			"delay":    delay,
+			"timeout":  300,
+		})
+		elapsed := time.Since(start)
+		closeTab(t, tabID)
+
+		if elapsed > 2500*time.Millisecond {
+			t.Errorf("delay=%d: type on detached target waited %v, expected bounded ~300ms timeout", delay, elapsed)
+		}
+		if !strings.Contains(errText, "timed out") && !strings.Contains(errText, "not found") {
+			t.Errorf("delay=%d: expected selector timeout error, got: %s", delay, errText)
+		}
+	}
+}
+
+func TestSelectOptionValidationBeforeSelectorWait(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	start := time.Now()
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#does-not-exist-at-all",
+		"timeout":  5000,
+	})
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Errorf("missing criteria waited %v for nonexistent selector instead of failing immediately", elapsed)
+	}
+	if !strings.Contains(errText, "exactly one") {
+		t.Errorf("expected criteria validation error, got: %s", errText)
+	}
+
+	start = time.Now()
+	errText = callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#does-not-exist-at-all",
+		"index":    -1,
+		"timeout":  5000,
+	})
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Errorf("negative index waited %v for nonexistent selector instead of failing immediately", elapsed)
+	}
+	if !strings.Contains(errText, "index out of range") {
+		t.Errorf("expected negative index validation error, got: %s", errText)
+	}
+}
+
+func TestSelectOptionEmptyLabelAndNonSelectElement(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			var sel = document.createElement('select');
+			sel.id = 'empty-label-sel';
+			var o1 = document.createElement('option');
+			o1.value = 'v1';
+			o1.text = 'One';
+			o1.selected = true;
+			var o2 = document.createElement('option');
+			o2.value = 'blank';
+			o2.text = '';
+			sel.appendChild(o1);
+			sel.appendChild(o2);
+			document.body.appendChild(sel);
+		})()`,
+	})
+
+	callTool[ActionOutput](t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "#empty-label-sel",
+		"label":    "",
+	})
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `document.querySelector('#empty-label-sel').value`,
+	})
+	if string(out.Result) != `"blank"` {
+		t.Errorf("selected value for empty label = %s, want %q", out.Result, "blank")
+	}
+
+	errText := callToolExpectErr(t, "select_option", map[string]any{
+		"tab":      tabID,
+		"selector": "h1",
+		"value":    "x",
+	})
+	if !strings.Contains(errText, "not a <select>") {
+		t.Errorf("expected non-<select> error, got: %s", errText)
+	}
+}
+
+func TestPressKeyCtrlShortcutSuppressesLiteralChar(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			window.__keyEvents = [];
+			window.__keyPressCount = 0;
+			var inp = document.createElement('input');
+			inp.id = 'shortcut-inp';
+			inp.value = 'hello';
+			inp.addEventListener('keydown', function(e) {
+				window.__keyEvents.push({key: e.key, ctrl: e.ctrlKey, meta: e.metaKey});
+			});
+			inp.addEventListener('keypress', function() {
+				window.__keyPressCount++;
+			});
+			document.body.appendChild(inp);
+			inp.focus();
+		})()`,
+	})
+
+	callTool[ActionOutput](t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"ctrl"},
+	})
+	callTool[ActionOutput](t, "press_key", map[string]any{
+		"tab":       tabID,
+		"key":       "a",
+		"modifiers": []string{"meta"},
+	})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `({
+			value: document.querySelector('#shortcut-inp').value,
+			keyPressCount: window.__keyPressCount,
+			events: window.__keyEvents
+		})`,
+	})
+	var state struct {
+		Value         string `json:"value"`
+		KeyPressCount int    `json:"keyPressCount"`
+		Events        []struct {
+			Key  string `json:"key"`
+			Ctrl bool   `json:"ctrl"`
+			Meta bool   `json:"meta"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(out.Result, &state); err != nil {
+		t.Fatalf("unmarshal key state: %v", err)
+	}
+	if state.Value != "hello" {
+		t.Errorf("Ctrl+A / Meta+A mutated input value to %q, want %q", state.Value, "hello")
+	}
+	if state.KeyPressCount != 0 {
+		t.Errorf("Ctrl+A / Meta+A emitted %d keypress events, want 0 (KeyChar must be suppressed)", state.KeyPressCount)
+	}
+	if len(state.Events) != 2 || !state.Events[0].Ctrl || !state.Events[1].Meta {
+		t.Errorf("expected Ctrl+A and Meta+A keydown events, got %+v", state.Events)
+	}
+}
+
+func TestPressKeySpaceAndInsert(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			window.__keys = [];
+			var inp = document.createElement('input');
+			inp.id = 'named-keys-inp';
+			inp.addEventListener('keydown', function(e) { window.__keys.push(e.key); });
+			document.body.appendChild(inp);
+			inp.focus();
+		})()`,
+	})
+
+	callTool[ActionOutput](t, "press_key", map[string]any{"tab": tabID, "key": "Space"})
+	callTool[ActionOutput](t, "press_key", map[string]any{"tab": tabID, "key": "Insert"})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `({value: document.querySelector('#named-keys-inp').value, keys: window.__keys})`,
+	})
+	var state struct {
+		Value string   `json:"value"`
+		Keys  []string `json:"keys"`
+	}
+	if err := json.Unmarshal(out.Result, &state); err != nil {
+		t.Fatalf("unmarshal named key state: %v", err)
+	}
+	if state.Value != " " {
+		t.Errorf("Space value = %q, want %q", state.Value, " ")
+	}
+	if len(state.Keys) != 2 || state.Keys[0] != " " || state.Keys[1] != "Insert" {
+		t.Errorf("keydown keys = %v, want [\" \" \"Insert\"]", state.Keys)
+	}
+}
+
+func TestUploadFilesPathValidation(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "input[type=file]",
+		"paths":    []string{"relative/file.txt"},
+	})
+	if !strings.Contains(errText, "absolute") {
+		t.Errorf("expected absolute path error, got: %s", errText)
+	}
+
+	errText = callToolExpectErr(t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "input[type=file]",
+		"paths":    []string{"/nonexistent/path/chromedp-mcp-missing.txt"},
+	})
+	if !strings.Contains(errText, "no such file") && !strings.Contains(errText, "upload path") {
+		t.Errorf("expected missing file error, got: %s", errText)
+	}
+
+	dir := t.TempDir()
+	errText = callToolExpectErr(t, "upload_files", map[string]any{
+		"tab":      tabID,
+		"selector": "input[type=file]",
+		"paths":    []string{dir},
+	})
+	if !strings.Contains(errText, "directory") {
+		t.Errorf("expected directory error, got: %s", errText)
+	}
+}
+
+func TestHandleDialogPromptTextAndEmptyString(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	// Case 1: explicit prompt text is returned to window.prompt.
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { window.__promptVal = prompt('Name?', 'default'); }, 20); true`,
+	})
+	handleDialog(t, tabID, map[string]any{"accept": true, "text": "alice"})
+
+	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `window.__promptVal`,
+	})
+	if string(out.Result) != `"alice"` {
+		t.Errorf("prompt result = %s, want %q", out.Result, "alice")
+	}
+
+	// Case 2: explicit empty string submits "".
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `setTimeout(function() { window.__promptEmpty = prompt('Name?', 'default'); }, 20); true`,
+	})
+	handleDialog(t, tabID, map[string]any{"accept": true, "text": ""})
+
+	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `window.__promptEmpty`,
+	})
+	if string(out.Result) != `""` {
+		t.Errorf("empty text prompt result = %s, want %q", out.Result, "")
+	}
+}

@@ -151,8 +151,8 @@ func TestWaitForTimeout(t *testing.T) {
 		"selector": "#does-not-exist",
 		"timeout":  500, // 500ms timeout
 	})
-	if !strings.Contains(errText, "context deadline") {
-		t.Errorf("expected timeout error, got: %s", errText)
+	if !strings.Contains(errText, "timed out") || !strings.Contains(errText, "not found in the DOM") {
+		t.Errorf("expected descriptive selector timeout error, got: %s", errText)
 	}
 }
 

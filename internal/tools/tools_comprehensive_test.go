@@ -735,14 +735,30 @@ func TestDeleteCookieWithoutDomain(t *testing.T) {
 		"domain": "127.0.0.1",
 	})
 
-	// Delete without specifying domain — Chrome requires at least one of
-	// url or domain, so this should error.
+	// Delete without specifying domain on an HTTP(S) page defaults to the
+	// active tab's URL and deletes the cookie.
+	callTool[struct{}](t, "delete_cookies", map[string]any{
+		"tab":  tabID,
+		"name": "no_domain_del",
+	})
+	after := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
+	for _, c := range after.Cookies {
+		if c.Name == "no_domain_del" {
+			t.Fatalf("cookie %q was not deleted when domain was omitted on HTTP page", c.Name)
+		}
+	}
+
+	// On a non-HTTP page (about:blank), omitting domain must return an error.
+	callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab": tabID,
+		"url": "about:blank",
+	})
 	errText := callToolExpectErr(t, "delete_cookies", map[string]any{
 		"tab":  tabID,
 		"name": "no_domain_del",
 	})
-	if !strings.Contains(errText, "domain") && !strings.Contains(errText, "url") {
-		t.Errorf("expected error about domain/url requirement, got: %s", errText)
+	if !strings.Contains(errText, "domain") {
+		t.Errorf("expected error about domain requirement on about:blank, got: %s", errText)
 	}
 }
 

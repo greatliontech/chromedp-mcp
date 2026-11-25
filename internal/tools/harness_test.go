@@ -64,6 +64,66 @@ func TestMain(m *testing.M) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<html><body><h1>Slow Page</h1></body></html>`)
 	})
+	// /slow-subresource delivers HTML immediately while referencing a slow
+	// subresource image so tests can distinguish domcontentloaded from load.
+	mux.HandleFunc("/slow-subresource", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Slow Subresource</title></head><body><h1>Ready</h1><img src="/slow-img?ms=1500"></body></html>`)
+	})
+	mux.HandleFunc("/slow-img", func(w http.ResponseWriter, r *http.Request) {
+		delay := 1500 * time.Millisecond
+		if v := r.URL.Query().Get("ms"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				delay = time.Duration(n) * time.Millisecond
+			}
+		}
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte{
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+			0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+			0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+			0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+			0x00, 0x00, 0x03, 0x00, 0x01, 0x36, 0x28, 0x19, 0x00, 0x00, 0x00, 0x00,
+			0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+		})
+	})
+	// /slow-xhr calls history.replaceState on load and performs a delayed fetch
+	// so tests can verify wait_until="networkidle" waits past both load and SPA
+	// replaceState until the fetch settles.
+	mux.HandleFunc("/slow-xhr", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Slow XHR</title><script>
+			history.replaceState({}, '', '/slow-xhr?spa=1');
+			window.__xhrDone = false;
+			fetch('/slow?ms=600').then(function() { window.__xhrDone = true; });
+		</script></head><body><h1>Slow XHR</h1><iframe src="/page2.html"></iframe></body></html>`)
+	})
+	// /bounce performs an immediate client-side redirect via location.replace.
+	mux.HandleFunc("/bounce", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><script>location.replace('/page2.html');</script></head><body>Bouncing</body></html>`)
+	})
+	// /bounce-delayed redirects 50ms after load — after DOMContentLoaded,
+	// before networkIdle's 500ms quiet window completes.
+	mux.HandleFunc("/bounce-delayed", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Bounce</title><script>setTimeout(function() { location.replace('/page2.html'); }, 50);</script></head><body>Bouncing soon</body></html>`)
+	})
+	// /no-content returns HTTP 204 No Content without committing a new document.
+	mux.HandleFunc("/no-content", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/api/unicode", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		fmt.Fprintf(w, `{"message":"héllo wörld 🌍","emoji":"🚀✨"}`)

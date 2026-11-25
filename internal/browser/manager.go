@@ -221,31 +221,46 @@ func (m *Manager) CloseAll() {
 //     and then all other live browsers so explicit tab IDs work across multiple
 //     managed browsers.
 func (m *Manager) ResolveTab(browserID, tabID string) (*tab.Tab, error) {
+	_, t, err := m.ResolveTabWithBrowser(browserID, tabID)
+	return t, err
+}
+
+// ResolveTabWithBrowser resolves both the owning browser and the tab for the
+// given browser and tab IDs using the same lookup rules as ResolveTab.
+func (m *Manager) ResolveTabWithBrowser(browserID, tabID string) (*Browser, *tab.Tab, error) {
 	if browserID != "" {
 		b, err := m.Get(browserID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return b.Tabs.Resolve(tabID)
+		t, err := b.Tabs.Resolve(tabID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, t, nil
 	}
 	if tabID == "" {
 		b, err := m.Active()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return b.Tabs.Resolve("")
+		t, err := b.Tabs.Resolve("")
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, t, nil
 	}
 
 	live := m.liveBrowsersMRU()
 	if len(live) == 0 {
-		return nil, fmt.Errorf("no browser running — use browser_launch or browser_connect first")
+		return nil, nil, fmt.Errorf("no browser running — use browser_launch or browser_connect first")
 	}
 	for _, b := range live {
 		if t, err := b.Tabs.Get(tabID); err == nil {
-			return t, nil
+			return b, t, nil
 		}
 	}
-	return nil, fmt.Errorf("tab %q: %w", tabID, tab.ErrNotFound)
+	return nil, nil, fmt.Errorf("tab %q: %w", tabID, tab.ErrNotFound)
 }
 
 // CloseTab finds a tab by ID across all live browsers and closes it.
