@@ -59,7 +59,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		if input.URL != "" {
 			tctx, tcancel := tabContext(ctx, t.Context())
 			defer tcancel()
-			if err := chromedp.Run(tctx, chromedp.Navigate(input.URL)); err != nil {
+			if err := chromedp.Do(tctx, chromedp.Navigate(input.URL)); err != nil {
 				// Roll back the freshly created tab so a failed tab_new does not
 				// leak an orphaned blank tab or hijack the active tab.
 				_ = b.Tabs.Close(t.ID)
@@ -110,7 +110,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "tab_close",
 		Description: "Close a tab by ID. If the active tab is closed, the most recently used remaining tab becomes active.",
 		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: ptrBool(true),
+			DestructiveHint: new(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabCloseInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := mgr.CloseTab(input.Tab); err != nil {

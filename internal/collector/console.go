@@ -39,7 +39,7 @@ func (c *Console) Handle(ev *runtime.EventConsoleAPICalled) {
 	c.buf.Add(ConsoleEntry{
 		Level:      string(ev.Type),
 		Text:       strings.Join(parts, " "),
-		Timestamp:  ev.Timestamp.Time(),
+		Timestamp:  timeFromRuntimeTimestamp(ev.Timestamp),
 		ReceivedAt: time.Now(),
 	})
 }

@@ -3,6 +3,7 @@ package collector
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -11,13 +12,13 @@ import (
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
+	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 	"github.com/chromedp/cdproto/network"
 )
 
-// monoTime returns a *cdp.MonotonicTime from a time.Time value.
-func monoTime(t time.Time) *cdp.MonotonicTime {
-	mt := cdp.MonotonicTime(t)
-	return &mt
+// monoTime returns a cdp.MonotonicTime (seconds) from a time.Time value.
+func monoTime(t time.Time) cdp.MonotonicTime {
+	return cdp.MonotonicTime(float64(t.UnixNano()) / 1e9)
 }
 
 // TestNetworkConcurrentHandlers exercises the Network collector's handler
@@ -365,17 +366,11 @@ func TestDownloadProgressUnknownState(t *testing.T) {
 	}
 }
 
-// b64 returns the base64 encoding of s, the wire shape of CDP's
-// PostDataEntry.Bytes field.
-func b64(s string) string {
-	return base64.StdEncoding.EncodeToString([]byte(s))
-}
-
 // postEntries builds CDP PostDataEntries from raw byte chunks.
 func postEntries(chunks ...string) []*network.PostDataEntry {
 	out := make([]*network.PostDataEntry, len(chunks))
 	for i, c := range chunks {
-		out[i] = &network.PostDataEntry{Bytes: b64(c)}
+		out[i] = &network.PostDataEntry{Bytes: []byte(c)}
 	}
 	return out
 }
@@ -457,7 +452,7 @@ func TestRequestBodyInlineBinary(t *testing.T) {
 		},
 		HasPostData: true,
 		PostDataEntries: []*network.PostDataEntry{
-			{Bytes: base64.StdEncoding.EncodeToString(binary)},
+			{Bytes: binary},
 		},
 	})
 
@@ -558,31 +553,63 @@ func TestRequestBodyHasButNoEntries(t *testing.T) {
 	}
 }
 
-// TestRequestBodyMalformedBase64 verifies that a PostDataEntry whose Bytes
-// field is not valid base64 (a CDP protocol violation) does not produce a
-// mangled inline body. The entry should be flagged as having a body but
-// the inline body is empty so the LLM falls back to get_request_body.
+// TestRequestBodyMalformedBase64 verifies that malformed base64 in the CDP
+// wire payload for PostDataEntry.Bytes is rejected by cdproto's jsonv2
+// unmarshaler, and that nil/empty PostDataEntries produce an empty inline body.
 func TestRequestBodyMalformedBase64(t *testing.T) {
+	var entry network.PostDataEntry
+	if err := jsonv2.Unmarshal([]byte(`{"bytes":"!!!"}`), &entry); err == nil {
+		t.Fatal("expected jsonv2 unmarshal error for malformed base64 in PostDataEntry.Bytes")
+	}
+
 	n := NewNetwork(10)
 	e := captureRequest(t, n, &network.Request{
 		URL:         "http://example.com/api",
 		Method:      "POST",
 		Headers:     network.Headers{},
 		HasPostData: true,
-		// "!!!" is not valid base64 (padding/charset).
 		PostDataEntries: []*network.PostDataEntry{
-			{Bytes: "!!!"},
+			nil,
+			{Bytes: nil},
+			{Bytes: []byte{}},
 		},
 	})
-
 	if !e.HasRequestBody {
 		t.Error("HasRequestBody = false, want true")
 	}
 	if e.RequestBody != "" {
-		t.Errorf("RequestBody = %q, want empty for malformed base64", e.RequestBody)
+		t.Errorf("RequestBody = %q, want empty for nil/empty entries", e.RequestBody)
 	}
-	if e.RequestBodyTruncated {
-		t.Error("RequestBodyTruncated = true, want false")
+}
+
+// TestRequestWallTimeNonFiniteFallsBackToNow verifies non-finite WallTime
+// values (+Inf/NaN) do not overwrite StartTime with the zero time.
+func TestRequestWallTimeNonFiniteFallsBackToNow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wt   cdp.TimeSinceEpoch
+	}{
+		{"pos_inf", cdp.TimeSinceEpoch(math.Inf(1))},
+		{"nan", cdp.TimeSinceEpoch(math.NaN())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := NewNetwork(10)
+			before := time.Now()
+			reqID := network.RequestID("req-" + tc.name)
+			n.HandleRequestWillBeSent(&network.EventRequestWillBeSent{
+				RequestID: reqID,
+				Request:   &network.Request{URL: "http://example.com", Method: "GET"},
+				WallTime:  tc.wt,
+				Timestamp: monoTime(before),
+			})
+			after := time.Now()
+			n.mu.Lock()
+			e := n.pending[reqID]
+			n.mu.Unlock()
+			if e.StartTime.Before(before) || e.StartTime.After(after) {
+				t.Errorf("StartTime = %v, want fallback within [%v, %v]", e.StartTime, before, after)
+			}
+		})
 	}
 }
 

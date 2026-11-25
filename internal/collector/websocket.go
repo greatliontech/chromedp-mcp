@@ -199,7 +199,7 @@ func (w *WebSocket) HandleFrameSent(ev *network.EventWebSocketFrameSent) {
 	if c == nil {
 		return
 	}
-	frame := w.buildFrame(ev.Response, WSDirectionSent, ev.Timestamp.Time())
+	frame := w.buildFrame(ev.Response, WSDirectionSent, time.Now())
 	// Hold c.mu across both the Add and the counter increment so a
 	// concurrent Connections() snapshot cannot observe a counter that
 	// disagrees with the buffered frame count for this connection.
@@ -219,7 +219,7 @@ func (w *WebSocket) HandleFrameReceived(ev *network.EventWebSocketFrameReceived)
 	if c == nil {
 		return
 	}
-	frame := w.buildFrame(ev.Response, WSDirectionReceived, ev.Timestamp.Time())
+	frame := w.buildFrame(ev.Response, WSDirectionReceived, time.Now())
 	c.mu.Lock()
 	c.received.Add(frame)
 	c.info.FramesReceivedCount++
@@ -245,7 +245,7 @@ func (w *WebSocket) HandleClosed(ev *network.EventWebSocketClosed) {
 	}
 	c.mu.Lock()
 	c.info.Closed = true
-	c.info.EndTime = ev.Timestamp.Time()
+	c.info.EndTime = time.Now()
 	c.mu.Unlock()
 }
 
@@ -339,15 +339,16 @@ func (w *WebSocket) buildFrame(f *network.WebSocketFrame, dir WSDirection, ts ti
 		Direction: dir,
 		Time:      ts,
 	}
-	// CDP contract: opcode 1 means text payload (UTF-8 string); any
-	// other opcode means binary, base64-encoded over the wire.
+	// CDP contract: opcode 1 means text payload (UTF-8); any other opcode
+	// means binary. cdproto decodes wire base64 into raw bytes for non-text
+	// frames during JSON unmarshaling.
 	if int(f.Opcode) == 1 {
-		payload, truncated := truncateText(f.PayloadData, w.maxPayload)
+		payload, truncated := truncateText(string(f.PayloadData), w.maxPayload)
 		frame.Payload = payload
 		frame.PayloadTruncated = truncated
 		return frame
 	}
-	payload, truncated := truncateBase64(f.PayloadData, w.maxPayload)
+	payload, truncated := encodeBinaryPayload(f.PayloadData, w.maxPayload)
 	frame.Payload = payload
 	frame.PayloadBase64 = true
 	frame.PayloadTruncated = truncated
@@ -367,19 +368,11 @@ func truncateText(s string, maxBytes int) (string, bool) {
 	return out, true
 }
 
-// truncateBase64 caps a base64-encoded binary payload to a string whose
-// decoded byte length is at most maxBytes. Returns the re-encoded
-// truncated payload. CDP's WebSocketFrame.PayloadData is guaranteed to be
-// base64 when the opcode is non-text; if a malformed value still arrives,
-// return an empty payload rather than garbage that downstream consumers
-// will fail to decode anyway.
-func truncateBase64(b64 string, maxBytes int) (string, bool) {
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return "", false
-	}
+// encodeBinaryPayload caps raw binary frame bytes at maxBytes and returns
+// the base64-encoded payload.
+func encodeBinaryPayload(raw []byte, maxBytes int) (string, bool) {
 	if len(raw) <= maxBytes {
-		return b64, false
+		return base64.StdEncoding.EncodeToString(raw), false
 	}
 	return base64.StdEncoding.EncodeToString(raw[:maxBytes]), true
 }

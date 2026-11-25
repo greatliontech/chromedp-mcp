@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -81,8 +82,8 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 
 		// For non-default wait events, set up the lifecycle listener
 		// BEFORE navigating so we don't miss the event (e.g.,
-		// DOMContentLoaded fires before load, and RunResponse waits
-		// for load — by the time RunResponse returns, DOMContentLoaded
+		// DOMContentLoaded fires before load, and NavigateResponse waits
+		// for load — by the time NavigateResponse returns, DOMContentLoaded
 		// has already been dispatched).
 		var lifecycleCh chan struct{}
 		if waitEvent == "domcontentloaded" || waitEvent == "networkidle" {
@@ -96,7 +97,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			lifecycleCh = make(chan struct{}, 1)
 			lctx, lcancel := context.WithCancel(tctx)
 			defer lcancel()
-			chromedp.ListenTarget(lctx, func(ev interface{}) {
+			if err := chromedp.Listen(lctx, func(ev any) {
 				if le, ok := ev.(*page.EventLifecycleEvent); ok {
 					if le.Name == cdpName {
 						select {
@@ -105,11 +106,13 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 						}
 					}
 				}
-			})
+			}); err != nil {
+				return nil, NavigateOutput{}, err
+			}
 		}
 
 		// Navigate and capture the HTTP response to get the status code.
-		resp, err := chromedp.RunResponse(tctx, chromedp.Navigate(input.URL))
+		resp, err := chromedp.Run(tctx, chromedp.NavigateResponse(input.URL))
 		if err != nil {
 			return nil, NavigateOutput{}, err
 		}
@@ -128,8 +131,12 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 		}
 
-		var url, title string
-		if err := chromedp.Run(tctx, chromedp.Location(&url), chromedp.Title(&title)); err != nil {
+		url, err := chromedp.Run(tctx, chromedp.Location())
+		if err != nil {
+			return nil, NavigateOutput{}, err
+		}
+		title, err := chromedp.Run(tctx, chromedp.Title())
+		if err != nil {
 			return nil, NavigateOutput{}, err
 		}
 
@@ -158,20 +165,25 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			// option, but it wraps page.Reload in responseAction
 			// which waits for the page load event. We need the
 			// same wait behaviour here, so we use RunResponse with
-			// an ActionFunc that sends the bypass-cache variant.
-			if _, err := chromedp.RunResponse(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				return page.Reload().WithIgnoreCache(true).Do(ctx)
+			// an action that sends the bypass-cache variant.
+			if _, err := chromedp.RunResponse(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				_, err := cdp.Call(ctx, tgt, page.Reload, page.ReloadParams{IgnoreCache: new(true)})
+				return err
 			})); err != nil {
 				return nil, ReloadOutput{}, err
 			}
 		} else {
-			if err := chromedp.Run(tctx, chromedp.Reload()); err != nil {
+			if err := chromedp.Do(tctx, chromedp.Reload()); err != nil {
 				return nil, ReloadOutput{}, err
 			}
 		}
 
-		var url, title string
-		if err := chromedp.Run(tctx, chromedp.Location(&url), chromedp.Title(&title)); err != nil {
+		url, err := chromedp.Run(tctx, chromedp.Location())
+		if err != nil {
+			return nil, ReloadOutput{}, err
+		}
+		title, err := chromedp.Run(tctx, chromedp.Title())
+		if err != nil {
 			return nil, ReloadOutput{}, err
 		}
 		return nil, ReloadOutput{URL: url, Title: title}, nil
@@ -188,7 +200,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		if err := chromedp.Run(tctx, navigateHistory(-1)); err != nil {
+		if err := chromedp.Do(tctx, navigateHistory(-1)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -205,7 +217,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		if err := chromedp.Run(tctx, navigateHistory(+1)); err != nil {
+		if err := chromedp.Do(tctx, navigateHistory(+1)); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -243,7 +255,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		defer cancel()
 
 		if input.Selector != "" {
-			err = chromedp.Run(tctx, chromedp.WaitVisible(input.Selector, chromedp.ByQuery))
+			err = chromedp.Do(tctx, chromedp.WaitVisible(chromedp.CSS(input.Selector)))
 		} else {
 			// Coerce the predicate to a Promise<boolean> before sending
 			// to CDP. Without this, expressions that evaluate to a
@@ -265,8 +277,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			// comment in the user's expression doesn't swallow the
 			// closing `).then(Boolean)`.
 			coerced := "Promise.resolve(\n" + input.Expression + "\n).then(Boolean)"
-			var result interface{}
-			err = chromedp.Run(tctx, chromedp.Poll(coerced, &result))
+			_, err = chromedp.Run(tctx, chromedp.Poll[any](coerced))
 		}
 		if err != nil {
 			return nil, struct{}{}, err
@@ -299,14 +310,14 @@ const (
 //   - Normal cross-document navigation: fires EventFrameNavigated with
 //     Type == Navigation. No reload needed — the full page load triggers
 //     proper DOM events that resync chromedp's cache.
-func navigateHistory(delta int) chromedp.ActionFunc {
-	return func(ctx context.Context) error {
-		cur, entries, err := page.GetNavigationHistory().Do(ctx)
+func navigateHistory(delta int) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+		hist, err := cdp.Call(ctx, tgt, page.GetNavigationHistory, cdp.Empty{})
 		if err != nil {
 			return err
 		}
-		target := cur + int64(delta)
-		if target < 0 || target > int64(len(entries)-1) {
+		targetIdx := hist.CurrentIndex + int64(delta)
+		if targetIdx < 0 || targetIdx > int64(len(hist.Entries)-1) {
 			if delta < 0 {
 				return fmt.Errorf("no previous history entry")
 			}
@@ -324,7 +335,7 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 		lctx, lcancel := context.WithCancel(ctx)
 		defer lcancel()
 
-		chromedp.ListenTarget(lctx, func(ev interface{}) {
+		if err := chromedp.Listen(lctx, func(ev any) {
 			switch e := ev.(type) {
 			case *page.EventNavigatedWithinDocument:
 				// SPA pushState / history API — same document,
@@ -346,9 +357,13 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 				default:
 				}
 			}
-		})
+		}); err != nil {
+			return err
+		}
 
-		if err := page.NavigateToHistoryEntry(entries[target].ID).Do(ctx); err != nil {
+		if _, err := cdp.Call(ctx, tgt, page.NavigateToHistoryEntry, page.NavigateToHistoryEntryParams{
+			EntryID: hist.Entries[targetIdx].ID,
+		}); err != nil {
 			return err
 		}
 
@@ -364,11 +379,12 @@ func navigateHistory(delta int) chromedp.ActionFunc {
 			// dom.EventDocumentUpdated, which resyncs chromedp's
 			// DOM cache. Without this, bfcache restores leave the
 			// cache stale and all selector-based queries time out.
-			return chromedp.Reload().Do(ctx)
+			_, err := chromedp.Reload()(ctx, tgt)
+			return err
 		}
 
 		// Same-document and normal cross-document navigations don't
 		// need a reload — the DOM is already in a consistent state.
 		return nil
-	}
+	})
 }

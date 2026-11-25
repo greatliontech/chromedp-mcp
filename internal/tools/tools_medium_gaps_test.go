@@ -10,8 +10,8 @@ import (
 
 // ===========================================================================
 // Gap 1: browser_connect via http:// URL (not just ws://)
-// The design doc says url accepts "ws:// or http://". chromedp's
-// NewRemoteAllocator should handle http:// → ws:// translation.
+// The design doc says url accepts "ws:// or http://". browser.Connect
+// resolves http:// endpoints via /json/version before dialing the WebSocket.
 // ===========================================================================
 
 func TestBrowserConnectHTTPURL(t *testing.T) {

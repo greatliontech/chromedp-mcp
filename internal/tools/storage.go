@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/domstorage"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -26,14 +27,16 @@ func isLocalStorage(typ string) (bool, error) {
 }
 
 // resolveStorageID builds a domstorage.StorageID for the current page.
-// Must be called inside a chromedp.ActionFunc.
-func resolveStorageID(ctx context.Context, isLocal bool) (*domstorage.StorageID, error) {
-	tree, err := page.GetFrameTree().Do(ctx)
+func resolveStorageID(ctx context.Context, tgt *chromedp.Target, isLocal bool) (*domstorage.StorageID, error) {
+	res, err := cdp.Call(ctx, tgt, page.GetFrameTree, cdp.Empty{})
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage origin: %w", err)
 	}
+	if res.FrameTree == nil || res.FrameTree.Frame == nil {
+		return nil, fmt.Errorf("resolve storage origin: empty frame tree")
+	}
 	return &domstorage.StorageID{
-		SecurityOrigin: tree.Frame.SecurityOrigin,
+		SecurityOrigin: res.FrameTree.Frame.SecurityOrigin,
 		IsLocalStorage: isLocal,
 	}, nil
 }
@@ -117,15 +120,16 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 		defer cancel()
 
 		var out GetStorageOutput
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			sid, err := resolveStorageID(ctx, isLocal)
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+			sid, err := resolveStorageID(ctx, tgt, isLocal)
 			if err != nil {
 				return err
 			}
-			items, err := domstorage.GetDOMStorageItems(sid).Do(ctx)
+			res, err := cdp.Call(ctx, tgt, domstorage.GetDOMStorageItems, domstorage.GetDOMStorageItemsParams{StorageID: sid})
 			if err != nil {
 				return err
 			}
+			items := res.Entries
 
 			if input.Key != "" {
 				for _, item := range items {
@@ -176,12 +180,17 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx, cancel := tabContext(ctx, tab.Context())
 		defer cancel()
 
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			sid, err := resolveStorageID(ctx, isLocal)
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+			sid, err := resolveStorageID(ctx, tgt, isLocal)
 			if err != nil {
 				return err
 			}
-			return domstorage.SetDOMStorageItem(sid, input.Key, input.Value).Do(ctx)
+			_, err = cdp.Call(ctx, tgt, domstorage.SetDOMStorageItem, domstorage.SetDOMStorageItemParams{
+				StorageID: sid,
+				Key:       input.Key,
+				Value:     input.Value,
+			})
+			return err
 		}))
 		if err != nil {
 			return nil, struct{}{}, fmt.Errorf("set_storage: %w", err)
@@ -194,7 +203,7 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "delete_storage",
 		Description: "Delete one or all items from localStorage or sessionStorage. If key is omitted, clears all items.",
 		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: ptrBool(true),
+			DestructiveHint: new(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteStorageInput) (*mcp.CallToolResult, struct{}, error) {
 		isLocal, err := isLocalStorage(input.Type)
@@ -208,15 +217,20 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx, cancel := tabContext(ctx, tab.Context())
 		defer cancel()
 
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			sid, err := resolveStorageID(ctx, isLocal)
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+			sid, err := resolveStorageID(ctx, tgt, isLocal)
 			if err != nil {
 				return err
 			}
 			if input.Key != "" {
-				return domstorage.RemoveDOMStorageItem(sid, input.Key).Do(ctx)
+				_, err = cdp.Call(ctx, tgt, domstorage.RemoveDOMStorageItem, domstorage.RemoveDOMStorageItemParams{
+					StorageID: sid,
+					Key:       input.Key,
+				})
+				return err
 			}
-			return domstorage.Clear(sid).Do(ctx)
+			_, err = cdp.Call(ctx, tgt, domstorage.Clear, domstorage.ClearParams{StorageID: sid})
+			return err
 		}))
 		if err != nil {
 			return nil, struct{}{}, fmt.Errorf("delete_storage: %w", err)
@@ -245,15 +259,16 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 		defer cancel()
 
 		var out GetStorageKeysOutput
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			sid, err := resolveStorageID(ctx, isLocal)
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+			sid, err := resolveStorageID(ctx, tgt, isLocal)
 			if err != nil {
 				return err
 			}
-			items, err := domstorage.GetDOMStorageItems(sid).Do(ctx)
+			res, err := cdp.Call(ctx, tgt, domstorage.GetDOMStorageItems, domstorage.GetDOMStorageItemsParams{StorageID: sid})
 			if err != nil {
 				return err
 			}
+			items := res.Entries
 
 			limit := input.Limit
 			if limit <= 0 {

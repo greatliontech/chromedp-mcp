@@ -3,16 +3,19 @@ package tools
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/chromedp/cdproto/accessibility"
+	jsonv2 "github.com/chromedp/cdproto/cdp/jsonv2"
 )
 
 // ---------------------------------------------------------------------------
-// lenientAXValueString
+// axValueString
 // ---------------------------------------------------------------------------
 
-func TestLenientAXValueString(t *testing.T) {
+func TestAXValueString(t *testing.T) {
 	tests := []struct {
 		name string
-		v    *axValue
+		v    *accessibility.Value
 		want string
 	}{
 		{
@@ -22,46 +25,46 @@ func TestLenientAXValueString(t *testing.T) {
 		},
 		{
 			name: "nil Value field",
-			v:    &axValue{Type: "string"},
+			v:    &accessibility.Value{Type: accessibility.ValueTypeString},
 			want: "",
 		},
 		{
 			name: "string JSON",
-			v:    &axValue{Type: "string", Value: json.RawMessage(`"hello"`)},
+			v:    &accessibility.Value{Type: accessibility.ValueTypeString, Value: jsonv2.Value(`"hello"`)},
 			want: "hello",
 		},
 		{
 			name: "empty string JSON",
-			v:    &axValue{Type: "string", Value: json.RawMessage(`""`)},
+			v:    &accessibility.Value{Type: accessibility.ValueTypeString, Value: jsonv2.Value(`""`)},
 			want: "",
 		},
 		{
 			name: "integer JSON falls back to raw",
-			v:    &axValue{Type: "integer", Value: json.RawMessage(`42`)},
+			v:    &accessibility.Value{Type: accessibility.ValueTypeInteger, Value: jsonv2.Value(`42`)},
 			want: "42",
 		},
 		{
 			name: "boolean JSON falls back to raw",
-			v:    &axValue{Type: "boolean", Value: json.RawMessage(`true`)},
+			v:    &accessibility.Value{Type: accessibility.ValueTypeBoolean, Value: jsonv2.Value(`true`)},
 			want: "true",
 		},
 		{
 			name: "object JSON falls back to raw",
-			v:    &axValue{Type: "object", Value: json.RawMessage(`{"k":"v"}`)},
+			v:    &accessibility.Value{Type: "object", Value: jsonv2.Value(`{"k":"v"}`)},
 			want: `{"k":"v"}`,
 		},
 		{
 			name: "null JSON unmarshals to empty string",
-			v:    &axValue{Type: "string", Value: json.RawMessage(`null`)},
+			v:    &accessibility.Value{Type: accessibility.ValueTypeString, Value: jsonv2.Value(`null`)},
 			want: "", // json.Unmarshal(`null`, &s) succeeds with s=""
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := lenientAXValueString(tt.v)
+			got := axValueString(tt.v)
 			if got != tt.want {
-				t.Errorf("lenientAXValueString() = %q, want %q", got, tt.want)
+				t.Errorf("axValueString() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -71,19 +74,19 @@ func TestLenientAXValueString(t *testing.T) {
 // convertAXNode
 // ---------------------------------------------------------------------------
 
-// helper to build a quick axValue with a JSON string.
-func strAXValue(s string) *axValue {
+// helper to build a quick accessibility.Value with a JSON string.
+func strAXValue(s string) *accessibility.Value {
 	b, _ := json.Marshal(s)
-	return &axValue{Type: "string", Value: json.RawMessage(b)}
+	return &accessibility.Value{Type: accessibility.ValueTypeString, Value: jsonv2.Value(b)}
 }
 
 func TestConvertAXNode_SimpleNode(t *testing.T) {
-	n := &axNode{
+	n := &accessibility.Node{
 		NodeID: "1",
 		Role:   strAXValue("button"),
 		Name:   strAXValue("Submit"),
 	}
-	nodeMap := map[string]*axNode{"1": n}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n}
 
 	out := convertAXNode(n, nodeMap, true)
 	if out == nil {
@@ -98,18 +101,18 @@ func TestConvertAXNode_SimpleNode(t *testing.T) {
 }
 
 func TestConvertAXNode_AllFields(t *testing.T) {
-	n := &axNode{
+	n := &accessibility.Node{
 		NodeID:      "1",
 		Role:        strAXValue("textbox"),
 		Name:        strAXValue("Email"),
 		Value:       strAXValue("user@example.com"),
 		Description: strAXValue("Enter your email address"),
-		Properties: []*axProperty{
-			{Name: "focused", Value: &axValue{Type: "boolean", Value: json.RawMessage(`true`)}},
-			{Name: "required", Value: &axValue{Type: "boolean", Value: json.RawMessage(`true`)}},
+		Properties: []*accessibility.Property{
+			{Name: accessibility.PropertyNameFocused, Value: &accessibility.Value{Type: accessibility.ValueTypeBoolean, Value: jsonv2.Value(`true`)}},
+			{Name: accessibility.PropertyNameRequired, Value: &accessibility.Value{Type: accessibility.ValueTypeBoolean, Value: jsonv2.Value(`true`)}},
 		},
 	}
-	nodeMap := map[string]*axNode{"1": n}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n}
 
 	out := convertAXNode(n, nodeMap, false)
 	if out == nil {
@@ -140,11 +143,11 @@ func TestConvertAXNode_AllFields(t *testing.T) {
 
 func TestConvertAXNode_IgnoredNodeNoChildren(t *testing.T) {
 	// Ignored node with no children and interestingOnly=true → nil
-	n := &axNode{
+	n := &accessibility.Node{
 		NodeID:  "1",
 		Ignored: true,
 	}
-	nodeMap := map[string]*axNode{"1": n}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n}
 
 	out := convertAXNode(n, nodeMap, true)
 	if out != nil {
@@ -154,17 +157,17 @@ func TestConvertAXNode_IgnoredNodeNoChildren(t *testing.T) {
 
 func TestConvertAXNode_IgnoredNodeOneChild(t *testing.T) {
 	// Ignored node with one interesting child → collapse to the child.
-	child := &axNode{
+	child := &accessibility.Node{
 		NodeID: "2",
 		Role:   strAXValue("button"),
 		Name:   strAXValue("OK"),
 	}
-	parent := &axNode{
+	parent := &accessibility.Node{
 		NodeID:   "1",
 		Ignored:  true,
-		ChildIDs: []string{"2"},
+		ChildIDs: []accessibility.NodeID{"2"},
 	}
-	nodeMap := map[string]*axNode{"1": parent, "2": child}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": parent, "2": child}
 
 	out := convertAXNode(parent, nodeMap, true)
 	if out == nil {
@@ -184,14 +187,14 @@ func TestConvertAXNode_IgnoredNodeOneChild(t *testing.T) {
 
 func TestConvertAXNode_IgnoredNodeMultipleChildren(t *testing.T) {
 	// Ignored node with multiple interesting children → wrapper with children.
-	child1 := &axNode{NodeID: "2", Role: strAXValue("link"), Name: strAXValue("Home")}
-	child2 := &axNode{NodeID: "3", Role: strAXValue("link"), Name: strAXValue("About")}
-	parent := &axNode{
+	child1 := &accessibility.Node{NodeID: "2", Role: strAXValue("link"), Name: strAXValue("Home")}
+	child2 := &accessibility.Node{NodeID: "3", Role: strAXValue("link"), Name: strAXValue("About")}
+	parent := &accessibility.Node{
 		NodeID:   "1",
 		Ignored:  true,
-		ChildIDs: []string{"2", "3"},
+		ChildIDs: []accessibility.NodeID{"2", "3"},
 	}
-	nodeMap := map[string]*axNode{"1": parent, "2": child1, "3": child2}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": parent, "2": child1, "3": child2}
 
 	out := convertAXNode(parent, nodeMap, true)
 	if out == nil {
@@ -214,12 +217,12 @@ func TestConvertAXNode_IgnoredNodeMultipleChildren(t *testing.T) {
 
 func TestConvertAXNode_IgnoredNodeNotFiltered_InterestingOnlyFalse(t *testing.T) {
 	// With interestingOnly=false, ignored nodes are NOT skipped.
-	n := &axNode{
+	n := &accessibility.Node{
 		NodeID:  "1",
 		Ignored: true,
 		Role:    strAXValue("generic"),
 	}
-	nodeMap := map[string]*axNode{"1": n}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n}
 
 	out := convertAXNode(n, nodeMap, false)
 	if out == nil {
@@ -233,10 +236,10 @@ func TestConvertAXNode_IgnoredNodeNotFiltered_InterestingOnlyFalse(t *testing.T)
 func TestConvertAXNode_UninterestingNonIgnored_NoRoleNameValue(t *testing.T) {
 	// Non-ignored node with no role, name, or value, interestingOnly=true.
 	// Should be skipped (returns nil) if it has no interesting children.
-	n := &axNode{
+	n := &accessibility.Node{
 		NodeID: "1",
 	}
-	nodeMap := map[string]*axNode{"1": n}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n}
 
 	out := convertAXNode(n, nodeMap, true)
 	if out != nil {
@@ -246,12 +249,12 @@ func TestConvertAXNode_UninterestingNonIgnored_NoRoleNameValue(t *testing.T) {
 
 func TestConvertAXNode_UninterestingNonIgnored_OneChild(t *testing.T) {
 	// Non-ignored, uninteresting node with one interesting child → collapse.
-	child := &axNode{NodeID: "2", Role: strAXValue("heading"), Name: strAXValue("Title")}
-	parent := &axNode{
+	child := &accessibility.Node{NodeID: "2", Role: strAXValue("heading"), Name: strAXValue("Title")}
+	parent := &accessibility.Node{
 		NodeID:   "1",
-		ChildIDs: []string{"2"},
+		ChildIDs: []accessibility.NodeID{"2"},
 	}
-	nodeMap := map[string]*axNode{"1": parent, "2": child}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": parent, "2": child}
 
 	out := convertAXNode(parent, nodeMap, true)
 	if out == nil {
@@ -264,13 +267,13 @@ func TestConvertAXNode_UninterestingNonIgnored_OneChild(t *testing.T) {
 
 func TestConvertAXNode_UninterestingNonIgnored_MultipleChildren(t *testing.T) {
 	// Non-ignored, uninteresting node with multiple interesting children → wrapper.
-	child1 := &axNode{NodeID: "2", Role: strAXValue("link"), Name: strAXValue("A")}
-	child2 := &axNode{NodeID: "3", Role: strAXValue("link"), Name: strAXValue("B")}
-	parent := &axNode{
+	child1 := &accessibility.Node{NodeID: "2", Role: strAXValue("link"), Name: strAXValue("A")}
+	child2 := &accessibility.Node{NodeID: "3", Role: strAXValue("link"), Name: strAXValue("B")}
+	parent := &accessibility.Node{
 		NodeID:   "1",
-		ChildIDs: []string{"2", "3"},
+		ChildIDs: []accessibility.NodeID{"2", "3"},
 	}
-	nodeMap := map[string]*axNode{"1": parent, "2": child1, "3": child2}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": parent, "2": child1, "3": child2}
 
 	out := convertAXNode(parent, nodeMap, true)
 	if out == nil {
@@ -283,14 +286,14 @@ func TestConvertAXNode_UninterestingNonIgnored_MultipleChildren(t *testing.T) {
 
 func TestConvertAXNode_WithChildren(t *testing.T) {
 	// Interesting node with interesting children.
-	child := &axNode{NodeID: "2", Role: strAXValue("listitem"), Name: strAXValue("Item 1")}
-	parent := &axNode{
+	child := &accessibility.Node{NodeID: "2", Role: strAXValue("listitem"), Name: strAXValue("Item 1")}
+	parent := &accessibility.Node{
 		NodeID:   "1",
 		Role:     strAXValue("list"),
 		Name:     strAXValue("Nav"),
-		ChildIDs: []string{"2"},
+		ChildIDs: []accessibility.NodeID{"2"},
 	}
-	nodeMap := map[string]*axNode{"1": parent, "2": child}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": parent, "2": child}
 
 	out := convertAXNode(parent, nodeMap, true)
 	if out == nil {
@@ -309,13 +312,13 @@ func TestConvertAXNode_WithChildren(t *testing.T) {
 
 func TestConvertAXNode_ChildNotInMap(t *testing.T) {
 	// Child ID references a node not in the map → skip silently.
-	parent := &axNode{
+	parent := &accessibility.Node{
 		NodeID:   "1",
 		Role:     strAXValue("navigation"),
 		Name:     strAXValue("Menu"),
-		ChildIDs: []string{"999"},
+		ChildIDs: []accessibility.NodeID{"999"},
 	}
-	nodeMap := map[string]*axNode{"1": parent}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": parent}
 
 	out := convertAXNode(parent, nodeMap, true)
 	if out == nil {
@@ -328,16 +331,16 @@ func TestConvertAXNode_ChildNotInMap(t *testing.T) {
 
 func TestConvertAXNode_PropertyWithNilValue(t *testing.T) {
 	// Property with nil Value should be skipped.
-	n := &axNode{
+	n := &accessibility.Node{
 		NodeID: "1",
 		Role:   strAXValue("button"),
 		Name:   strAXValue("OK"),
-		Properties: []*axProperty{
-			{Name: "disabled", Value: nil},
-			{Name: "focused", Value: &axValue{Type: "boolean", Value: json.RawMessage(`true`)}},
+		Properties: []*accessibility.Property{
+			{Name: accessibility.PropertyNameDisabled, Value: nil},
+			{Name: accessibility.PropertyNameFocused, Value: &accessibility.Value{Type: accessibility.ValueTypeBoolean, Value: jsonv2.Value(`true`)}},
 		},
 	}
-	nodeMap := map[string]*axNode{"1": n}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n}
 
 	out := convertAXNode(n, nodeMap, false)
 	if out == nil {
@@ -363,9 +366,9 @@ func TestBuildAXTree_EmptyInput(t *testing.T) {
 }
 
 func TestBuildAXTree_SingleRoot(t *testing.T) {
-	root := &axNode{NodeID: "1", Role: strAXValue("WebArea"), Name: strAXValue("Page")}
-	nodes := []*axNode{root}
-	nodeMap := map[string]*axNode{"1": root}
+	root := &accessibility.Node{NodeID: "1", Role: strAXValue("WebArea"), Name: strAXValue("Page")}
+	nodes := []*accessibility.Node{root}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": root}
 
 	tree := buildAXTree(nodes, nodeMap, false)
 	if len(tree) != 1 {
@@ -377,10 +380,10 @@ func TestBuildAXTree_SingleRoot(t *testing.T) {
 }
 
 func TestBuildAXTree_ParentChild(t *testing.T) {
-	child := &axNode{NodeID: "2", Role: strAXValue("button"), Name: strAXValue("OK")}
-	root := &axNode{NodeID: "1", Role: strAXValue("WebArea"), Name: strAXValue("Page"), ChildIDs: []string{"2"}}
-	nodes := []*axNode{root, child}
-	nodeMap := map[string]*axNode{"1": root, "2": child}
+	child := &accessibility.Node{NodeID: "2", Role: strAXValue("button"), Name: strAXValue("OK")}
+	root := &accessibility.Node{NodeID: "1", Role: strAXValue("WebArea"), Name: strAXValue("Page"), ChildIDs: []accessibility.NodeID{"2"}}
+	nodes := []*accessibility.Node{root, child}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": root, "2": child}
 
 	tree := buildAXTree(nodes, nodeMap, false)
 	if len(tree) != 1 {
@@ -396,10 +399,10 @@ func TestBuildAXTree_ParentChild(t *testing.T) {
 
 func TestBuildAXTree_MultipleRoots(t *testing.T) {
 	// Two nodes, neither is a child of the other → both are roots.
-	n1 := &axNode{NodeID: "1", Role: strAXValue("navigation"), Name: strAXValue("Nav")}
-	n2 := &axNode{NodeID: "2", Role: strAXValue("main"), Name: strAXValue("Content")}
-	nodes := []*axNode{n1, n2}
-	nodeMap := map[string]*axNode{"1": n1, "2": n2}
+	n1 := &accessibility.Node{NodeID: "1", Role: strAXValue("navigation"), Name: strAXValue("Nav")}
+	n2 := &accessibility.Node{NodeID: "2", Role: strAXValue("main"), Name: strAXValue("Content")}
+	nodes := []*accessibility.Node{n1, n2}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n1, "2": n2}
 
 	tree := buildAXTree(nodes, nodeMap, false)
 	if len(tree) != 2 {
@@ -409,10 +412,10 @@ func TestBuildAXTree_MultipleRoots(t *testing.T) {
 
 func TestBuildAXTree_InterestingOnlyFilters(t *testing.T) {
 	// Root is ignored with one interesting child → collapsed.
-	child := &axNode{NodeID: "2", Role: strAXValue("heading"), Name: strAXValue("Title")}
-	root := &axNode{NodeID: "1", Ignored: true, ChildIDs: []string{"2"}}
-	nodes := []*axNode{root, child}
-	nodeMap := map[string]*axNode{"1": root, "2": child}
+	child := &accessibility.Node{NodeID: "2", Role: strAXValue("heading"), Name: strAXValue("Title")}
+	root := &accessibility.Node{NodeID: "1", Ignored: true, ChildIDs: []accessibility.NodeID{"2"}}
+	nodes := []*accessibility.Node{root, child}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": root, "2": child}
 
 	tree := buildAXTree(nodes, nodeMap, true)
 	if len(tree) != 1 {
@@ -426,10 +429,10 @@ func TestBuildAXTree_InterestingOnlyFilters(t *testing.T) {
 
 func TestBuildAXTree_AllIgnoredNoInteresting(t *testing.T) {
 	// All nodes are ignored with no interesting children → empty tree.
-	n1 := &axNode{NodeID: "1", Ignored: true}
-	n2 := &axNode{NodeID: "2", Ignored: true}
-	nodes := []*axNode{n1, n2}
-	nodeMap := map[string]*axNode{"1": n1, "2": n2}
+	n1 := &accessibility.Node{NodeID: "1", Ignored: true}
+	n2 := &accessibility.Node{NodeID: "2", Ignored: true}
+	nodes := []*accessibility.Node{n1, n2}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": n1, "2": n2}
 
 	tree := buildAXTree(nodes, nodeMap, true)
 	if len(tree) != 0 {
@@ -439,11 +442,11 @@ func TestBuildAXTree_AllIgnoredNoInteresting(t *testing.T) {
 
 func TestBuildAXTree_DeepNesting(t *testing.T) {
 	// Root → ignored wrapper → interesting leaf. interestingOnly=true.
-	leaf := &axNode{NodeID: "3", Role: strAXValue("button"), Name: strAXValue("Save")}
-	wrapper := &axNode{NodeID: "2", Ignored: true, ChildIDs: []string{"3"}}
-	root := &axNode{NodeID: "1", Role: strAXValue("WebArea"), Name: strAXValue("Page"), ChildIDs: []string{"2"}}
-	nodes := []*axNode{root, wrapper, leaf}
-	nodeMap := map[string]*axNode{"1": root, "2": wrapper, "3": leaf}
+	leaf := &accessibility.Node{NodeID: "3", Role: strAXValue("button"), Name: strAXValue("Save")}
+	wrapper := &accessibility.Node{NodeID: "2", Ignored: true, ChildIDs: []accessibility.NodeID{"3"}}
+	root := &accessibility.Node{NodeID: "1", Role: strAXValue("WebArea"), Name: strAXValue("Page"), ChildIDs: []accessibility.NodeID{"2"}}
+	nodes := []*accessibility.Node{root, wrapper, leaf}
+	nodeMap := map[accessibility.NodeID]*accessibility.Node{"1": root, "2": wrapper, "3": leaf}
 
 	tree := buildAXTree(nodes, nodeMap, true)
 	if len(tree) != 1 {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/remote"
 
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
 	"github.com/greatliontech/chromedp-mcp/internal/tab"
@@ -136,14 +137,28 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
 	}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(parentCtx, wsURL, chromedp.NoModifyURL)
+	allocCtx, rawAllocCancel := remote.NewAllocator(parentCtx, wsURL, remote.NoModifyURL)
+	// remote.NewAllocator's cancel does not call Allocator.Wait (unlike
+	// NewExecAllocator). Only call Wait AFTER startBrowserContext returns (and
+	// in Close) — never inside startBrowserContext's AfterFunc, which would race
+	// Allocator.Wait() against remote.Allocator.Allocate()'s wg.Go on early cancel.
+	waitAlloc := func() {
+		if c := chromedp.FromContext(allocCtx); c != nil && c.Allocator != nil {
+			c.Allocator.Wait()
+		}
+	}
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Force the connection.
-	if err := startBrowserContext(startupCtx, allocCancel, browserCtx, browserCancel); err != nil {
+	if err := startBrowserContext(startupCtx, rawAllocCancel, browserCtx, browserCancel); err != nil {
+		waitAlloc()
 		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
 	}
 
+	allocCancel := func() {
+		rawAllocCancel()
+		waitAlloc()
+	}
 	return newBrowser(id, ModeConnect, allocCancel, browserCtx, browserCancel, opts.DownloadDir), nil
 }
 
@@ -165,7 +180,7 @@ func startBrowserContext(
 		allocCancel()
 	})
 	stopStartup := context.AfterFunc(startupCtx, cleanup)
-	err := chromedp.Run(browserCtx)
+	err := chromedp.Do(browserCtx)
 	stopped := stopStartup()
 	if err != nil || !stopped {
 		cleanup()

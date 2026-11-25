@@ -6,18 +6,11 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
-
-// evalAwaitPromise is a chromedp.EvaluateOption that tells the CDP
-// Runtime.evaluate call to await the resulting Promise before returning.
-func evalAwaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-	return p.WithAwaitPromise(true)
-}
 
 // EvaluateInput is the input for evaluate.
 type EvaluateInput struct {
@@ -63,7 +56,7 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 			defer cancel()
 
 			// Wait for selector to appear in the DOM.
-			if err := chromedp.Run(sctx, chromedp.WaitReady(input.Selector, chromedp.ByQuery)); err != nil {
+			if err := chromedp.Do(sctx, chromedp.WaitReady(chromedp.CSS(input.Selector))); err != nil {
 				return nil, nil, selectorError(tctx, input.Selector, err)
 			}
 
@@ -75,12 +68,12 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 			return (function(el) { %s })(el);
 		})()`, input.Selector, input.Selector, input.Expression)
 
-			var result interface{}
-			evalOpts := []chromedp.EvaluateOption{chromedp.EvalAsValue}
+			var evalOpts []chromedp.EvaluateOption
 			if input.AwaitPromise == nil || *input.AwaitPromise {
-				evalOpts = append(evalOpts, evalAwaitPromise)
+				evalOpts = append(evalOpts, chromedp.EvalAwaitPromise)
 			}
-			if err := chromedp.Run(tctx, chromedp.Evaluate(js, &result, evalOpts...)); err != nil {
+			result, err := chromedp.Run(tctx, chromedp.Evaluate[any](js, evalOpts...))
+			if err != nil {
 				return nil, nil, err
 			}
 
@@ -92,13 +85,13 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		// No selector — evaluate the expression directly.
-		var result interface{}
-		evalOpts := []chromedp.EvaluateOption{chromedp.EvalAsValue}
+		var evalOpts []chromedp.EvaluateOption
 		if input.AwaitPromise == nil || *input.AwaitPromise {
-			evalOpts = append(evalOpts, evalAwaitPromise)
+			evalOpts = append(evalOpts, chromedp.EvalAwaitPromise)
 		}
 
-		if err := chromedp.Run(tctx, chromedp.Evaluate(input.Expression, &result, evalOpts...)); err != nil {
+		result, err := chromedp.Run(tctx, chromedp.Evaluate[any](input.Expression, evalOpts...))
+		if err != nil {
 			return nil, nil, err
 		}
 

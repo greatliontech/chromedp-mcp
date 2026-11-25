@@ -50,7 +50,7 @@ func (p *Performance) HandleTimelineEvent(ev *performancetimeline.EventTimelineE
 	switch entry.Type {
 	case "layout-shift":
 		ls := LayoutShiftEntry{
-			Timestamp: entry.Time.Time(),
+			Timestamp: timeFromEpochSeconds(entry.Time),
 		}
 		if entry.LayoutShiftDetails != nil {
 			ls.Value = entry.LayoutShiftDetails.Value
@@ -78,15 +78,13 @@ func (p *Performance) HandleTimelineEvent(ev *performancetimeline.EventTimelineE
 
 	case "largest-contentful-paint":
 		lcp := LCPEntry{
-			Timestamp: entry.Time.Time(),
+			Timestamp: timeFromEpochSeconds(entry.Time),
 		}
 		if entry.LcpDetails != nil {
-			if entry.LcpDetails.RenderTime != nil {
-				t := entry.LcpDetails.RenderTime.Time()
+			if t := timeFromEpochSeconds(entry.LcpDetails.RenderTime); !t.IsZero() {
 				lcp.RenderTime = &t
 			}
-			if entry.LcpDetails.LoadTime != nil {
-				t := entry.LcpDetails.LoadTime.Time()
+			if t := timeFromEpochSeconds(entry.LcpDetails.LoadTime); !t.IsZero() {
 				lcp.LoadTime = &t
 			}
 			lcp.Size = entry.LcpDetails.Size

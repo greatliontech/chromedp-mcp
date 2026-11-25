@@ -122,11 +122,6 @@ func modeSchemaFor[In any](allowed ...string) *jsonschema.Schema {
 	return s
 }
 
-// ptrBool returns a pointer to a bool value.
-func ptrBool(v bool) *bool {
-	return &v
-}
-
 // TabInput is embedded by tool inputs that operate on a tab but do not
 // involve CSS selector polling.
 type TabInput struct {
@@ -200,11 +195,11 @@ func selectorError(parentCtx context.Context, selector string, err error) error 
 	// We use JS document.querySelector here rather than CDP DOM.querySelector
 	// because DOM.getDocument() invalidates chromedp's internal DOM tracking,
 	// which can break subsequent operations on the same tab.
-	var exists bool
 	checkCtx, cancel := context.WithTimeout(parentCtx, 500*time.Millisecond)
 	defer cancel()
 	js := fmt.Sprintf("document.querySelector(%q) !== null", selector)
-	if evalErr := chromedp.Run(checkCtx, chromedp.Evaluate(js, &exists)); evalErr != nil {
+	exists, evalErr := chromedp.Run(checkCtx, chromedp.Evaluate[bool](js))
+	if evalErr != nil {
 		return err // Can't check, return original error.
 	}
 	if exists {

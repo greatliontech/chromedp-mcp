@@ -12,7 +12,6 @@ import (
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -93,36 +92,42 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 					return nil, struct{}{}, err
 				}
 			}
-			err = chromedp.Run(tctx, elementScreenshot(input.Selector, format, jpegQuality, scale, &buf))
+			buf, err = chromedp.Run(tctx, elementScreenshot(input.Selector, format, jpegQuality, scale))
 		} else {
 			// Viewport or full-page screenshot. Build the CDP command
 			// directly so we can set format, quality, and clip.Scale.
-			err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				params := page.CaptureScreenshot().
-					WithFormat(format).
-					WithFromSurface(true)
+			err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				params := page.CaptureScreenshotParams{
+					Format:      format,
+					FromSurface: new(true),
+				}
 				if jpegQuality > 0 {
-					params = params.WithQuality(jpegQuality)
+					params.Quality = new(jpegQuality)
 				}
 				if input.FullPage {
-					params = params.WithCaptureBeyondViewport(true)
+					params.CaptureBeyondViewport = new(true)
 				}
 
 				// When max_dimension is set, use a clip with
 				// Scale < 1 so Chrome downscales during capture.
 				if input.MaxDimension > 0 {
-					clip, captureScale, err := captureClip(ctx, input.FullPage, input.MaxDimension)
+					clip, captureScale, err := captureClip(ctx, tgt, input.FullPage, input.MaxDimension)
 					if err != nil {
 						return err
 					}
 					if captureScale < 1.0 {
 						clip.Scale = captureScale
-						params = params.WithClip(clip).WithCaptureBeyondViewport(true)
+						params.Clip = clip
+						params.CaptureBeyondViewport = new(true)
 					}
 				}
 
-				buf, err = params.Do(ctx)
-				return err
+				res, err := cdp.Call(ctx, tgt, page.CaptureScreenshot, params)
+				if err != nil {
+					return err
+				}
+				buf = res.Data
+				return nil
 			}))
 		}
 		if err != nil {
@@ -172,32 +177,28 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		var pdfData []byte
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			printBg := input.PrintBackground == nil || *input.PrintBackground
-			params := page.PrintToPDF().WithPrintBackground(printBg)
-			if input.Landscape {
-				params = params.WithLandscape(true)
-			}
-			if input.Scale > 0 {
-				params = params.WithScale(input.Scale)
-			}
-			if input.PaperWidth > 0 {
-				params = params.WithPaperWidth(input.PaperWidth)
-			}
-			if input.PaperHeight > 0 {
-				params = params.WithPaperHeight(input.PaperHeight)
-			}
-			if input.PageRanges != "" {
-				params = params.WithPageRanges(input.PageRanges)
-			}
-			var err error
-			pdfData, _, err = params.Do(ctx)
-			return err
-		}))
+		printBg := input.PrintBackground == nil || *input.PrintBackground
+		pdfParams := page.PrintToPDFParams{
+			PrintBackground: new(printBg),
+			PageRanges:      input.PageRanges,
+		}
+		if input.Landscape {
+			pdfParams.Landscape = new(true)
+		}
+		if input.Scale > 0 {
+			pdfParams.Scale = input.Scale
+		}
+		if input.PaperWidth > 0 {
+			pdfParams.PaperWidth = input.PaperWidth
+		}
+		if input.PaperHeight > 0 {
+			pdfParams.PaperHeight = input.PaperHeight
+		}
+		pdfRes, err := chromedp.Call(tctx, page.PrintToPDF, pdfParams)
 		if err != nil {
 			return nil, struct{}{}, err
 		}
+		pdfData := pdfRes.Data
 
 		// When saving to disk, return the file path instead of the
 		// (potentially large) inline blob.
@@ -247,10 +248,12 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			scale = 1.0
 		}
 
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			return emulation.SetDeviceMetricsOverride(int64(input.Width), int64(input.Height), scale, input.Mobile).Do(ctx)
-		}))
-		if err != nil {
+		if _, err := chromedp.Call(tctx, emulation.SetDeviceMetricsOverride, emulation.SetDeviceMetricsOverrideParams{
+			Width:             int64(input.Width),
+			Height:            int64(input.Height),
+			DeviceScaleFactor: scale,
+			Mobile:            input.Mobile,
+		}); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -294,19 +297,25 @@ func saveToDownloadDir(dir, filename, defaultExt string, data []byte) (string, e
 // dimension the returned scale is < 1, telling Chrome to downscale during
 // capture (GPU-accelerated). If fullPage is true the clip covers the entire
 // document; otherwise it covers the CSS viewport.
-func captureClip(ctx context.Context, fullPage bool, maxDim int) (*page.Viewport, float64, error) {
-	_, _, _, cssLayout, _, cssContent, err := page.GetLayoutMetrics().Do(ctx)
+func captureClip(ctx context.Context, tgt *chromedp.Target, fullPage bool, maxDim int) (*page.Viewport, float64, error) {
+	metrics, err := cdp.Call(ctx, tgt, page.GetLayoutMetrics, cdp.Empty{})
 	if err != nil {
 		return nil, 0, fmt.Errorf("getting layout metrics: %w", err)
 	}
 
 	var w, h float64
 	if fullPage {
-		w = math.Ceil(cssContent.Width)
-		h = math.Ceil(cssContent.Height)
+		if metrics.CSSContentSize == nil {
+			return nil, 0, fmt.Errorf("getting layout metrics: missing CSS content size")
+		}
+		w = math.Ceil(metrics.CSSContentSize.Width)
+		h = math.Ceil(metrics.CSSContentSize.Height)
 	} else {
-		w = float64(cssLayout.ClientWidth)
-		h = float64(cssLayout.ClientHeight)
+		if metrics.CSSLayoutViewport == nil {
+			return nil, 0, fmt.Errorf("getting layout metrics: missing CSS layout viewport")
+		}
+		w = float64(metrics.CSSLayoutViewport.ClientWidth)
+		h = float64(metrics.CSSLayoutViewport.ClientHeight)
 	}
 
 	scale := 1.0
@@ -328,23 +337,25 @@ func captureClip(ctx context.Context, fullPage bool, maxDim int) (*page.Viewport
 // the given format, quality, and scale. It mirrors chromedp's ScreenshotNodes
 // logic (bounding rect → rounded clip → CaptureScreenshot) but allows the
 // caller to specify format and quality instead of hardcoding PNG.
-func elementScreenshot(selector string, format page.CaptureScreenshotFormat, quality int64, scale float64, buf *[]byte) chromedp.QueryAction {
-	return chromedp.QueryAfter(selector, func(ctx context.Context, _ runtime.ExecutionContextID, nodes ...*cdp.Node) error {
+func elementScreenshot(selector string, format page.CaptureScreenshotFormat, quality int64, scale float64) chromedp.Action[[]byte] {
+	return chromedp.QueryAfter(chromedp.CSS(selector), func(ctx context.Context, tgt *chromedp.Target, nodes []*chromedp.Node) ([]byte, error) {
 		if len(nodes) < 1 {
-			return fmt.Errorf("selector %q did not return any nodes", selector)
+			return nil, fmt.Errorf("selector %q did not return any nodes", selector)
 		}
 
 		// Get the element's viewport-relative bounding rect via CDP
 		// DOM.getContentQuads, which returns quads as 8 floats
 		// [x1,y1, x2,y2, x3,y3, x4,y4].
-		quads, err := dom.GetContentQuads().WithBackendNodeID(nodes[0].BackendNodeID).Do(ctx)
+		quadRes, err := cdp.Call(ctx, tgt, dom.GetContentQuads, dom.GetContentQuadsParams{
+			BackendNodeID: nodes[0].BackendNodeID,
+		})
 		if err != nil {
-			return fmt.Errorf("getting content quads for %q: %w", selector, err)
+			return nil, fmt.Errorf("getting content quads for %q: %w", selector, err)
 		}
-		if len(quads) == 0 || len(quads[0]) < 8 {
-			return fmt.Errorf("element %q has no content quads", selector)
+		if len(quadRes.Quads) == 0 || len(quadRes.Quads[0]) < 8 {
+			return nil, fmt.Errorf("element %q has no content quads", selector)
 		}
-		q := quads[0]
+		q := quadRes.Quads[0]
 		// Derive bounding rect from the quad corners.
 		minX := math.Min(math.Min(q[0], q[2]), math.Min(q[4], q[6]))
 		minY := math.Min(math.Min(q[1], q[3]), math.Min(q[5], q[7]))
@@ -365,18 +376,22 @@ func elementScreenshot(selector string, format page.CaptureScreenshotFormat, qua
 			Scale:  scale,
 		}
 
-		params := page.CaptureScreenshot().
-			WithFormat(format).
-			WithCaptureBeyondViewport(true).
-			WithFromSurface(true).
-			WithClip(clip)
+		params := page.CaptureScreenshotParams{
+			Format:                format,
+			CaptureBeyondViewport: new(true),
+			FromSurface:           new(true),
+			Clip:                  clip,
+		}
 		if quality > 0 {
-			params = params.WithQuality(quality)
+			params.Quality = new(quality)
 		}
 
-		*buf, err = params.Do(ctx)
-		return err
-	}, chromedp.NodeVisible, chromedp.ByQuery)
+		res, err := cdp.Call(ctx, tgt, page.CaptureScreenshot, params)
+		if err != nil {
+			return nil, err
+		}
+		return res.Data, nil
+	}, chromedp.NodeVisible)
 }
 
 // elementScale returns the scale factor needed to fit an element within
@@ -385,7 +400,6 @@ func elementScreenshot(selector string, format page.CaptureScreenshotFormat, qua
 // outside the QueryAfter callback where the element node isn't yet resolved,
 // and DOM.getDocument() would invalidate chromedp's internal DOM tracking.
 func elementScale(ctx context.Context, selector string, maxDim int) (float64, error) {
-	var w, h float64
 	js := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%q);
 		if (!el) return null;
@@ -393,19 +407,19 @@ func elementScale(ctx context.Context, selector string, maxDim int) (float64, er
 		return {w: r.width, h: r.height};
 	})()`, selector)
 
-	var result struct {
+	type elemDims struct {
 		W float64 `json:"w"`
 		H float64 `json:"h"`
 	}
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &result)); err != nil {
+	result, err := chromedp.Run(ctx, chromedp.Evaluate[*elemDims](js))
+	if err != nil {
 		return 0, fmt.Errorf("evaluating element dimensions for %q: %w", selector, err)
 	}
-	w, h = result.W, result.H
-	if w == 0 && h == 0 {
+	if result == nil || (result.W == 0 && result.H == 0) {
 		return 1.0, nil
 	}
 
-	largest := math.Max(w, h)
+	largest := math.Max(result.W, result.H)
 	if largest <= float64(maxDim) {
 		return 1.0, nil
 	}

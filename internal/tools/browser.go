@@ -111,7 +111,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		Name:        "browser_close",
 		Description: "Close a browser. In launch mode kills Chrome. In connect mode disconnects.",
 		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: ptrBool(true),
+			DestructiveHint: new(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserCloseInput) (*mcp.CallToolResult, BrowserCloseOutput, error) {
 		id := input.Browser

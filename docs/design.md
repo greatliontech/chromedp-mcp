@@ -863,12 +863,12 @@ Emulate network conditions (offline, latency, throttled bandwidth). Call with al
 
 #### `block_urls`
 
-Block URLs matching patterns. Supports `*` wildcards.
+Block URLs matching patterns using CDP's `Network.setBlockedURLs` (`urlPatterns`). Accepts absolute WHATWG `URLPattern` strings (e.g. `https://example.com/*`, `*://*:*/*.css`) as well as common `*` wildcards (e.g. `*.png`, `*/api/*`, `*.example.com`, `ads.example.com/pixel.gif`), which are normalized to absolute `URLPattern` form.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `patterns` | []string | yes | URL patterns to block. Pass empty array to clear. |
+| `patterns` | []string | yes | Non-empty URL patterns to block. Pass empty array to clear. |
 
 ### Observation
 
@@ -1018,8 +1018,8 @@ type RingBuffer[T any] struct {
 
 1. **Startup**: Create `browser.Manager` (empty — no browser yet). Create MCP `Server`. Register all tools. Run `server.Run(ctx, StdioTransport)`.
 2. **First tool call**: If no browser exists, the tool returns an error telling the LLM to call `browser_launch` or `browser_connect`. Same for missing tabs.
-3. **Browser creation**: `browser_launch` calls `chromedp.NewExecAllocator` + `chromedp.NewContext`. `browser_connect` calls `chromedp.NewRemoteAllocator` + `chromedp.NewContext`. Both create a `tab.Manager` for the browser.
-4. **Tab creation**: `tab.Manager.NewTab()` calls `chromedp.NewContext(browserCtx)`, starts CDP event listeners (`ListenTarget`), creates collectors, returns tab ID.
+3. **Browser creation**: `browser_launch` calls `chromedp.NewExecAllocator` + `chromedp.NewContext`. `browser_connect` resolves `/json/version` when needed and calls `remote.NewAllocator` + `chromedp.NewContext`. Both create a `tab.Manager` for the browser.
+4. **Tab creation**: `tab.Manager.NewTab()` calls `chromedp.NewContext(browserCtx, chromedp.WithListener(...))`, creates collectors, attaches CDP event listeners before target startup, and returns the tab ID.
 5. **Tool execution**: Tool handler resolves the target tab (explicit ID → active tab → auto-create), executes chromedp actions on the tab's context, reads from collectors as needed, returns the result.
 6. **Shutdown**: Server context is cancelled. All tab contexts cancelled (closing targets). All browser contexts cancelled (killing launched Chromes, disconnecting from connected ones).
 

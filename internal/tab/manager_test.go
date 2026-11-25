@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	browserCancel = bc
 
 	// Force Chrome to start.
-	if err := chromedp.Run(bCtx); err != nil {
+	if err := chromedp.Do(bCtx); err != nil {
 		bc()
 		ac()
 		os.Exit(1)
@@ -452,17 +452,19 @@ func TestTabInfoDoesNotHangOnJSDialog(t *testing.T) {
 	dialogOpened := make(chan struct{}, 1)
 	lctx, lcancel := context.WithCancel(tb.Context())
 	defer lcancel()
-	chromedp.ListenTarget(lctx, func(ev any) {
+	if err := chromedp.Listen(lctx, func(ev any) {
 		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
 			select {
 			case dialogOpened <- struct{}{}:
 			default:
 			}
 		}
-	})
+	}); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
 
 	// Trigger an async alert() that blocks the renderer's JS thread.
-	if err := chromedp.Run(tb.Context(), chromedp.Evaluate(`setTimeout(() => alert('blocked'), 10); document.title = 'Dialog Page';`, nil)); err != nil {
+	if err := chromedp.Do(tb.Context(), chromedp.Evaluate[chromedp.Void](`setTimeout(() => alert('blocked'), 10); document.title = 'Dialog Page';`)); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	select {
@@ -486,7 +488,7 @@ func TestTabInfoDoesNotHangOnJSDialog(t *testing.T) {
 	}
 
 	// Dismiss the dialog cleanly.
-	_ = chromedp.Run(tb.Context(), page.HandleJavaScriptDialog(true))
+	_, _ = chromedp.Call(tb.Context(), page.HandleJavaScriptDialog, page.HandleJavaScriptDialogParams{Accept: true})
 }
 
 func TestListPropagatesCancelledContext(t *testing.T) {

@@ -7,97 +7,11 @@ import (
 
 	"github.com/chromedp/cdproto/accessibility"
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/css"
-	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
-
-// Lenient accessibility types.
-//
-// cdproto's accessibility types use strict enum unmarshaling for
-// PropertyName, ValueType, etc. Newer Chrome versions may return
-// values (e.g. "uninteresting") that cdproto doesn't know about,
-// causing deserialization failures. These mirror types use plain
-// strings to tolerate unknown enum values gracefully.
-
-// axValue mirrors accessibility.Value with a plain string type.
-type axValue struct {
-	Type  string          `json:"type"`
-	Value json.RawMessage `json:"value,omitempty"`
-}
-
-// axProperty mirrors accessibility.Property with a plain string name.
-type axProperty struct {
-	Name  string   `json:"name"`
-	Value *axValue `json:"value"`
-}
-
-// axNode mirrors accessibility.Node with lenient types throughout.
-type axNode struct {
-	NodeID           string            `json:"nodeId"`
-	Ignored          bool              `json:"ignored"`
-	IgnoredReasons   []*axProperty     `json:"ignoredReasons,omitempty"`
-	Role             *axValue          `json:"role,omitempty"`
-	ChromeRole       *axValue          `json:"chromeRole,omitempty"`
-	Name             *axValue          `json:"name,omitempty"`
-	Description      *axValue          `json:"description,omitempty"`
-	Value            *axValue          `json:"value,omitempty"`
-	Properties       []*axProperty     `json:"properties,omitempty"`
-	ParentID         string            `json:"parentId,omitempty"`
-	ChildIDs         []string          `json:"childIds,omitempty"`
-	BackendDOMNodeID cdp.BackendNodeID `json:"backendDOMNodeId,omitempty"`
-	FrameID          cdp.FrameID       `json:"frameId,omitempty"`
-}
-
-// axFullTreeParams mirrors accessibility.GetFullAXTreeParams.
-type axFullTreeParams struct {
-	Depth   int64       `json:"depth,omitempty"`
-	FrameID cdp.FrameID `json:"frameId,omitempty"`
-}
-
-// axFullTreeReturns is the lenient response for GetFullAXTree.
-type axFullTreeReturns struct {
-	Nodes []*axNode `json:"nodes,omitempty"`
-}
-
-// axPartialTreeParams mirrors accessibility.GetPartialAXTreeParams.
-type axPartialTreeParams struct {
-	BackendNodeID  cdp.BackendNodeID `json:"backendNodeId,omitempty"`
-	FetchRelatives bool              `json:"fetchRelatives,omitempty"`
-}
-
-// axPartialTreeReturns is the lenient response for GetPartialAXTree.
-type axPartialTreeReturns struct {
-	Nodes []*axNode `json:"nodes,omitempty"`
-}
-
-// getFullAXTree fetches the full accessibility tree using lenient types
-// that tolerate unknown enum values from newer Chrome versions.
-func getFullAXTree(ctx context.Context, depth int64) ([]*axNode, error) {
-	params := &axFullTreeParams{Depth: depth}
-	var res axFullTreeReturns
-	if err := cdp.Execute(ctx, accessibility.CommandGetFullAXTree, params, &res); err != nil {
-		return nil, err
-	}
-	return res.Nodes, nil
-}
-
-// getPartialAXTree fetches a partial accessibility tree using lenient types
-// that tolerate unknown enum values from newer Chrome versions.
-func getPartialAXTree(ctx context.Context, backendNodeID cdp.BackendNodeID, fetchRelatives bool) ([]*axNode, error) {
-	params := &axPartialTreeParams{
-		BackendNodeID:  backendNodeID,
-		FetchRelatives: fetchRelatives,
-	}
-	var res axPartialTreeReturns
-	if err := cdp.Execute(ctx, accessibility.CommandGetPartialAXTree, params, &res); err != nil {
-		return nil, err
-	}
-	return res.Nodes, nil
-}
 
 // QueryInput is the input for query.
 type QueryInput struct {
@@ -204,12 +118,12 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		includeAttrs := input.Attributes == nil || *input.Attributes
 		includeText := input.Text == nil || *input.Text
 
-		var nodes []*cdp.Node
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
-		if err := chromedp.Run(sctx, chromedp.Nodes(input.Selector, &nodes, chromedp.ByQueryAll)); err != nil {
+		nodes, err := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSSAll(input.Selector)))
+		if err != nil {
 			return nil, QueryOutput{}, selectorError(tctx, input.Selector, err)
 		}
 
@@ -232,20 +146,17 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 				elem.Attributes = attrs
 			}
 			if includeText {
-				var text string
-				if err := chromedp.Run(tctx, chromedp.TextContent(node.FullXPath(), &text, chromedp.BySearch)); err == nil {
+				if text, err := chromedp.Run(tctx, chromedp.TextContent(chromedp.Search(node.FullXPath()))); err == nil {
 					elem.Text = text
 				}
 			}
 			if input.OuterHTML {
-				var html string
-				if err := chromedp.Run(tctx, chromedp.OuterHTML(node.FullXPath(), &html, chromedp.BySearch)); err == nil {
+				if html, err := chromedp.Run(tctx, chromedp.OuterHTML(chromedp.Search(node.FullXPath()))); err == nil {
 					elem.OuterHTML = html
 				}
 			}
 			if len(input.ComputedStyle) > 0 {
-				var styles []*css.ComputedStyleProperty
-				if err := chromedp.Run(tctx, chromedp.ComputedStyle(node.FullXPath(), &styles, chromedp.BySearch)); err == nil {
+				if styles, err := chromedp.Run(tctx, chromedp.ComputedStyle(chromedp.Search(node.FullXPath()))); err == nil {
 					cs := make(map[string]string)
 					wanted := make(map[string]bool)
 					for _, p := range input.ComputedStyle {
@@ -260,8 +171,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 				}
 			}
 			if input.BBox {
-				var model *dom.BoxModel
-				if err := chromedp.Run(tctx, chromedp.Dimensions(node.FullXPath(), &model, chromedp.BySearch)); err == nil && model != nil {
+				if model, err := chromedp.Run(tctx, chromedp.Dimensions(chromedp.Search(node.FullXPath()))); err == nil && model != nil {
 					elem.BBox = &BoundingBox{
 						X:      model.Content[0],
 						Y:      model.Content[1],
@@ -301,9 +211,9 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
 		if outer {
-			err = chromedp.Run(sctx, chromedp.OuterHTML(selector, &html, chromedp.ByQuery))
+			html, err = chromedp.Run(sctx, chromedp.OuterHTML(chromedp.CSS(selector)))
 		} else {
-			err = chromedp.Run(sctx, chromedp.InnerHTML(selector, &html, chromedp.ByQuery))
+			html, err = chromedp.Run(sctx, chromedp.InnerHTML(chromedp.CSS(selector)))
 		}
 		if err != nil {
 			return nil, GetHTMLOutput{}, selectorError(tctx, selector, err)
@@ -329,18 +239,18 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			selector = "body"
 		}
 
-		var text string
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		sctx, scancel := selectorContext(tctx, input.Timeout)
 		defer scancel()
-		var action chromedp.QueryAction
+		var action chromedp.Action[string]
 		if input.Hidden {
-			action = chromedp.TextContent(selector, &text, chromedp.ByQuery)
+			action = chromedp.TextContent(chromedp.CSS(selector))
 		} else {
-			action = chromedp.Text(selector, &text, chromedp.ByQuery)
+			action = chromedp.Text(chromedp.CSS(selector))
 		}
-		if err := chromedp.Run(sctx, action); err != nil {
+		text, err := chromedp.Run(sctx, action)
+		if err != nil {
 			return nil, GetTextOutput{}, selectorError(tctx, selector, err)
 		}
 		return nil, GetTextOutput{Text: text}, nil
@@ -361,7 +271,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		interestingOnly := input.InterestingOnly == nil || *input.InterestingOnly
 
-		var nodes []*axNode
+		var nodes []*accessibility.Node
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		runCtx := tctx
@@ -370,23 +280,36 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			runCtx, cancel = selectorContext(tctx, input.Timeout)
 			defer cancel()
 		}
-		err = chromedp.Run(runCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Do(runCtx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
 			if input.Selector != "" {
 				// Get the DOM node ID for the selector first.
-				var domNodes []*cdp.Node
-				if err := chromedp.Run(ctx, chromedp.Nodes(input.Selector, &domNodes, chromedp.ByQuery)); err != nil {
+				domNodes, err := chromedp.Nodes(chromedp.CSS(input.Selector))(ctx, tgt)
+				if err != nil {
 					return err
 				}
 				if len(domNodes) == 0 {
 					return fmt.Errorf("selector %q matched no elements", input.Selector)
 				}
-				var err error
-				nodes, err = getPartialAXTree(ctx, domNodes[0].BackendNodeID, input.Depth > 0)
+				res, err := cdp.Call(ctx, tgt, accessibility.GetPartialAXTree, accessibility.GetPartialAXTreeParams{
+					BackendNodeID:  domNodes[0].BackendNodeID,
+					FetchRelatives: new(true),
+				})
+				if err != nil {
+					return err
+				}
+				nodes = res.Nodes
+				return nil
+			}
+			var params accessibility.GetFullAXTreeParams
+			if input.Depth > 0 {
+				params.Depth = new(int64(input.Depth))
+			}
+			res, err := cdp.Call(ctx, tgt, accessibility.GetFullAXTree, params)
+			if err != nil {
 				return err
 			}
-			var err error
-			nodes, err = getFullAXTree(ctx, int64(input.Depth))
-			return err
+			nodes = res.Nodes
+			return nil
 		}))
 		if err != nil {
 			if input.Selector != "" {
@@ -396,7 +319,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		// Build a lookup map for tree construction.
-		nodeMap := make(map[string]*axNode)
+		nodeMap := make(map[accessibility.NodeID]*accessibility.Node, len(nodes))
 		for _, n := range nodes {
 			nodeMap[n.NodeID] = n
 		}
@@ -408,14 +331,14 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 }
 
-// buildAXTree converts lenient accessibility nodes into the output format.
-func buildAXTree(nodes []*axNode, nodeMap map[string]*axNode, interestingOnly bool) []AXNodeOutput {
+// buildAXTree converts CDP accessibility nodes into the output format.
+func buildAXTree(nodes []*accessibility.Node, nodeMap map[accessibility.NodeID]*accessibility.Node, interestingOnly bool) []AXNodeOutput {
 	if len(nodes) == 0 {
 		return nil
 	}
 
 	// Find root nodes (those without a parent or whose parent is not in the map).
-	childSet := make(map[string]bool)
+	childSet := make(map[accessibility.NodeID]bool)
 	for _, n := range nodes {
 		for _, childID := range n.ChildIDs {
 			childSet[childID] = true
@@ -434,7 +357,7 @@ func buildAXTree(nodes []*axNode, nodeMap map[string]*axNode, interestingOnly bo
 	return roots
 }
 
-func convertAXNode(n *axNode, nodeMap map[string]*axNode, interestingOnly bool) *AXNodeOutput {
+func convertAXNode(n *accessibility.Node, nodeMap map[accessibility.NodeID]*accessibility.Node, interestingOnly bool) *AXNodeOutput {
 	if n.Ignored && interestingOnly {
 		// Still process children — ignored nodes may have interesting children.
 		var children []AXNodeOutput
@@ -456,16 +379,16 @@ func convertAXNode(n *axNode, nodeMap map[string]*axNode, interestingOnly bool) 
 
 	out := &AXNodeOutput{}
 	if n.Role != nil {
-		out.Role = lenientAXValueString(n.Role)
+		out.Role = axValueString(n.Role)
 	}
 	if n.Name != nil {
-		out.Name = lenientAXValueString(n.Name)
+		out.Name = axValueString(n.Name)
 	}
 	if n.Value != nil {
-		out.Value = lenientAXValueString(n.Value)
+		out.Value = axValueString(n.Value)
 	}
 	if n.Description != nil {
-		out.Description = lenientAXValueString(n.Description)
+		out.Description = axValueString(n.Description)
 	}
 
 	// Extract interesting properties.
@@ -473,7 +396,7 @@ func convertAXNode(n *axNode, nodeMap map[string]*axNode, interestingOnly bool) 
 		props := make(map[string]string)
 		for _, p := range n.Properties {
 			if p.Value != nil {
-				props[p.Name] = lenientAXValueString(p.Value)
+				props[string(p.Name)] = axValueString(p.Value)
 			}
 		}
 		if len(props) > 0 {
@@ -512,13 +435,13 @@ func convertAXNode(n *axNode, nodeMap map[string]*axNode, interestingOnly bool) 
 	return out
 }
 
-// lenientAXValueString extracts a string from a lenient axValue.
-func lenientAXValueString(v *axValue) string {
-	if v == nil || v.Value == nil {
+// axValueString extracts a string from a CDP accessibility.Value.
+func axValueString(v *accessibility.Value) string {
+	if v == nil || len(v.Value) == 0 {
 		return ""
 	}
 	var s string
-	if err := json.Unmarshal(v.Value, &s); err == nil {
+	if err := json.Unmarshal([]byte(v.Value), &s); err == nil {
 		return s
 	}
 	// Fall back to raw JSON.

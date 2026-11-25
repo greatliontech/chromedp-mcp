@@ -88,7 +88,7 @@ func TestWSFrameSentText(t *testing.T) {
 		Response: &network.WebSocketFrame{
 			Opcode:      1,
 			Mask:        true,
-			PayloadData: `{"hello":"world"}`,
+			PayloadData: []byte(`{"hello":"world"}`),
 		},
 	})
 
@@ -136,7 +136,7 @@ func TestWSFrameReceivedBinary(t *testing.T) {
 		Timestamp: monoTime(time.Now()),
 		Response: &network.WebSocketFrame{
 			Opcode:      2,
-			PayloadData: base64.StdEncoding.EncodeToString(binary),
+			PayloadData: binary,
 		},
 	})
 
@@ -178,7 +178,7 @@ func TestWSFrameTextTruncatedAtRuneBoundary(t *testing.T) {
 		Timestamp: monoTime(time.Now()),
 		Response: &network.WebSocketFrame{
 			Opcode:      1,
-			PayloadData: payload,
+			PayloadData: []byte(payload),
 		},
 	})
 
@@ -212,7 +212,7 @@ func TestWSFrameBinaryTruncated(t *testing.T) {
 		Timestamp: monoTime(time.Now()),
 		Response: &network.WebSocketFrame{
 			Opcode:      2,
-			PayloadData: base64.StdEncoding.EncodeToString(raw),
+			PayloadData: raw,
 		},
 	})
 
@@ -250,7 +250,7 @@ func TestWSFramesPeekVsDrain(t *testing.T) {
 			Timestamp: monoTime(time.Now()),
 			Response: &network.WebSocketFrame{
 				Opcode:      1,
-				PayloadData: "msg",
+				PayloadData: []byte("msg"),
 			},
 		})
 	}
@@ -302,7 +302,7 @@ func TestWSFrameRingEvictsOldest(t *testing.T) {
 			Timestamp: monoTime(time.Now()),
 			Response: &network.WebSocketFrame{
 				Opcode:      1,
-				PayloadData: string(rune('A' + i)),
+				PayloadData: []byte(string(rune('A' + i))),
 			},
 		})
 	}
@@ -356,7 +356,7 @@ func TestWSClosedRetainsConnection(t *testing.T) {
 	w.HandleFrameReceived(&network.EventWebSocketFrameReceived{
 		RequestID: rid,
 		Timestamp: monoTime(time.Now()),
-		Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: "msg"},
+		Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: []byte("msg")},
 	})
 	w.HandleClosed(&network.EventWebSocketClosed{
 		RequestID: rid,
@@ -415,7 +415,7 @@ func TestWSConcurrentHandlers(t *testing.T) {
 				w.HandleFrameSent(&network.EventWebSocketFrameSent{
 					RequestID: rid,
 					Timestamp: monoTime(time.Now()),
-					Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: "x"},
+					Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: []byte("x")},
 				})
 			}
 			w.HandleClosed(&network.EventWebSocketClosed{

@@ -17,7 +17,7 @@ LLMs can launch or connect to Chrome browsers, open tabs, navigate pages, intera
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.27+
 - Chrome or Chromium installed and available in `$PATH`
 
 ## Installation

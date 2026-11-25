@@ -349,6 +349,18 @@ func TestEmulateNetworkOffline(t *testing.T) {
 		"offline": true,
 	})
 
+	// navigator.onLine should reflect offline state.
+	type boolEval struct {
+		Result bool `json:"result"`
+	}
+	onlineRes := callTool[boolEval](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `navigator.onLine`,
+	})
+	if onlineRes.Result {
+		t.Fatalf("expected navigator.onLine to be false when offline")
+	}
+
 	// A fetch should fail when offline.
 	type evalResult struct {
 		Result string `json:"result"`
@@ -366,6 +378,15 @@ func TestEmulateNetworkOffline(t *testing.T) {
 		"tab":     tabID,
 		"offline": false,
 	})
+
+	// navigator.onLine should return to true when back online.
+	onlineRes = callTool[boolEval](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `navigator.onLine`,
+	})
+	if !onlineRes.Result {
+		t.Fatalf("expected navigator.onLine to be true after returning online")
+	}
 
 	// Fetch should succeed now.
 	result = callTool[evalResult](t, "evaluate", map[string]any{
@@ -606,4 +627,71 @@ func TestSubmitFormSelectorTimeout(t *testing.T) {
 	if !strings.Contains(errText, "not found") {
 		t.Fatalf("expected 'not found' error, got: %s", errText)
 	}
+}
+
+func TestNormalizeBlockPattern(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"*", "*://*:*/*"},
+		{"https://example.com/api/*", "https://example.com/api/*"},
+		{"*://*:*/*.css", "*://*:*/*.css"},
+		{"*/api/*", "*://*:*/api/*"},
+		{"/api/secret", "*://*:*/api/secret"},
+		{"*.png", "*://*:*/*.png"},
+		{"*tracking*", "*://*:*/*tracking*"},
+		{"*api/v1*", "*://*:*/*api/v1*"},
+		{"*.example.com", "*://*.example.com:*/*"},
+		{"*.example.com/*", "*://*.example.com:*/*"},
+		{"*.example.com:8443/*", "*://*.example.com:8443/*"},
+		{"ads.example.com/pixel.gif", "*://ads.example.com:*/pixel.gif"},
+		{"ads.example.com", "*://ads.example.com:*/*"},
+		{"127.0.0.1/api/*", "*://127.0.0.1:*/api/*"},
+		{"localhost:3000/api/*", "*://localhost:3000/api/*"},
+		{"[::1]/api/*", "*://[::1]:*/api/*"},
+		{"[::1]:8080/api/*", "*://[::1]:8080/api/*"},
+	}
+	for _, tc := range tests {
+		if got := normalizeBlockPattern(tc.in); got != tc.want {
+			t.Errorf("normalizeBlockPattern(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestBlockURLsHostWithoutPortAndEmptyPattern(t *testing.T) {
+	tabID := navigateToFixture(t, "emulation.html")
+	defer closeTab(t, tabID)
+
+	// Empty pattern is rejected explicitly before calling Chrome.
+	errText := callToolExpectErr(t, "block_urls", map[string]any{
+		"tab":      tabID,
+		"patterns": []string{""},
+	})
+	if !strings.Contains(errText, "must not be empty") {
+		t.Fatalf("expected empty-pattern validation error, got: %s", errText)
+	}
+
+	// Host pattern without explicit port must still block the local test server's ephemeral port.
+	callTool[struct{}](t, "block_urls", map[string]any{
+		"tab":      tabID,
+		"patterns": []string{"127.0.0.1/api/*"},
+	})
+	type evalResult struct {
+		Result string `json:"result"`
+	}
+	res := callTool[evalResult](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `fetch('/api/data').then(() => 'ok').catch(e => 'blocked: ' + e.message)`,
+	})
+	if !strings.Contains(res.Result, "blocked") {
+		t.Fatalf("expected 127.0.0.1/api/* to block ephemeral-port fetch, got: %q", res.Result)
+	}
+
+	// Clear blocks.
+	callTool[struct{}](t, "block_urls", map[string]any{
+		"tab":      tabID,
+		"patterns": []string{},
+	})
 }

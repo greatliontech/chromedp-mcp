@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	cdpnetwork "github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -80,23 +82,19 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		params := emulation.SetGeolocationOverride()
-		if input.Latitude != nil {
-			params = params.WithLatitude(*input.Latitude)
+		params := emulation.SetGeolocationOverrideParams{
+			Latitude:  input.Latitude,
+			Longitude: input.Longitude,
+			Accuracy:  input.Accuracy,
 		}
-		if input.Longitude != nil {
-			params = params.WithLongitude(*input.Longitude)
-		}
-		if input.Accuracy != nil {
-			params = params.WithAccuracy(*input.Accuracy)
-		} else if input.Latitude != nil || input.Longitude != nil {
+		if params.Accuracy == nil && (input.Latitude != nil || input.Longitude != nil) {
 			// Default accuracy when setting coordinates.
-			params = params.WithAccuracy(1)
+			params.Accuracy = new(1.0)
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, params)
+		_, err = chromedp.Call(tctx, emulation.SetGeolocationOverride, params)
 		return nil, struct{}{}, err
 	})
 
@@ -114,7 +112,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, emulation.SetTimezoneOverride(input.TimezoneID))
+		_, err = chromedp.Call(tctx, emulation.SetTimezoneOverride, emulation.SetTimezoneOverrideParams{
+			TimezoneID: input.TimezoneID,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -132,7 +132,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, emulation.SetLocaleOverride().WithLocale(input.Locale))
+		_, err = chromedp.Call(tctx, emulation.SetLocaleOverride, emulation.SetLocaleOverrideParams{
+			Locale: input.Locale,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -148,17 +150,13 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		params := emulation.SetUserAgentOverride(input.UserAgent)
-		if input.AcceptLanguage != "" {
-			params = params.WithAcceptLanguage(input.AcceptLanguage)
-		}
-		if input.Platform != "" {
-			params = params.WithPlatform(input.Platform)
-		}
-
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, params)
+		_, err = chromedp.Call(tctx, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{
+			UserAgent:      input.UserAgent,
+			AcceptLanguage: input.AcceptLanguage,
+			Platform:       input.Platform,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -181,7 +179,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, emulation.SetCPUThrottlingRate(rate))
+		_, err = chromedp.Call(tctx, emulation.SetCPUThrottlingRate, emulation.SetCPUThrottlingRateParams{
+			Rate: rate,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -213,7 +213,9 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, emulation.SetEmulatedVisionDeficiency(defType))
+		_, err = chromedp.Call(tctx, emulation.SetEmulatedVisionDeficiency, emulation.SetEmulatedVisionDeficiencyParams{
+			Type: defType,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -238,32 +240,114 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			upload = -1
 		}
 
+		conditions := []*cdpnetwork.Conditions{}
+		if input.Offline || input.Latency > 0 || download > 0 || upload > 0 {
+			conditions = []*cdpnetwork.Conditions{{
+				Offline:            input.Offline,
+				Latency:            input.Latency,
+				DownloadThroughput: download,
+				UploadThroughput:   upload,
+			}}
+		}
+
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, cdpnetwork.EmulateNetworkConditions(input.Offline, input.Latency, download, upload))
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+			if _, err := cdp.Call(ctx, tgt, cdpnetwork.EmulateNetworkConditionsByRule, cdpnetwork.EmulateNetworkConditionsByRuleParams{
+				EmulateOfflineServiceWorker: new(input.Offline),
+				MatchedNetworkConditions:    conditions,
+			}); err != nil {
+				return err
+			}
+			_, err := cdp.Call(ctx, tgt, cdpnetwork.OverrideNetworkState, cdpnetwork.OverrideNetworkStateParams{
+				Offline:            input.Offline,
+				Latency:            input.Latency,
+				DownloadThroughput: download,
+				UploadThroughput:   upload,
+			})
+			return err
+		}))
 		return nil, struct{}{}, err
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "block_urls",
-		Description: "Block URLs matching patterns (supports * wildcards). Pass empty array to clear all blocks.",
+		Description: "Block URLs matching patterns (supports * wildcards and WHATWG URLPattern syntax). Pass empty array to clear all blocks.",
 		Annotations: &mcp.ToolAnnotations{
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BlockURLsInput) (*mcp.CallToolResult, struct{}, error) {
+		urlPatterns := make([]*cdpnetwork.BlockPattern, 0, len(input.Patterns))
+		for _, p := range input.Patterns {
+			if p == "" {
+				return nil, struct{}{}, fmt.Errorf("block_urls: pattern must not be empty")
+			}
+			urlPatterns = append(urlPatterns, &cdpnetwork.BlockPattern{
+				URLPattern: normalizeBlockPattern(p),
+				Block:      true,
+			})
+		}
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
 		}
 
-		patterns := input.Patterns
-		if patterns == nil {
-			patterns = []string{}
-		}
-
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, cdpnetwork.SetBlockedURLs(patterns))
+		_, err = chromedp.Call(tctx, cdpnetwork.SetBlockedURLs, cdpnetwork.SetBlockedURLsParams{
+			URLPatterns: urlPatterns,
+		})
 		return nil, struct{}{}, err
 	})
+}
+
+// normalizeBlockPattern converts shorthand wildcard patterns (e.g. "*.png",
+// "*/api/*", "*.example.com", "*.example.com/*", "ads.example.com",
+// "127.0.0.1/api/*") into absolute WHATWG URLPattern strings required by CDP's
+// Network.setBlockedURLs urlPatterns field. Already-absolute patterns
+// containing "://" are returned unchanged.
+//
+// Host patterns without an explicit port receive a ":*" port wildcard because
+// WHATWG URLPattern otherwise matches only protocol default ports (80/443).
+func normalizeBlockPattern(p string) string {
+	if p == "" || strings.Contains(p, "://") {
+		return p
+	}
+	if p == "*" {
+		return "*://*:*/*"
+	}
+	if strings.HasPrefix(p, "*/") {
+		return "*://*:*" + p[1:]
+	}
+	if strings.HasPrefix(p, "/") {
+		return "*://*:*" + p
+	}
+	if strings.HasPrefix(p, "*.") {
+		if host, rest, hasSlash := strings.Cut(p, "/"); hasSlash {
+			return "*://" + withWildcardPort(host) + "/" + rest
+		}
+		// Distinguish subdomain wildcards (*.example.com) from file-extension
+		// wildcards (*.png): a domain has at least one dot after "*.".
+		if strings.Contains(p[2:], ".") {
+			return "*://" + withWildcardPort(p) + "/*"
+		}
+		return "*://*:*/" + p
+	}
+	if strings.HasPrefix(p, "*") {
+		return "*://*:*/" + p
+	}
+	if host, rest, hasSlash := strings.Cut(p, "/"); hasSlash {
+		return "*://" + withWildcardPort(host) + "/" + rest
+	}
+	return "*://" + withWildcardPort(p) + "/*"
+}
+
+// withWildcardPort appends ":*" to a hostname or host wildcard when it does
+// not already specify an explicit port (respecting bracketed IPv6 literals).
+func withWildcardPort(host string) string {
+	if strings.LastIndex(host, ":") > strings.LastIndex(host, "]") {
+		return host
+	}
+	return host + ":*"
 }

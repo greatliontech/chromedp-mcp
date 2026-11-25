@@ -326,22 +326,21 @@ func (o *observation) countMutations(ctx context.Context) (count int, unavailabl
 // mistakes unrepresentable — a replaced context is an error, not a wrong
 // answer.
 func evalInContext(ctx context.Context, uniqueContextID, expr string, dst any) error {
-	return chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		res, exc, err := runtime.Evaluate(expr).
-			WithUniqueContextID(uniqueContextID).
-			WithReturnByValue(true).
-			Do(ctx)
-		if err != nil {
-			return err
-		}
-		if exc != nil {
-			return fmt.Errorf("evaluate in context %s: %s", uniqueContextID, exc.Text)
-		}
-		if res == nil || len(res.Value) == 0 {
-			return fmt.Errorf("evaluate in context %s: no value", uniqueContextID)
-		}
-		return json.Unmarshal([]byte(res.Value), dst)
-	}))
+	res, err := chromedp.Call(ctx, runtime.Evaluate, runtime.EvaluateParams{
+		Expression:      expr,
+		UniqueContextID: uniqueContextID,
+		ReturnByValue:   new(true),
+	})
+	if err != nil {
+		return err
+	}
+	if res.ExceptionDetails != nil {
+		return fmt.Errorf("evaluate in context %s: %s", uniqueContextID, res.ExceptionDetails.Text)
+	}
+	if res.Result == nil || len(res.Result.Value) == 0 {
+		return fmt.Errorf("evaluate in context %s: no value", uniqueContextID)
+	}
+	return json.Unmarshal([]byte(res.Result.Value), dst)
 }
 
 // countConsoleSince counts console entries received at or after t.

@@ -1727,10 +1727,11 @@ func TestAccessibilityTreeStructure(t *testing.T) {
 			}
 		}
 	}
-	// Tree might be nested. Just verify the content text mentions some semantic roles.
+	// Tree might be nested. Verify the default-depth tree includes semantic roles
+	// from descendants, not just a depth-0 root node.
 	if !strings.Contains(text, "button") && !strings.Contains(text, "heading") &&
 		!strings.Contains(text, "navigation") && !strings.Contains(text, "link") {
-		t.Log("accessibility tree doesn't contain expected role names in text representation")
+		t.Errorf("accessibility tree doesn't contain expected descendant roles: %s", text)
 	}
 }
 

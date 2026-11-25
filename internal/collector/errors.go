@@ -37,7 +37,7 @@ func (je *JSErrors) Handle(ev *runtime.EventExceptionThrown) {
 	details := ev.ExceptionDetails
 	entry := JSErrorEntry{
 		Message:    details.Text,
-		Timestamp:  ev.Timestamp.Time(),
+		Timestamp:  timeFromRuntimeTimestamp(ev.Timestamp),
 		ReceivedAt: time.Now(),
 	}
 	if details.Exception != nil && details.Exception.Description != "" {

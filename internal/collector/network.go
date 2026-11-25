@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 )
 
@@ -62,11 +63,11 @@ type NetworkEntry struct {
 	EndTime         time.Time         `json:"end_time,omitempty"`
 	// ReceivedAt is the wall-clock time the request-will-be-sent event
 	// was processed by the Go-side collector. Used by activity
-	// observation for time-window filtering — StartTime is converted from CDP's
-	// MonotonicTime which drifts vs. time.Now() (sysutil.BootTime can
-	// be hours off). JSON-hidden because it duplicates StartTime for
-	// consumers that just want "when did this happen".
+	// observation for time-window filtering on the same Go clock as
+	// window start (StartTime comes from CDP WallTime, which can differ
+	// slightly from Go's time.Now()). JSON-hidden.
 	ReceivedAt time.Time `json:"-"`
+	startMono  cdp.MonotonicTime
 	Completed  bool      `json:"-"`
 	Failed     bool      `json:"failed,omitempty"`
 
@@ -125,14 +126,20 @@ func NewNetwork(maxSize int) *Network {
 // HandleRequestWillBeSent records a new outgoing request.
 func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 	headers := headersToMap(ev.Request.Headers)
+	now := time.Now()
+	startTime := now
+	if wt := timeFromEpochSeconds(ev.WallTime); !wt.IsZero() {
+		startTime = wt
+	}
 	entry := &NetworkEntry{
 		ID:             string(ev.RequestID),
 		URL:            ev.Request.URL,
 		Method:         ev.Request.Method,
 		Type:           string(ev.Type),
 		RequestHeaders: headers,
-		StartTime:      ev.Timestamp.Time(),
-		ReceivedAt:     time.Now(),
+		StartTime:      startTime,
+		ReceivedAt:     now,
+		startMono:      ev.Timestamp,
 		HasRequestBody: ev.Request.HasPostData,
 	}
 	if ev.Request.HasPostData || len(ev.Request.PostDataEntries) > 0 {
@@ -146,9 +153,9 @@ func (n *Network) HandleRequestWillBeSent(ev *network.EventRequestWillBeSent) {
 	n.mu.Unlock()
 }
 
-// decodePostDataEntries concatenates CDP PostDataEntries (each Bytes field
-// is base64-encoded binary), trims the result to maxBytes, and reports the
-// inline body in either UTF-8 string form or base64 form.
+// decodePostDataEntries concatenates CDP PostDataEntries (cdproto decodes
+// each wire base64 Bytes field into []byte), trims the result to maxBytes,
+// and reports the inline body in either UTF-8 string form or base64 form.
 //
 // Returns body, base64Encoded, truncated. body is empty when entries are
 // missing or empty (which can happen when CDP omits PostData because the
@@ -160,19 +167,10 @@ func decodePostDataEntries(entries []*network.PostDataEntry, maxBytes int) (stri
 	}
 	var buf []byte
 	for _, e := range entries {
-		if e == nil || e.Bytes == "" {
+		if e == nil || len(e.Bytes) == 0 {
 			continue
 		}
-		decoded, err := base64.StdEncoding.DecodeString(e.Bytes)
-		if err != nil {
-			// CDP serializes Bytes as base64. A decode failure means the
-			// event is malformed; rather than guess (raw bytes? literal
-			// base64-looking text?), surface nothing inline. The caller
-			// still sees has_request_body=true and can fetch the full
-			// body via get_request_body.
-			return "", false, false
-		}
-		buf = append(buf, decoded...)
+		buf = append(buf, e.Bytes...)
 	}
 	if len(buf) == 0 {
 		return "", false, false
@@ -238,7 +236,7 @@ func (n *Network) HandleLoadingFinished(ev *network.EventLoadingFinished) {
 	// so no other handler can access it concurrently.
 	entry.Completed = true
 	entry.Size = ev.EncodedDataLength
-	entry.EndTime = ev.Timestamp.Time()
+	entry.EndTime = endTimeFromMonotonic(entry.StartTime, entry.startMono, ev.Timestamp)
 	if entry.Timing != nil {
 		entry.Timing.TotalTime = entry.EndTime.Sub(entry.StartTime).Seconds() * 1000
 	}
@@ -260,7 +258,7 @@ func (n *Network) HandleLoadingFailed(ev *network.EventLoadingFailed) {
 	// so no other handler can access it concurrently.
 	entry.Failed = true
 	entry.Error = ev.ErrorText
-	entry.EndTime = ev.Timestamp.Time()
+	entry.EndTime = endTimeFromMonotonic(entry.StartTime, entry.startMono, ev.Timestamp)
 	n.buf.Add(*entry)
 }
 

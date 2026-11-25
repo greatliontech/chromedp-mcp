@@ -177,17 +177,14 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		var bodyBytes []byte
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			var err error
-			bodyBytes, err = cdpnetwork.GetResponseBody(cdpnetwork.RequestID(input.RequestID)).Do(ctx)
-			return err
-		}))
+		res, err := chromedp.Call(tctx, cdpnetwork.GetResponseBody, cdpnetwork.GetResponseBodyParams{
+			RequestID: cdpnetwork.RequestID(input.RequestID),
+		})
 		if err != nil {
 			return nil, GetResponseBodyOutput{}, err
 		}
 
-		out := encodeBodySlice(bodyBytes, input.RangeStart, input.RangeEnd)
+		out := encodeBodySlice(res.Body, input.RangeStart, input.RangeEnd)
 		return nil, out, nil
 	})
 
@@ -209,21 +206,17 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		var postData string
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			var err error
-			postData, err = cdpnetwork.GetRequestPostData(cdpnetwork.RequestID(input.RequestID)).Do(ctx)
-			return err
-		}))
+		res, err := chromedp.Call(tctx, cdpnetwork.GetRequestPostData, cdpnetwork.GetRequestPostDataParams{
+			RequestID: cdpnetwork.RequestID(input.RequestID),
+		})
 		if err != nil {
 			return nil, GetRequestBodyOutput{}, err
 		}
 
-		// CDP returns postData as a string. Multipart form uploads with
-		// binary parts (files) are excluded by Chrome — see CDP docs:
-		// "Request body string, omitting files from multipart requests".
-		// Detect non-UTF8 anyway for safety.
-		resp := encodeBodySlice([]byte(postData), input.RangeStart, input.RangeEnd)
+		// Multipart form uploads with binary parts (files) are excluded by
+		// Chrome — see CDP docs: "Request body string, omitting files from
+		// multipart requests". cdproto decodes base64 when base64Encoded=true.
+		resp := encodeBodySlice(res.PostData, input.RangeStart, input.RangeEnd)
 		return nil, GetRequestBodyOutput{
 			Body:          resp.Body,
 			Base64Encoded: resp.Base64Encoded,

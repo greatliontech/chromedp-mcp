@@ -102,37 +102,35 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 		// errors up-front so we never commit a registration that's
 		// guaranteed to fail forever, and so the LLM gets a clean error
 		// rather than a misleading "registration committed" warning.
-		var compileExc *runtime.ExceptionDetails
-		if err := chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			_, exc, err := runtime.CompileScript(input.Source, "add_script", false).Do(ctx)
-			compileExc = exc
-			return err
-		})); err != nil {
+		compileRes, err := chromedp.Call(tctx, runtime.CompileScript, runtime.CompileScriptParams{
+			Expression:    input.Source,
+			SourceURL:     "add_script",
+			PersistScript: false,
+		})
+		if err != nil {
 			return nil, AddScriptOutput{}, fmt.Errorf("compile script: %w", err)
 		}
-		if compileExc != nil {
-			return nil, AddScriptOutput{}, fmt.Errorf("script does not parse: %s", compileExc.Error())
+		if compileRes.ExceptionDetails != nil {
+			return nil, AddScriptOutput{}, fmt.Errorf("script does not parse: %s", (&chromedp.ExceptionError{ExceptionDetails: compileRes.ExceptionDetails}).Error())
 		}
 
 		// Register on new documents first. If this fails the registration
 		// is not committed and there's nothing to roll back, so we surface
 		// the error directly.
 		//
-		// Note: between this Run and the evaluate_now Run below the page
+		// Note: between this Call and the evaluate_now Do below the page
 		// can navigate. If it does, the new-document registration fires
 		// on the navigation and the subsequent Runtime.evaluate then
 		// re-runs the script on the post-navigation document, producing
 		// a double-run. Rare; flagged here so future readers know the
 		// pair is not atomic.
-		var identifier page.ScriptIdentifier
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			var e error
-			identifier, e = page.AddScriptToEvaluateOnNewDocument(input.Source).Do(ctx)
-			return e
-		}))
+		addRes, err := chromedp.Call(tctx, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{
+			Source: input.Source,
+		})
 		if err != nil {
 			return nil, AddScriptOutput{}, err
 		}
+		identifier := addRes.Identifier
 
 		out := AddScriptOutput{Identifier: string(identifier)}
 		if !input.EvaluateNow {
@@ -146,7 +144,7 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 		// If this fails, keep the new-document registration committed
 		// and surface a warning so the LLM knows the current-doc side of
 		// the request didn't take.
-		evalErr := chromedp.Run(tctx, chromedp.Evaluate(input.Source, nil, evalAwaitPromise))
+		evalErr := chromedp.Do(tctx, chromedp.Evaluate[chromedp.Void](input.Source, chromedp.EvalAwaitPromise))
 		if evalErr != nil {
 			out.Warning = fmt.Sprintf("evaluate_now=true: current-document evaluation failed: %v. The new-document registration (identifier %s) is still active; remove with remove_script if not wanted.",
 				evalErr, identifier)
@@ -158,7 +156,7 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "remove_script",
 		Description: "Remove an injected script by its identifier (returned by add_script).",
 		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: ptrBool(true),
+			DestructiveHint: new(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input RemoveScriptInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -168,9 +166,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			return page.RemoveScriptToEvaluateOnNewDocument(page.ScriptIdentifier(input.Identifier)).Do(ctx)
-		}))
+		_, err = chromedp.Call(tctx, page.RemoveScriptToEvaluateOnNewDocument, page.RemoveScriptToEvaluateOnNewDocumentParams{
+			Identifier: page.ScriptIdentifier(input.Identifier),
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -193,7 +191,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, cdpnetwork.SetExtraHTTPHeaders(headers))
+		_, err = chromedp.Call(tctx, cdpnetwork.SetExtraHTTPHeaders, cdpnetwork.SetExtraHTTPHeadersParams{
+			Headers: headers,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -217,17 +217,13 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, fmt.Errorf("invalid permission setting %q: must be granted, denied, or prompt", input.Setting)
 		}
 
-		params := cdpbrowser.SetPermission(
-			&cdpbrowser.PermissionDescriptor{Name: input.Name},
-			setting,
-		)
-		if input.Origin != "" {
-			params = params.WithOrigin(input.Origin)
-		}
-
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, params)
+		_, err = chromedp.Call(tctx, cdpbrowser.SetPermission, cdpbrowser.SetPermissionParams{
+			Permission: &cdpbrowser.PermissionDescriptor{Name: input.Name},
+			Setting:    setting,
+			Origin:     input.Origin,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -243,21 +239,20 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, struct{}{}, err
 		}
 
-		params := emulation.SetEmulatedMedia()
-		if input.Media != "" {
-			params = params.WithMedia(input.Media)
-		}
+		var features []*emulation.MediaFeature
 		if len(input.Features) > 0 {
-			features := make([]*emulation.MediaFeature, len(input.Features))
+			features = make([]*emulation.MediaFeature, len(input.Features))
 			for i, f := range input.Features {
 				features[i] = &emulation.MediaFeature{Name: f.Name, Value: f.Value}
 			}
-			params = params.WithFeatures(features)
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, params)
+		_, err = chromedp.Call(tctx, emulation.SetEmulatedMedia, emulation.SetEmulatedMediaParams{
+			Media:    input.Media,
+			Features: features,
+		})
 		return nil, struct{}{}, err
 	})
 
@@ -275,7 +270,9 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, security.SetIgnoreCertificateErrors(input.Ignore))
+		_, err = chromedp.Call(tctx, security.SetIgnoreCertificateErrors, security.SetIgnoreCertificateErrorsParams{
+			Ignore: input.Ignore,
+		})
 		return nil, struct{}{}, err
 	})
 }

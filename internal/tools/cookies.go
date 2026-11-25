@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
@@ -73,22 +72,15 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		var cookies []*network.Cookie
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			params := network.GetCookies()
-			if len(input.URLs) > 0 {
-				params = params.WithURLs(input.URLs)
-			}
-			var err error
-			cookies, err = params.Do(ctx)
-			return err
-		}))
+		res, err := chromedp.Call(tctx, network.GetCookies, network.GetCookiesParams{
+			URLs: input.URLs,
+		})
 		if err != nil {
 			return nil, GetCookiesOutput{}, err
 		}
 
-		infos := make([]CookieInfo, 0, len(cookies))
-		for _, c := range cookies {
+		infos := make([]CookieInfo, 0, len(res.Cookies))
+		for _, c := range res.Cookies {
 			ci := CookieInfo{
 				Name:     c.Name,
 				Value:    c.Value,
@@ -119,32 +111,29 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			params := network.SetCookie(input.Name, input.Value)
-			if input.Domain != "" {
-				params = params.WithDomain(input.Domain)
-			}
-			if input.Path != "" {
-				params = params.WithPath(input.Path)
-			} else {
-				params = params.WithPath("/")
-			}
-			if input.Expires > 0 {
-				ts := cdp.TimeSinceEpoch(time.Unix(int64(input.Expires), 0))
-				params = params.WithExpires(&ts)
-			}
-			if input.HTTPOnly {
-				params = params.WithHTTPOnly(true)
-			}
-			if input.Secure {
-				params = params.WithSecure(true)
-			}
-			if input.SameSite != "" {
-				params = params.WithSameSite(network.CookieSameSite(input.SameSite))
-			}
-			return params.Do(ctx)
-		}))
-		if err != nil {
+		path := input.Path
+		if path == "" {
+			path = "/"
+		}
+		params := network.SetCookieParams{
+			Name:   input.Name,
+			Value:  input.Value,
+			Domain: input.Domain,
+			Path:   path,
+		}
+		if input.Expires > 0 {
+			params.Expires = cdp.TimeSinceEpoch(input.Expires)
+		}
+		if input.HTTPOnly {
+			params.HTTPOnly = new(true)
+		}
+		if input.Secure {
+			params.Secure = new(true)
+		}
+		if input.SameSite != "" {
+			params.SameSite = network.CookieSameSite(input.SameSite)
+		}
+		if _, err := chromedp.Call(tctx, network.SetCookie, params); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil
@@ -154,7 +143,7 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "delete_cookies",
 		Description: "Delete cookies by name, optionally scoped to a domain and path. If name is omitted, deletes all cookies.",
 		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: ptrBool(true),
+			DestructiveHint: new(true),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteCookiesInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -164,20 +153,16 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			if input.Name == "" {
-				// No name specified — clear all browser cookies.
-				return network.ClearBrowserCookies().Do(ctx)
-			}
-			params := network.DeleteCookies(input.Name)
-			if input.Domain != "" {
-				params = params.WithDomain(input.Domain)
-			}
-			if input.Path != "" {
-				params = params.WithPath(input.Path)
-			}
-			return params.Do(ctx)
-		}))
+		if input.Name == "" {
+			// No name specified — clear all browser cookies.
+			_, err = chromedp.Call(tctx, network.ClearBrowserCookies, cdp.Empty{})
+		} else {
+			_, err = chromedp.Call(tctx, network.DeleteCookies, network.DeleteCookiesParams{
+				Name:   input.Name,
+				Domain: input.Domain,
+				Path:   input.Path,
+			})
+		}
 		if err != nil {
 			return nil, struct{}{}, err
 		}

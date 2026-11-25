@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"sync"
 
+	"github.com/chromedp/cdproto/cdp"
 	cdpcss "github.com/chromedp/cdproto/css"
 	"github.com/chromedp/cdproto/performance"
 	"github.com/chromedp/cdproto/profiler"
@@ -77,13 +79,16 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		var metrics []*performance.Metric
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
-			if err := performance.Enable().Do(ctx); err != nil {
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+			if _, err := cdp.Call(ctx, tgt, performance.Enable, performance.EnableParams{}); err != nil {
 				return err
 			}
-			var err error
-			metrics, err = performance.GetMetrics().Do(ctx)
-			return err
+			res, err := cdp.Call(ctx, tgt, performance.GetMetrics, cdp.Empty{})
+			if err != nil {
+				return err
+			}
+			metrics = res.Metrics
+			return nil
 		}))
 		if err != nil {
 			return nil, GetPerformanceMetricsOutput{}, err
@@ -150,19 +155,22 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Run(tctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
 			if coverageType == "js" || coverageType == "all" {
-				if err := profiler.Enable().Do(ctx); err != nil {
+				if _, err := cdp.Call(ctx, tgt, profiler.Enable, cdp.Empty{}); err != nil {
 					return err
 				}
-				if _, err := profiler.StartPreciseCoverage().WithCallCount(false).WithDetailed(false).Do(ctx); err != nil {
+				if _, err := cdp.Call(ctx, tgt, profiler.StartPreciseCoverage, profiler.StartPreciseCoverageParams{
+					CallCount: new(false),
+					Detailed:  new(false),
+				}); err != nil {
 					return err
 				}
-				result, _, err := profiler.TakePreciseCoverage().Do(ctx)
+				covRes, err := cdp.Call(ctx, tgt, profiler.TakePreciseCoverage, cdp.Empty{})
 				if err != nil {
 					return err
 				}
-				for _, script := range result {
+				for _, script := range covRes.Result {
 					if script.URL == "" {
 						continue
 					}
@@ -193,39 +201,46 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 						Percentage: pct,
 					})
 				}
-				_ = profiler.StopPreciseCoverage().Do(ctx)
+				_, _ = cdp.Call(ctx, tgt, profiler.StopPreciseCoverage, cdp.Empty{})
 			}
 
 			if coverageType == "css" || coverageType == "all" {
 				// Collect stylesheet metadata (ID → source URL) by
 				// listening for styleSheetAdded events from CSS.enable.
+				var sheetMu sync.Mutex
 				sheetURLs := make(map[string]string)
 				lctx, lcancel := context.WithCancel(ctx)
-				chromedp.ListenTarget(lctx, func(ev interface{}) {
+				if err := chromedp.Listen(lctx, func(ev any) {
 					if e, ok := ev.(*cdpcss.EventStyleSheetAdded); ok && e.Header != nil {
+						sheetMu.Lock()
 						sheetURLs[e.Header.StyleSheetID.String()] = e.Header.SourceURL
+						sheetMu.Unlock()
 					}
-				})
-
-				if err := cdpcss.Enable().Do(ctx); err != nil {
+				}); err != nil {
 					lcancel()
 					return err
 				}
 
-				if err := cdpcss.StartRuleUsageTracking().Do(ctx); err != nil {
+				if _, err := cdp.Call(ctx, tgt, cdpcss.Enable, cdp.Empty{}); err != nil {
 					lcancel()
-					cdpcss.Disable().Do(ctx) //nolint:errcheck
 					return err
 				}
-				ruleUsage, err := cdpcss.StopRuleUsageTracking().Do(ctx)
+
+				if _, err := cdp.Call(ctx, tgt, cdpcss.StartRuleUsageTracking, cdp.Empty{}); err != nil {
+					lcancel()
+					_, _ = cdp.Call(ctx, tgt, cdpcss.Disable, cdp.Empty{})
+					return err
+				}
+				ruleRes, err := cdp.Call(ctx, tgt, cdpcss.StopRuleUsageTracking, cdp.Empty{})
 				lcancel()
-				cdpcss.Disable().Do(ctx) //nolint:errcheck
+				_, _ = cdp.Call(ctx, tgt, cdpcss.Disable, cdp.Empty{})
 				if err != nil {
 					return err
 				}
 				// Aggregate by stylesheet.
 				stylesheets := make(map[string]*CoverageEntry)
-				for _, rule := range ruleUsage {
+				sheetMu.Lock()
+				for _, rule := range ruleRes.RuleUsage {
 					key := rule.StyleSheetID.String()
 					ce, ok := stylesheets[key]
 					if !ok {
@@ -242,6 +257,7 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 						ce.UsedBytes += size
 					}
 				}
+				sheetMu.Unlock()
 				for _, ce := range stylesheets {
 					if ce.TotalBytes > 0 {
 						ce.Percentage = float64(ce.UsedBytes) / float64(ce.TotalBytes) * 100

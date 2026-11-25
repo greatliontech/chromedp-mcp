@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/performancetimeline"
@@ -132,12 +133,8 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 	if err := startupCtx.Err(); err != nil {
 		return nil, fmt.Errorf("tab init: %w", err)
 	}
-	ctx, cancel := chromedp.NewContext(parentCtx)
-
 	t := &Tab{
 		ID:       id,
-		ctx:      ctx,
-		cancel:   cancel,
 		Console:  collector.NewConsole(DefaultConsoleBuffer),
 		JSErrors: collector.NewJSErrors(DefaultErrorBuffer),
 		Network:  collector.NewNetwork(DefaultNetworkBuffer),
@@ -157,9 +154,11 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 		dl = opts.Downloads
 	}
 
-	// Register CDP event listeners. These are called synchronously by
-	// chromedp's event dispatcher, so they must not block.
-	chromedp.ListenTarget(ctx, func(ev any) {
+	// Register CDP event listeners via WithListener so they are attached
+	// before the target processes its first message (catching initial
+	// Runtime.executionContextCreated events too). Listeners run synchronously
+	// in chromedp's event dispatcher and must not block.
+	ctx, cancel := chromedp.NewContext(parentCtx, chromedp.WithListener(func(ev any) {
 		switch ev := ev.(type) {
 		case *runtime.EventConsoleAPICalled:
 			t.Console.Handle(ev)
@@ -213,7 +212,9 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 				dl.HandleDownloadProgress(ev)
 			}
 		}
-	})
+	}))
+	t.ctx = ctx
+	t.cancel = cancel
 
 	// Resolve optional download dir for enabling downloads on this tab.
 	var downloadDir string
@@ -223,30 +224,34 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 
 	// Initialize the tab: enable performance timeline and (optionally)
 	// downloads. We need to run a chromedp action to trigger the target
-	// allocation (chromedp creates the target lazily on the first Run call).
+	// allocation (chromedp creates the target lazily on the first Do call).
 	// chromedp already enables Page and Runtime domains on target attach.
 	cancelOnce := sync.OnceFunc(cancel)
 	stopStartup := context.AfterFunc(startupCtx, cancelOnce)
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-		if err := performancetimeline.Enable([]string{
-			"largest-contentful-paint",
-			"layout-shift",
-		}).Do(ctx); err != nil {
+	err := chromedp.Do(ctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+		if _, err := cdp.Call(ctx, tgt, performancetimeline.Enable, performancetimeline.EnableParams{
+			EventTypes: []string{
+				"largest-contentful-paint",
+				"layout-shift",
+			},
+		}); err != nil {
 			return err
 		}
 		// Re-enable Network with MaxPostDataSize so requestWillBeSent
 		// carries POST bodies up to the inline cap. chromedp also calls
 		// Network.enable internally; the latest call wins, and the
 		// parameter does not affect already-fired events.
-		if err := network.Enable().
-			WithMaxPostDataSize(int64(collector.MaxInlineRequestBody)).
-			Do(ctx); err != nil {
+		if _, err := cdp.Call(ctx, tgt, network.Enable, network.EnableParams{
+			MaxPostDataSize: new(int64(collector.MaxInlineRequestBody)),
+		}); err != nil {
 			return err
 		}
 		// Register the DOM mutation observer for every new document.
 		// Activity observation reads the timestamps the observer pushes
 		// into a per-document JS-side ring buffer.
-		if _, err := page.AddScriptToEvaluateOnNewDocument(domMutationObserverScript).Do(ctx); err != nil {
+		if _, err := cdp.Call(ctx, tgt, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{
+			Source: domMutationObserverScript,
+		}); err != nil {
 			return err
 		}
 		// Also evaluate on the current document so observation works
@@ -255,7 +260,7 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 		// open. The script's `if (window.__mcpMutationObserverInstalled)
 		// return;` guard makes the eval a no-op when the script also
 		// runs via addScriptToEvaluateOnNewDocument on a fresh document.
-		if err := chromedp.Evaluate(domMutationObserverScript, nil).Do(ctx); err != nil {
+		if _, err := chromedp.Evaluate[chromedp.Void](domMutationObserverScript)(ctx, tgt); err != nil {
 			return err
 		}
 		// Seed the frame registry so the main frame is known before any
@@ -266,7 +271,7 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 		// (cross-origin) iframes. Those are learned solely from the
 		// frameAttached event stream, which is why ExecContexts keeps a
 		// frame that merely swapped away rather than dropping it.
-		if tree, err := page.GetFrameTree().Do(ctx); err == nil && tree != nil && tree.Frame != nil {
+		if treeRes, err := cdp.Call(ctx, tgt, page.GetFrameTree, cdp.Empty{}); err == nil && treeRes.FrameTree != nil && treeRes.FrameTree.Frame != nil {
 			var ids []string
 			var walk func(*page.FrameTree)
 			walk = func(n *page.FrameTree) {
@@ -278,17 +283,19 @@ func New(parentCtx, startupCtx context.Context, id string, opts *TabOptions) (*T
 					walk(c)
 				}
 			}
-			walk(tree)
-			t.ExecContexts.SeedFrameTree(string(tree.Frame.ID), ids)
+			walk(treeRes.FrameTree)
+			t.ExecContexts.SeedFrameTree(string(treeRes.FrameTree.Frame.ID), ids)
 		}
 		// Enable downloads per-tab if a download directory is configured.
 		// SetDownloadBehavior is session-scoped — it must be called on
 		// each tab's context for events to be delivered to that tab.
 		if downloadDir != "" {
-			return browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).
-				WithDownloadPath(downloadDir).
-				WithEventsEnabled(true).
-				Do(ctx)
+			_, err := cdp.Call(ctx, tgt, browser.SetDownloadBehavior, browser.SetDownloadBehaviorParams{
+				Behavior:      browser.SetDownloadBehaviorBehaviorAllowAndName,
+				DownloadPath:  downloadDir,
+				EventsEnabled: new(true),
+			})
+			return err
 		}
 		return nil
 	}))
@@ -332,15 +339,11 @@ func (t *Tab) Info(ctx context.Context) (url, title string, err error) {
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
 
-	var info *target.Info
-	err = chromedp.Run(runCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		var e error
-		info, e = target.GetTargetInfo().Do(ctx)
-		return e
-	}))
+	res, err := chromedp.Call(runCtx, target.GetTargetInfo, target.GetTargetInfoParams{})
 	if err != nil {
 		return "", "", err
 	}
+	info := res.TargetInfo
 	if info == nil {
 		return "", "", nil
 	}
