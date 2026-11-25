@@ -170,6 +170,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `upload_files`  | Set files on a file input                           |
 | `get_dialog`    | Inspect the currently open JavaScript dialog without blocking |
 | `handle_dialog` | Accept or dismiss JavaScript dialogs (preserving prompt defaults when text is omitted) |
+| `drag_and_drop` | Drag an element onto a target element (supports HTML5 drag-and-drop and pointer drag) |
 
 ### JavaScript
 
@@ -211,7 +212,11 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `get_storage`      | Read one or all items from localStorage or sessionStorage |
 | `set_storage`      | Write a key-value pair to localStorage or sessionStorage  |
 | `delete_storage`   | Delete one or all items from localStorage or sessionStorage |
-| `get_storage_keys` | List all keys with value sizes                            |
+| `get_storage_keys`     | List all keys with value sizes                                           |
+| `get_indexeddb`        | List IndexedDB databases, inspect object stores, or read paginated records |
+| `delete_indexeddb`     | Delete an IndexedDB database or clear an object store                    |
+| `get_cache_storage`    | List Cache Storage caches, list entries, or read a cached response body  |
+| `delete_cache_storage` | Delete a Cache Storage cache or a single cached request entry            |
 
 ### Performance
 
@@ -237,6 +242,8 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `set_user_agent`                | Override user agent string                                    |
 | `set_cpu_throttling`            | Throttle CPU to simulate slow devices                         |
 | `set_vision_deficiency`         | Simulate vision deficiencies for accessibility testing        |
+| `force_pseudo_state`            | Force CSS pseudo-classes (`:hover`, `:focus`, `:active`, etc.) on an element |
+| `emulate_device`                | Emulate a mobile or tablet device preset (or `reset` to desktop) |
 | `emulate_network`               | Emulate network conditions (offline, latency, throttling)     |
 | `block_urls`                    | Block URLs matching wildcard patterns                         |
 | `add_intercept_rule`            | Intercept, mock (`fulfill`), rewrite (`modify`), or `fail` network requests |
@@ -246,7 +253,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 
 ### Observation
 
-Observation is not a separate tool — it is an `observe_window_ms` parameter on every action tool (`click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files`).
+Observation is not a separate tool — it is an `observe_window_ms` parameter on every action tool (`click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files`, `drag_and_drop`).
 
 Pass it a value in milliseconds (max 30000) and the tool measures what the page actually did in response to the action, returning an `observed` object alongside its normal result:
 

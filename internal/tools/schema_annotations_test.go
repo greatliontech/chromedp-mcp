@@ -85,6 +85,8 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"get_cookies":             {true, false, true},
 		"get_storage":             {true, false, true},
 		"get_storage_keys":        {true, false, true},
+		"get_indexeddb":           {true, false, true},
+		"get_cache_storage":       {true, false, true},
 		"get_performance_metrics": {true, false, true},
 		"get_coverage":            {true, false, true},
 		"get_dialog":              {true, false, true},
@@ -119,6 +121,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"press_key":       {false, false, false},
 		"upload_files":    {false, false, false},
 		"handle_dialog":   {false, false, false},
+		"drag_and_drop":   {false, false, false},
 
 		// Idempotent non-destructive writes
 		"browser_activate":              {false, false, true},
@@ -141,12 +144,16 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"emulate_network":               {false, false, true},
 		"block_urls":                    {false, false, true},
 		"clear_intercept_rules":         {false, false, true},
+		"force_pseudo_state":            {false, false, true},
+		"emulate_device":                {false, false, true},
 
 		// Destructive
 		"browser_close":         {false, true, false},
 		"tab_close":             {false, true, false},
 		"delete_cookies":        {false, true, false},
 		"delete_storage":        {false, true, false},
+		"delete_indexeddb":      {false, true, false},
+		"delete_cache_storage":  {false, true, false},
 		"remove_script":         {false, true, false},
 		"remove_intercept_rule": {false, true, false},
 	}
@@ -230,6 +237,8 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"set_vision_deficiency", "type", false, visionDeficiencyValues},
 		{"add_intercept_rule", "action", false, interceptActionValues},
 		{"add_intercept_rule", "error_reason", false, interceptErrorReasonValues},
+		{"force_pseudo_state", "states", true, forcePseudoStateValues},
+		{"emulate_device", "device", false, emulateDeviceValues},
 	}
 
 	for _, tc := range checks {
@@ -536,6 +545,19 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"remove_intercept_rule", map[string]any{"id": ""}, "rule id"},
 		{"click", map[string]any{"selector": ""}, "selector"},
 		{"browser_activate", map[string]any{"browser": ""}, "browser ID"},
+		{"get_indexeddb", map[string]any{"store": "items"}, "requires database"},
+		{"get_indexeddb", map[string]any{"database": "db", "store": "items", "skip": -1}, "skip"},
+		{"delete_indexeddb", map[string]any{"database": ""}, "database"},
+		{"get_cache_storage", map[string]any{"request_url": "https://example.com"}, "requires cache_name"},
+		{"get_cache_storage", map[string]any{"cache_name": "c", "request_url": "https://example.com", "limit": 5}, "cannot be combined"},
+		{"delete_cache_storage", map[string]any{"cache_name": ""}, "cache_name"},
+		{"force_pseudo_state", map[string]any{"selector": ""}, "selector"},
+		{"force_pseudo_state", map[string]any{"selector": "#a", "states": []string{"bogus"}}, "bogus"},
+		{"emulate_device", map[string]any{"device": "unknown"}, "unknown"},
+		{"emulate_device", map[string]any{"device": "reset", "landscape": true}, "landscape"},
+		{"drag_and_drop", map[string]any{"source": "", "target": "#b"}, "source"},
+		{"drag_and_drop", map[string]any{"source": "#a", "target": ""}, "target"},
+		{"drag_and_drop", map[string]any{"source": "#a", "target": "#b", "steps": -1}, "steps"},
 	}
 	for _, tc := range cases {
 		res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})

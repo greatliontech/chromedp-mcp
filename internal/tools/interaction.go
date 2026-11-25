@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -289,6 +290,15 @@ type HandleDialogInput struct {
 	TabInput
 	Accept bool    `json:"accept" jsonschema:"Accept or dismiss the dialog"`
 	Text   *string `json:"text,omitempty" jsonschema:"Text to enter in a prompt dialog. Omit to keep the prompt's default value; pass empty string to submit empty."`
+}
+
+// DragAndDropInput is the input for drag_and_drop.
+type DragAndDropInput struct {
+	SelectorInput
+	Source          string `json:"source" jsonschema:"CSS selector of the element to drag"`
+	Target          string `json:"target" jsonschema:"CSS selector of the drop target element"`
+	Steps           int    `json:"steps,omitempty" jsonschema:"Number of intermediate mouse move steps from source to target (default 10, max 100)"`
+	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"If > 0, observe browser activity (network requests, DOM mutations, URL changes, console, JS errors) for this many ms after dispatch and return counts in 'observed'. Typical values: 200 to catch sync handlers + microtasks, 500–1000 to catch most network responses. Default 0 (no observation). Max 30000."`
 }
 
 var (
@@ -1039,5 +1049,302 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		// next dialog whose HandleOpening already advanced seq.
 		t.Dialog.ClearIfSeq(seq)
 		return nil, struct{}{}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "drag_and_drop",
+		Description: "Drag an element onto a target element by CSS selector. Supports both HTML5 native drag-and-drop (draggable=\"true\" with DataTransfer via CDP drag interception) and pointer/mouse-based drag interactions.",
+		Annotations: mutatingAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp DragAndDropInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if inp.Source == "" {
+			return nil, ActionOutput{}, fmt.Errorf("source selector is required")
+		}
+		if inp.Target == "" {
+			return nil, ActionOutput{}, fmt.Errorf("target selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ActionOutput{}, err
+		}
+		if inp.Steps < 0 || inp.Steps > 100 {
+			return nil, ActionOutput{}, fmt.Errorf("steps must be between 0 and 100, got %d", inp.Steps)
+		}
+		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
+			return nil, ActionOutput{}, err
+		}
+		steps := inp.Steps
+		if steps == 0 {
+			steps = 10
+		}
+
+		t, err := mgr.ResolveTab("", inp.Tab)
+		if err != nil {
+			return nil, ActionOutput{}, err
+		}
+
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		sctx, cancel := selectorContext(tctx, inp.Timeout)
+		defer cancel()
+
+		// Resolve both source and target before opening the observation window
+		// so selector waits are never blamed on the drag interaction.
+		srcNodes, err := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSS(inp.Source)))
+		if err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Source, err)
+		}
+		if len(srcNodes) == 0 {
+			return nil, ActionOutput{}, fmt.Errorf("source selector %q matched no elements", inp.Source)
+		}
+		dstNodes, err := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSS(inp.Target)))
+		if err != nil {
+			return nil, ActionOutput{}, selectorError(tctx, inp.Target, err)
+		}
+		if len(dstNodes) == 0 {
+			return nil, ActionOutput{}, fmt.Errorf("target selector %q matched no elements", inp.Target)
+		}
+
+		var obs *observation
+		if err := t.WithDragLock(tctx, func(ctx context.Context, tgt *chromedp.Target) error {
+			dragCh := make(chan *input.DragData, 1)
+			lctx, lcancel := context.WithCancel(ctx)
+			defer lcancel()
+			if err := chromedp.Listen(lctx, func(ev any) {
+				if d, ok := ev.(*input.EventDragIntercepted); ok && d != nil && d.Data != nil {
+					select {
+					case dragCh <- d.Data:
+					default:
+					}
+				}
+			}); err != nil {
+				return err
+			}
+			if _, err := cdp.Call(ctx, tgt, input.SetInterceptDrags, input.SetInterceptDragsParams{
+				Enabled: true,
+			}); err != nil {
+				// If caller cancelled while SetInterceptDrags(true) was in flight,
+				// disable best-effort so drag interception cannot stay stuck on.
+				if t.Context().Err() == nil && ctx.Err() != nil {
+					cleanCtx, ccancel := cleanupContext(ctx)
+					_, _ = cdp.Call(cleanCtx, tgt, input.SetInterceptDrags, input.SetInterceptDragsParams{
+						Enabled: false,
+					})
+					ccancel()
+				}
+				return fmt.Errorf("enable drag interception: %w", err)
+			}
+			defer func() {
+				cleanCtx, ccancel := cleanupContext(ctx)
+				defer ccancel()
+				_, _ = cdp.Call(cleanCtx, tgt, input.SetInterceptDrags, input.SetInterceptDragsParams{
+					Enabled: false,
+				})
+			}()
+
+			// Open observation inside WithDragLock so queued concurrent drags
+			// only observe their own mutations/network activity.
+			obs = openObservation(ctx, t, inp.ObserveWindowMs)
+
+			srcX, srcY, err := scrollAndCenter(ctx, tgt, srcNodes[0])
+			if err != nil {
+				return fmt.Errorf("source %q: %w", inp.Source, err)
+			}
+
+			// Compute a 16px drag-threshold nudge direction while source is in
+			// view (preferring the direction toward target when already laid
+			// out at a distinct point) so Blink's drag hysteresis is crossed
+			// BEFORE scrolling target into view (critical when source and target
+			// are >1 viewport apart).
+			nudgeDX, nudgeDY := 16.0, 0.0
+			if srcX > 40 {
+				nudgeDX = -16.0
+			}
+			if qRes, qErr := cdp.Call(ctx, tgt, dom.GetContentQuads, dom.GetContentQuadsParams{
+				BackendNodeID: dstNodes[0].BackendNodeID,
+			}); qErr == nil && len(qRes.Quads) > 0 && len(qRes.Quads[0]) >= 8 {
+				q := qRes.Quads[0]
+				dx := (q[0]+q[2]+q[4]+q[6])/4 - srcX
+				dy := (q[1]+q[3]+q[5]+q[7])/4 - srcY
+				if dist := math.Hypot(dx, dy); dist >= 16 {
+					nudgeDX = dx / dist * 16
+					nudgeDY = dy / dist * 16
+				}
+			}
+
+			// Move onto source and press left button.
+			if _, err := cdp.Call(ctx, tgt, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+				Type: chromedp.MouseMoved,
+				X:    srcX,
+				Y:    srcY,
+			}); err != nil {
+				return err
+			}
+			if _, err := cdp.Call(ctx, tgt, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+				Type:       chromedp.MousePressed,
+				X:          srcX,
+				Y:          srcY,
+				Button:     input.MouseButtonLeft,
+				Buttons:    1,
+				ClickCount: 1,
+			}); err != nil {
+				return err
+			}
+
+			// Ensure neither left mouse button nor an active intercepted HTML5
+			// drag is ever left stuck on error/cancel.
+			mouseDown := true
+			lastX, lastY := srcX, srcY
+			var activeDrag *input.DragData
+			defer func() {
+				if activeDrag != nil {
+					cleanCtx, ccancel := cleanupContext(ctx)
+					defer ccancel()
+					_, _ = cdp.Call(cleanCtx, tgt, input.DispatchDragEvent, input.DispatchDragEventParams{
+						Type: input.DispatchDragEventTypeDragCancel,
+						X:    lastX,
+						Y:    lastY,
+						Data: activeDrag,
+					})
+					return
+				}
+				if !mouseDown {
+					return
+				}
+				cleanCtx, ccancel := cleanupContext(ctx)
+				defer ccancel()
+				_, _ = cdp.Call(cleanCtx, tgt, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+					Type:       chromedp.MouseReleased,
+					X:          lastX,
+					Y:          lastY,
+					Button:     input.MouseButtonLeft,
+					ClickCount: 1,
+				})
+			}()
+
+			// Nudge past Blink's drag hysteresis while source is still in view
+			// (two sub-steps so pointer handlers also see smooth drag start).
+			for _, frac := range []float64{0.5, 1.0} {
+				lastX = srcX + nudgeDX*frac
+				lastY = srcY + nudgeDY*frac
+				if _, err := cdp.Call(ctx, tgt, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+					Type:    chromedp.MouseMoved,
+					X:       lastX,
+					Y:       lastY,
+					Button:  input.MouseButtonLeft,
+					Buttons: 1,
+				}); err != nil {
+					return err
+				}
+			}
+
+			// Wait briefly for an asynchronous Input.dragIntercepted event
+			// triggered by Blink's dragstart handler (which runs on the renderer
+			// main thread after DispatchMouseEvent acks).
+			var dragData *input.DragData
+			select {
+			case dragData = <-dragCh:
+			default:
+				if t.Dialog == nil || !t.Dialog.Open() {
+					// Flush the renderer main thread once, then wait up to 50ms
+					// for the browser-process dragIntercepted event.
+					syncCtx, syncCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+					_, _ = chromedp.Evaluate[chromedp.Void](`0`)(syncCtx, tgt)
+					syncCancel()
+				}
+				timer := time.NewTimer(50 * time.Millisecond)
+				select {
+				case dragData = <-dragCh:
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				}
+				timer.Stop()
+			}
+			// Mark intercepted HTML5 drag active immediately so any failure
+			// during scrollAndCenter(target) triggers dragCancel cleanup.
+			if dragData != nil {
+				activeDrag = dragData
+				mouseDown = false
+			}
+
+			// Scroll target into view now (no-op if already in viewport) and
+			// capture its authoritative viewport center.
+			dstX, dstY, err := scrollAndCenter(ctx, tgt, dstNodes[0])
+			if err != nil {
+				return fmt.Errorf("target %q: %w", inp.Target, err)
+			}
+
+			dispatchHTML5Drop := func(data *input.DragData) error {
+				activeDrag = data
+				mouseDown = false
+				lastX, lastY = dstX, dstY
+				for _, evType := range []input.DispatchDragEventType{
+					input.DispatchDragEventTypeDragEnter,
+					input.DispatchDragEventTypeDragOver,
+					input.DispatchDragEventTypeDrop,
+				} {
+					if _, err := cdp.Call(ctx, tgt, input.DispatchDragEvent, input.DispatchDragEventParams{
+						Type: evType,
+						X:    dstX,
+						Y:    dstY,
+						Data: data,
+					}); err != nil {
+						return err
+					}
+				}
+				// Drop completes the HTML5 drag lifecycle cleanly without a
+				// spurious DOM mouseup on the drop target.
+				activeDrag = nil
+				return nil
+			}
+
+			if dragData != nil {
+				return dispatchHTML5Drop(dragData)
+			}
+
+			// Pointer/mouse-based drag: step smoothly from current pointer
+			// position to target center, still watching dragCh in case a drag
+			// initiates mid-move.
+			startX, startY := lastX, lastY
+			for i := 1; i <= steps; i++ {
+				select {
+				case dragData = <-dragCh:
+					return dispatchHTML5Drop(dragData)
+				default:
+				}
+				frac := float64(i) / float64(steps)
+				lastX = startX + (dstX-startX)*frac
+				lastY = startY + (dstY-startY)*frac
+				if _, err := cdp.Call(ctx, tgt, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+					Type:    chromedp.MouseMoved,
+					X:       lastX,
+					Y:       lastY,
+					Button:  input.MouseButtonLeft,
+					Buttons: 1,
+				}); err != nil {
+					return err
+				}
+			}
+			select {
+			case dragData = <-dragCh:
+				return dispatchHTML5Drop(dragData)
+			default:
+			}
+
+			if _, err := cdp.Call(ctx, tgt, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+				Type:       chromedp.MouseReleased,
+				X:          dstX,
+				Y:          dstY,
+				Button:     input.MouseButtonLeft,
+				ClickCount: 1,
+			}); err != nil {
+				return err
+			}
+			mouseDown = false
+			return nil
+		}); err != nil {
+			return nil, ActionOutput{}, err
+		}
+		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
 	})
 }

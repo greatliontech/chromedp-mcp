@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	cdpnetwork "github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/device"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
@@ -68,6 +71,87 @@ type EmulateNetworkInput struct {
 type BlockURLsInput struct {
 	TabInput
 	Patterns []string `json:"patterns" jsonschema:"URL patterns to block (supports * wildcards). Pass empty array to clear."`
+}
+
+// ForcePseudoStateInput is the input for force_pseudo_state.
+type ForcePseudoStateInput struct {
+	SelectorInput
+	Selector string   `json:"selector" jsonschema:"CSS selector of the element to force pseudo-states on"`
+	States   []string `json:"states,omitempty" jsonschema:"CSS pseudo-classes to force (active, focus, hover, visited, focus-within, focus-visible, target). Omit or pass [] to clear forced pseudo-states on this element."`
+}
+
+// ForcePseudoStateOutput is the output for force_pseudo_state.
+type ForcePseudoStateOutput struct {
+	States []string `json:"states"`
+}
+
+// EmulateDeviceInput is the input for emulate_device.
+type EmulateDeviceInput struct {
+	TabInput
+	Device    string `json:"device" jsonschema:"Device preset name to emulate, or 'reset' to clear device emulation and restore desktop defaults."`
+	Landscape bool   `json:"landscape,omitempty" jsonschema:"Emulate landscape orientation (default false, portrait). Cannot be true when device='reset'."`
+}
+
+// EmulateDeviceOutput reports the effective device emulation settings applied.
+type EmulateDeviceOutput struct {
+	Device            string  `json:"device"`
+	Width             int64   `json:"width,omitempty"`
+	Height            int64   `json:"height,omitempty"`
+	DeviceScaleFactor float64 `json:"device_scale_factor,omitempty"`
+	Mobile            bool    `json:"mobile,omitempty"`
+	Touch             bool    `json:"touch,omitempty"`
+	Landscape         bool    `json:"landscape,omitempty"`
+	UserAgent         string  `json:"user_agent,omitempty"`
+}
+
+type devicePreset struct {
+	name      string
+	portrait  chromedp.Device
+	landscape chromedp.Device
+}
+
+var devicePresetList = []devicePreset{
+	{name: "iPhone SE", portrait: device.IPhoneSE3rdgen, landscape: device.IPhoneSE3rdgenlandscape},
+	{name: "iPhone 13", portrait: device.IPhone13, landscape: device.IPhone13landscape},
+	{name: "iPhone 14", portrait: device.IPhone14, landscape: device.IPhone14landscape},
+	{name: "iPhone 14 Pro", portrait: device.IPhone14Pro, landscape: device.IPhone14Prolandscape},
+	{name: "iPhone 15", portrait: device.IPhone15, landscape: device.IPhone15landscape},
+	{name: "iPhone 15 Pro", portrait: device.IPhone15Pro, landscape: device.IPhone15Prolandscape},
+	{name: "iPhone 15 Pro Max", portrait: device.IPhone15ProMax, landscape: device.IPhone15ProMaxlandscape},
+	{name: "iPhone 16", portrait: device.IPhone16, landscape: device.IPhone16landscape},
+	{name: "iPhone 16 Pro", portrait: device.IPhone16Pro, landscape: device.IPhone16Prolandscape},
+	{name: "iPhone 16 Pro Max", portrait: device.IPhone16ProMax, landscape: device.IPhone16ProMaxlandscape},
+	{name: "iPad", portrait: device.IPadgen7, landscape: device.IPadgen7landscape},
+	{name: "iPad Mini", portrait: device.IPadMini, landscape: device.IPadMinilandscape},
+	{name: "iPad Pro 11", portrait: device.IPadPro11, landscape: device.IPadPro11landscape},
+	{name: "Pixel 5", portrait: device.Pixel5, landscape: device.Pixel5landscape},
+	{name: "Galaxy S9+", portrait: device.GalaxyS9, landscape: device.GalaxyS9landscape},
+	{name: "Galaxy Tab S4", portrait: device.GalaxyTabS4, landscape: device.GalaxyTabS4landscape},
+}
+
+var (
+	emulateDeviceValues []string
+	devicePresetsByName map[string]devicePreset
+
+	forcePseudoStateValues = []string{
+		"active",
+		"focus",
+		"hover",
+		"visited",
+		"focus-within",
+		"focus-visible",
+		"target",
+	}
+)
+
+func init() {
+	emulateDeviceValues = make([]string, 0, len(devicePresetList)+1)
+	emulateDeviceValues = append(emulateDeviceValues, "reset")
+	devicePresetsByName = make(map[string]devicePreset, len(devicePresetList))
+	for _, p := range devicePresetList {
+		emulateDeviceValues = append(emulateDeviceValues, p.name)
+		devicePresetsByName[p.name] = p
+	}
 }
 
 var visionDeficiencyValues = []string{
@@ -322,6 +406,135 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			URLPatterns: urlPatterns,
 		})
 		return nil, struct{}{}, err
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "force_pseudo_state",
+		Description: "Force CSS pseudo-classes (:hover, :focus, :active, :visited, :focus-within, :focus-visible, :target) on an element for visual/style inspection. Omit states or pass [] to clear forced pseudo-states on that element.",
+		InputSchema: schemaWithEnums[ForcePseudoStateInput](map[string][]string{
+			"states": forcePseudoStateValues,
+		}),
+		Annotations: idempotentWriteAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input ForcePseudoStateInput) (*mcp.CallToolResult, ForcePseudoStateOutput, error) {
+		if input.Selector == "" {
+			return nil, ForcePseudoStateOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, ForcePseudoStateOutput{}, err
+		}
+		states := make([]string, 0, len(input.States))
+		for _, st := range input.States {
+			if err := validateEnum("pseudo state", st, false, forcePseudoStateValues); err != nil {
+				return nil, ForcePseudoStateOutput{}, err
+			}
+			if !slices.Contains(states, st) {
+				states = append(states, st)
+			}
+		}
+
+		t, err := mgr.ResolveTab("", input.Tab)
+		if err != nil {
+			return nil, ForcePseudoStateOutput{}, err
+		}
+
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+		sctx, scancel := selectorContext(tctx, input.Timeout)
+		defer scancel()
+		nodes, err := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSS(input.Selector), chromedp.NodeReady))
+		if err != nil {
+			return nil, ForcePseudoStateOutput{}, selectorError(tctx, input.Selector, err)
+		}
+		if len(nodes) == 0 {
+			return nil, ForcePseudoStateOutput{}, fmt.Errorf("selector %q matched no elements", input.Selector)
+		}
+
+		applied, err := t.ForcePseudoState(tctx, nodes[0].BackendNodeID, states)
+		if err != nil {
+			return nil, ForcePseudoStateOutput{}, err
+		}
+		if applied == nil {
+			applied = []string{}
+		}
+		return nil, ForcePseudoStateOutput{States: applied}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "emulate_device",
+		Description: "Emulate a mobile or tablet device preset (viewport, device scale factor, mobile flag, orientation, touch emulation, and user agent), or pass device='reset' to clear overrides and restore desktop defaults.",
+		InputSchema: schemaWithEnums[EmulateDeviceInput](map[string][]string{
+			"device": emulateDeviceValues,
+		}),
+		Annotations: idempotentWriteAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input EmulateDeviceInput) (*mcp.CallToolResult, EmulateDeviceOutput, error) {
+		if err := validateEnum("device", input.Device, false, emulateDeviceValues); err != nil {
+			return nil, EmulateDeviceOutput{}, err
+		}
+		if input.Device == "reset" && input.Landscape {
+			return nil, EmulateDeviceOutput{}, fmt.Errorf("landscape cannot be true when device is 'reset'")
+		}
+
+		t, err := mgr.ResolveTab("", input.Tab)
+		if err != nil {
+			return nil, EmulateDeviceOutput{}, err
+		}
+
+		tctx, tcancel := tabContext(ctx, t.Context())
+		defer tcancel()
+
+		if input.Device == "reset" {
+			err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				if _, err := cdp.Call(ctx, tgt, emulation.ClearDeviceMetricsOverride, cdp.Empty{}); err != nil {
+					return err
+				}
+				if _, err := cdp.Call(ctx, tgt, emulation.SetUserAgentOverride, emulation.SetUserAgentOverrideParams{
+					UserAgent: "",
+				}); err != nil {
+					return err
+				}
+				if _, err := cdp.Call(ctx, tgt, emulation.SetTouchEmulationEnabled, emulation.SetTouchEmulationEnabledParams{
+					Enabled: false,
+				}); err != nil {
+					return err
+				}
+				// Wait one animation frame (bounded and skipped when a JS dialog
+				// blocks the renderer) so Blink finishes applying the cleared
+				// visual properties before returning to the caller.
+				if t.Dialog == nil || !t.Dialog.Open() {
+					settleCtx, settleCancel := context.WithTimeout(ctx, 250*time.Millisecond)
+					_, _ = chromedp.Evaluate[chromedp.Void](
+						`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`,
+						chromedp.EvalAwaitPromise,
+					)(settleCtx, tgt)
+					settleCancel()
+				}
+				return nil
+			}))
+			if err != nil {
+				return nil, EmulateDeviceOutput{}, err
+			}
+			return nil, EmulateDeviceOutput{Device: "reset"}, nil
+		}
+
+		preset := devicePresetsByName[input.Device]
+		dev := preset.portrait
+		if input.Landscape {
+			dev = preset.landscape
+		}
+		if err := chromedp.Do(tctx, chromedp.Emulate(dev)); err != nil {
+			return nil, EmulateDeviceOutput{}, err
+		}
+		info := dev.Device()
+		return nil, EmulateDeviceOutput{
+			Device:            preset.name,
+			Width:             info.Width,
+			Height:            info.Height,
+			DeviceScaleFactor: info.Scale,
+			Mobile:            info.Mobile,
+			Touch:             info.Touch,
+			Landscape:         info.Landscape,
+			UserAgent:         info.UserAgent,
+		}, nil
 	})
 }
 

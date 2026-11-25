@@ -8,6 +8,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/domstorage"
 	"github.com/chromedp/cdproto/page"
+	cdpstorage "github.com/chromedp/cdproto/storage"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -25,19 +26,55 @@ func isLocalStorage(typ string) (bool, error) {
 	return typ != "session", nil
 }
 
+// resolveMainFrame returns the current page's main frame from Page.getFrameTree.
+func resolveMainFrame(ctx context.Context, tgt *chromedp.Target) (*cdp.Frame, error) {
+	res, err := cdp.Call(ctx, tgt, page.GetFrameTree, cdp.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	if res.FrameTree == nil || res.FrameTree.Frame == nil {
+		return nil, fmt.Errorf("empty frame tree")
+	}
+	return res.FrameTree.Frame, nil
+}
+
 // resolveStorageID builds a domstorage.StorageID for the current page.
 func resolveStorageID(ctx context.Context, tgt *chromedp.Target, isLocal bool) (*domstorage.StorageID, error) {
-	res, err := cdp.Call(ctx, tgt, page.GetFrameTree, cdp.Empty{})
+	top, err := resolveMainFrame(ctx, tgt)
 	if err != nil {
 		return nil, fmt.Errorf("resolve storage origin: %w", err)
 	}
-	if res.FrameTree == nil || res.FrameTree.Frame == nil {
-		return nil, fmt.Errorf("resolve storage origin: empty frame tree")
-	}
 	return &domstorage.StorageID{
-		SecurityOrigin: res.FrameTree.Frame.SecurityOrigin,
+		SecurityOrigin: top.SecurityOrigin,
 		IsLocalStorage: isLocal,
 	}, nil
+}
+
+// originTarget identifies the current page's origin for storage CDP domains
+// (IndexedDB, CacheStorage) that require exactly one of storageKey or
+// securityOrigin.
+type originTarget struct {
+	storageKey     string
+	securityOrigin string
+}
+
+// resolveOriginTarget resolves the main frame's storage key (preferred on
+// modern Chromium) or security origin, rejecting opaque origins such as
+// about:blank or data: URLs.
+func resolveOriginTarget(ctx context.Context, tgt *chromedp.Target) (originTarget, error) {
+	top, err := resolveMainFrame(ctx, tgt)
+	if err != nil {
+		return originTarget{}, fmt.Errorf("resolve page origin: %w", err)
+	}
+	if top.SecurityOrigin == "" || top.SecurityOrigin == "://" || top.SecurityOrigin == "null" {
+		return originTarget{}, fmt.Errorf("current page has an opaque origin (%q); navigate to an http/https page first", top.SecurityOrigin)
+	}
+	if skRes, err := cdp.Call(ctx, tgt, cdpstorage.GetStorageKey, cdpstorage.GetStorageKeyParams{
+		FrameID: top.ID,
+	}); err == nil && skRes.StorageKey != "" {
+		return originTarget{storageKey: string(skRes.StorageKey)}, nil
+	}
+	return originTarget{securityOrigin: top.SecurityOrigin}, nil
 }
 
 // --- get_storage ---

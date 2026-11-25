@@ -1,9 +1,17 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	cdpcss "github.com/chromedp/cdproto/css"
+	"github.com/chromedp/chromedp"
 )
 
 // --- set_geolocation ---
@@ -694,4 +702,297 @@ func TestBlockURLsHostWithoutPortAndEmptyPattern(t *testing.T) {
 		"tab":      tabID,
 		"patterns": []string{},
 	})
+}
+
+// --- force_pseudo_state ---
+
+func TestForcePseudoStateHoverFocusClearAndCoverageCoexistence(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css")
+		_, _ = w.Write([]byte(`
+			#btn { color: rgb(0, 0, 0); background-color: rgb(255, 255, 255); }
+			#btn:hover { color: rgb(255, 0, 0); }
+			#btn:focus { background-color: rgb(0, 0, 255); }
+			#other { color: rgb(0, 0, 0); }
+			#other:hover { color: rgb(0, 128, 0); }
+		`))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><button id="btn">Btn</button><button id="other">Other</button><button id="temp">Temp</button></body></html>`))
+	})
+	mux.HandleFunc("/page2", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body><p id="p2">Page 2</p></body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+
+	// Track CSS.styleSheetAdded events to verify CSS.disable actually ran when
+	// all forced states clear, when stale forced nodes are pruned, or on navigation.
+	tb, err := harness.mgr.ResolveTab("", tabID)
+	if err != nil {
+		t.Fatalf("ResolveTab: %v", err)
+	}
+	var sheetAdded atomic.Int64
+	lctx, lcancel := context.WithCancel(tb.Context())
+	defer lcancel()
+	if err := chromedp.Listen(lctx, func(ev any) {
+		if _, ok := ev.(*cdpcss.EventStyleSheetAdded); ok {
+			sheetAdded.Add(1)
+		}
+	}); err != nil {
+		t.Fatalf("chromedp.Listen: %v", err)
+	}
+	injectStyleProbe := func() int64 {
+		t.Helper()
+		before := sheetAdded.Load()
+		callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			"tab": tabID,
+			"expression": `(function() {
+				const s = document.createElement('style');
+				s.textContent = '.probe-' + Math.random().toString(36).slice(2) + ' { color: pink; }';
+				document.head.appendChild(s);
+				// Force synchronous Blink style recalculation so CSS.styleSheetAdded
+				// is emitted before evaluate returns when the CSS domain is enabled.
+				return getComputedStyle(document.body).color;
+			})()`,
+		})
+		return sheetAdded.Load() - before
+	}
+	assertCSSDisabled := func(label string) {
+		t.Helper()
+		if delta := injectStyleProbe(); delta != 0 {
+			t.Errorf("%s: CSS domain remained enabled (EventStyleSheetAdded incremented by %d)", label, delta)
+		}
+	}
+
+	getStyle := func(sel string) map[string]string {
+		t.Helper()
+		q := callTool[QueryOutput](t, "query", map[string]any{
+			"tab":            tabID,
+			"selector":       sel,
+			"computed_style": []string{"color", "background-color"},
+		})
+		if len(q.Elements) != 1 {
+			t.Fatalf("query(%s) returned %d elements", sel, len(q.Elements))
+		}
+		return q.Elements[0].ComputedStyle
+	}
+
+	// Baseline computed style.
+	if st := getStyle("#btn"); st["color"] != "rgb(0, 0, 0)" {
+		t.Fatalf("baseline #btn color = %q, want rgb(0, 0, 0)", st["color"])
+	}
+
+	// Force :hover and :focus (including duplicate entry to verify deduplication).
+	forced := callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+		"tab":      tabID,
+		"selector": "#btn",
+		"states":   []string{"hover", "focus", "hover"},
+	})
+	if len(forced.States) != 2 || forced.States[0] != "hover" || forced.States[1] != "focus" {
+		t.Fatalf("force_pseudo_state returned %v, want [hover focus]", forced.States)
+	}
+	if st := getStyle("#btn"); st["color"] != "rgb(255, 0, 0)" || st["background-color"] != "rgb(0, 0, 255)" {
+		t.Fatalf("forced #btn styles = %+v, want color=rgb(255, 0, 0) background-color=rgb(0, 0, 255)", st)
+	}
+	// Positive oracle check: while forced pseudo-state is active, CSS domain is enabled.
+	if delta := injectStyleProbe(); delta == 0 {
+		t.Fatal("expected EventStyleSheetAdded while CSS domain is enabled for forced pseudo-state")
+	}
+
+	// Coexistence with get_coverage(type="css"): CSS coverage must still see
+	// /style.css AND must preserve active forced pseudo-states afterward.
+	cov := callTool[GetCoverageOutput](t, "get_coverage", map[string]any{
+		"tab":  tabID,
+		"type": "css",
+	})
+	foundCSS := false
+	for _, e := range cov.Entries {
+		if strings.HasSuffix(e.URL, "/style.css") && e.TotalBytes > 0 {
+			foundCSS = true
+			break
+		}
+	}
+	if !foundCSS {
+		t.Fatalf("get_coverage(css) while pseudo-state forced missed /style.css: %+v", cov.Entries)
+	}
+	if st := getStyle("#btn"); st["color"] != "rgb(255, 0, 0)" || st["background-color"] != "rgb(0, 0, 255)" {
+		t.Fatalf("after get_coverage(css), #btn forced styles were lost: %+v", st)
+	}
+
+	// Force :hover on a second element; clearing #btn must NOT disturb #other.
+	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+		"tab":      tabID,
+		"selector": "#other",
+		"states":   []string{"hover"},
+	})
+	rawClearedBtn := callToolRaw(t, "force_pseudo_state", map[string]any{
+		"tab":      tabID,
+		"selector": "#btn",
+		"states":   []string{},
+	})
+	if rawClearedBtn.IsError || !strings.Contains(contentText(rawClearedBtn), `"states":[]`) {
+		t.Fatalf("clearing #btn returned %s (err=%v), want \"states\":[]", contentText(rawClearedBtn), rawClearedBtn.IsError)
+	}
+	if st := getStyle("#btn"); st["color"] != "rgb(0, 0, 0)" || st["background-color"] != "rgb(255, 255, 255)" {
+		t.Fatalf("cleared #btn styles = %+v, want baseline colors", st)
+	}
+	if st := getStyle("#other"); st["color"] != "rgb(0, 128, 0)" {
+		t.Fatalf("#other lost forced :hover when #btn was cleared: %+v", st)
+	}
+
+	// Clear #other (omitting states); returns to baseline AND disables CSS domain.
+	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+		"tab":      tabID,
+		"selector": "#other",
+	})
+	if st := getStyle("#other"); st["color"] != "rgb(0, 0, 0)" {
+		t.Fatalf("cleared #other styles = %+v, want rgb(0, 0, 0)", st)
+	}
+	assertCSSDisabled("after clearing last forced element")
+
+	// Stale-node pruning: force :hover on #temp, remove #temp from DOM, then
+	// run get_coverage(css); stale node must be pruned and CSS disabled cleanly.
+	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+		"tab":      tabID,
+		"selector": "#temp",
+		"states":   []string{"hover"},
+	})
+	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `document.getElementById('temp').remove(); true`,
+	})
+	callTool[GetCoverageOutput](t, "get_coverage", map[string]any{"tab": tabID, "type": "css"})
+	assertCSSDisabled("after get_coverage pruned removed forced element")
+
+	// Cross-document navigation resets forced states and disables CSS asynchronously.
+	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+		"tab":      tabID,
+		"selector": "#btn",
+		"states":   []string{"hover"},
+	})
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/page2"})
+	// Poll briefly for async disableCSSIfIdle to finish after EventFrameNavigated.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if injectStyleProbe() == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("CSS domain stayed enabled after cross-document navigation")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Validation & missing selector errors.
+	if errText := callToolExpectErr(t, "force_pseudo_state", map[string]any{"tab": tabID, "selector": "#p2", "states": []string{"bogus"}}); !strings.Contains(errText, "bogus") {
+		t.Errorf("invalid pseudo state err = %q, want bogus", errText)
+	}
+	if errText := callToolExpectErr(t, "force_pseudo_state", map[string]any{"tab": tabID, "selector": "#missing", "states": []string{"hover"}, "timeout": 300}); errText == "" {
+		t.Error("expected error for missing selector")
+	}
+}
+
+// --- emulate_device ---
+
+func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
+	// Serve a responsive page with a viewport meta tag so Mobile=true reports
+	// the exact CSS viewport dimensions rather than Chromium's 980px fallback.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>Responsive</body></html>`))
+	}))
+	defer srv.Close()
+
+	tabID := navigateToFixture(t, "emulation.html")
+	defer closeTab(t, tabID)
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+
+	readEnv := func() struct {
+		Width       int     `json:"width"`
+		Height      int     `json:"height"`
+		DPR         float64 `json:"dpr"`
+		UA          string  `json:"ua"`
+		TouchPoints int     `json:"touch_points"`
+	} {
+		t.Helper()
+		ev := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			"tab": tabID,
+			"expression": `({
+				width: window.innerWidth,
+				height: window.innerHeight,
+				dpr: window.devicePixelRatio,
+				ua: navigator.userAgent,
+				touch_points: navigator.maxTouchPoints,
+			})`,
+		})
+		var got struct {
+			Width       int     `json:"width"`
+			Height      int     `json:"height"`
+			DPR         float64 `json:"dpr"`
+			UA          string  `json:"ua"`
+			TouchPoints int     `json:"touch_points"`
+		}
+		if err := json.Unmarshal(ev.Result, &got); err != nil {
+			t.Fatalf("unmarshal env: %v (raw=%s)", err, ev.Result)
+		}
+		return got
+	}
+
+	baseline := readEnv()
+
+	// Portrait iPhone 15 Pro (Safari viewport is 393x659 @3x).
+	out := callTool[EmulateDeviceOutput](t, "emulate_device", map[string]any{
+		"tab":    tabID,
+		"device": "iPhone 15 Pro",
+	})
+	if out.Device != "iPhone 15 Pro" || out.Width != 393 || out.Height != 659 || out.DeviceScaleFactor != 3 || !out.Mobile || !out.Touch || out.Landscape || !strings.Contains(out.UserAgent, "iPhone") {
+		t.Fatalf("emulate_device portrait output = %+v", out)
+	}
+	env := readEnv()
+	if env.Width != 393 || env.Height != 659 || env.DPR != 3 || !strings.Contains(env.UA, "iPhone") || env.TouchPoints == 0 {
+		t.Fatalf("portrait page env = %+v, want 393x659 @3x iPhone touch>0", env)
+	}
+
+	// Landscape iPhone 15 Pro (Safari landscape viewport is 734x343 @3x).
+	outLand := callTool[EmulateDeviceOutput](t, "emulate_device", map[string]any{
+		"tab":       tabID,
+		"device":    "iPhone 15 Pro",
+		"landscape": true,
+	})
+	if !outLand.Landscape || outLand.Width != 734 || outLand.Height != 343 {
+		t.Fatalf("emulate_device landscape output = %+v", outLand)
+	}
+	envLand := readEnv()
+	if envLand.Width != 734 || envLand.Height != 343 {
+		t.Fatalf("landscape page env = %+v, want 734x343", envLand)
+	}
+
+	// Reset restores desktop UA, touch, DPR, and viewport.
+	resetOut := callTool[EmulateDeviceOutput](t, "emulate_device", map[string]any{
+		"tab":    tabID,
+		"device": "reset",
+	})
+	if resetOut.Device != "reset" {
+		t.Fatalf("reset output = %+v", resetOut)
+	}
+	envReset := readEnv()
+	if envReset.UA != baseline.UA || envReset.TouchPoints != 0 || envReset.Width != baseline.Width || envReset.Height != baseline.Height || envReset.DPR != baseline.DPR {
+		t.Fatalf("reset page env = %+v, want baseline %+v", envReset, baseline)
+	}
+
+	// Validation errors.
+	if errText := callToolExpectErr(t, "emulate_device", map[string]any{"tab": tabID, "device": "Nokia 3310"}); !strings.Contains(errText, "Nokia 3310") {
+		t.Errorf("unknown device err = %q, want Nokia 3310", errText)
+	}
+	if errText := callToolExpectErr(t, "emulate_device", map[string]any{"tab": tabID, "device": "reset", "landscape": true}); !strings.Contains(errText, "landscape") {
+		t.Errorf("reset+landscape err = %q, want landscape", errText)
+	}
 }

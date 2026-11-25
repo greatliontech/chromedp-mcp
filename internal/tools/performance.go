@@ -8,6 +8,7 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	cdpcss "github.com/chromedp/cdproto/css"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/performance"
 	"github.com/chromedp/cdproto/profiler"
 	"github.com/chromedp/chromedp"
@@ -204,22 +205,21 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
-		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-			if coverageType == "js" || coverageType == "all" {
-				if err := collectJSCoverage(ctx, tgt, &entries); err != nil {
-					return err
-				}
+		if coverageType == "js" || coverageType == "all" {
+			err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				return collectJSCoverage(ctx, tgt, &entries)
+			}))
+			if err != nil {
+				return nil, GetCoverageOutput{}, err
 			}
-
-			if coverageType == "css" || coverageType == "all" {
-				if err := collectCSSCoverage(ctx, tgt, &entries); err != nil {
-					return err
-				}
+		}
+		if coverageType == "css" || coverageType == "all" {
+			err = t.WithCSSCoverage(tctx, func(ctx context.Context, tgt *chromedp.Target) error {
+				return collectCSSCoverage(ctx, tgt, &entries)
+			})
+			if err != nil {
+				return nil, GetCoverageOutput{}, err
 			}
-			return nil
-		}))
-		if err != nil {
-			return nil, GetCoverageOutput{}, err
 		}
 
 		return nil, GetCoverageOutput{Entries: entries}, nil
@@ -367,6 +367,9 @@ func collectCSSCoverage(ctx context.Context, tgt *chromedp.Target, entries *[]Co
 		return err
 	}
 
+	if _, err := cdp.Call(ctx, tgt, dom.Enable, dom.EnableParams{}); err != nil {
+		return err
+	}
 	if _, err := cdp.Call(ctx, tgt, cdpcss.Enable, cdp.Empty{}); err != nil {
 		return err
 	}

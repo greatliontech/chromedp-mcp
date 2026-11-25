@@ -632,6 +632,21 @@ Handle a JavaScript dialog (alert, confirm, prompt, beforeunload). Clears the tr
 | `accept` | bool | yes | Accept or dismiss the dialog |
 | `text` | string | no | Text to enter in a prompt dialog. When accepted, omit `text` to submit the prompt's `default_prompt` value, or pass `""` to submit an empty string. |
 
+#### `drag_and_drop`
+
+Drag an element onto a drop target by CSS selector. Uses CDP `Input.setInterceptDrags` alongside stepped mouse dispatch so both HTML5 native drag-and-drop (`draggable="true"` with `DataTransfer` via `Input.dispatchDragEvent`) and pointer/mouse-based drag interactions work seamlessly.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `source` | string | yes | CSS selector of the element to drag |
+| `target` | string | yes | CSS selector of the drop target element |
+| `steps` | int | no | Number of intermediate mouse move steps (`0`–`100`, default `10`) |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (default `0`, max `30000`) |
+
+Returns: `{observed?}`.
+
 ### Cookies
 
 #### `get_cookies`
@@ -718,6 +733,58 @@ List all keys in localStorage or sessionStorage with value sizes. Useful for dis
 | `limit` | int | no | Max keys to return (default all) |
 
 Returns: array of `{key, size}` objects where `size` is the character length of the value.
+
+#### `get_indexeddb`
+
+Inspect IndexedDB on the current page's origin via CDP `IndexedDB` domain (rejects opaque origins such as `about:blank`).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `database` | string | no | Database name. Omit to list all database names on the origin. |
+| `store` | string | no | Object store name (requires `database`). Omit to inspect database schema (version, object stores, indexes); set to read paginated records. |
+| `index` | string | no | Optional index name within `store` to read records through (requires `store`). |
+| `skip` | int | no | Records to skip for pagination (default `0`, requires `store`). |
+| `limit` | int | no | Max records to return (default `50`, requires `store`). |
+
+Returns: `{databases}` in list mode; `{database, version, stores}` in inspect-database mode; `{database, store, index?, entries, has_more}` in read-records mode (values are materialized JSON).
+
+#### `delete_indexeddb`
+
+Delete an IndexedDB database or clear all records in one of its object stores.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `database` | string | yes | Database name |
+| `store` | string | no | Object store name. If provided, clears that object store; if omitted, deletes the entire database. |
+
+#### `get_cache_storage`
+
+Inspect Cache Storage (`window.caches`) on the current page's origin via CDP `CacheStorage` domain (rejects opaque origins).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `cache_name` | string | no | Cache name. Omit to list caches on the origin. |
+| `request_url` | string | no | Exact request URL to read a cached response body (requires `cache_name`; cannot be combined with `path_filter`/`skip`/`limit`). |
+| `path_filter` | string | no | Optional case-insensitive substring filter on entry URL paths when listing entries (requires `cache_name`). |
+| `skip` | int | no | Entries to skip when listing (default `0`, requires `cache_name`). |
+| `limit` | int | no | Max entries to return when listing (default `50`, requires `cache_name`). |
+| `range_start` | int | no | Byte offset to start slicing the response body (default `0`, requires `request_url`). |
+| `range_end` | int | no | Byte offset (exclusive) to end slicing the response body (`0` = end, requires `request_url`). |
+
+Returns: `{caches}` in list-caches mode; `{cache_name, entries, total, has_more}` in list-entries mode; `{cache_name, request_url, status, status_text?, response_type?, response_headers?, body, base64_encoded, total_bytes, truncated}` in read-response mode.
+
+#### `delete_cache_storage`
+
+Delete an entire Cache Storage cache or a single cached request entry.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `cache_name` | string | yes | Cache name |
+| `request_url` | string | no | Exact request URL to remove from the cache. Omit to delete the entire cache. |
 
 ### Performance & Diagnostics
 
@@ -905,6 +972,31 @@ Simulate vision deficiencies for accessibility testing.
 | `tab` | string | no | Tab ID |
 | `type` | string | yes | `"none"`, `"blurredVision"`, `"reducedContrast"`, `"achromatopsia"`, `"deuteranopia"`, `"protanopia"`, `"tritanopia"` |
 
+#### `force_pseudo_state`
+
+Force CSS pseudo-classes on an element via CDP `CSS.forcePseudoState` for style or screenshot inspection. Keeps the `CSS` domain enabled while any element on the tab has forced states, disables it automatically when all forced states are cleared or on main-frame cross-document navigation, and coordinates with `get_coverage` so CSS coverage still sees stylesheets and preserves active forced states afterward.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `selector` | string | yes | CSS selector of the target element |
+| `states` | []string | no | Pseudo-classes to force (`"active"`, `"focus"`, `"hover"`, `"visited"`, `"focus-within"`, `"focus-visible"`, `"target"`). Omit or pass `[]` to clear forced states on this element. |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+
+Returns: `{states}` array of active forced pseudo-classes applied to the element.
+
+#### `emulate_device`
+
+Emulate a mobile or tablet device preset (viewport, device scale factor, mobile flag, screen orientation, touch emulation, and user agent), or reset overrides back to desktop defaults.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `device` | string | yes | Preset name (`"iPhone SE"`, `"iPhone 13"`, `"iPhone 14"`, `"iPhone 14 Pro"`, `"iPhone 15"`, `"iPhone 15 Pro"`, `"iPhone 15 Pro Max"`, `"iPhone 16"`, `"iPhone 16 Pro"`, `"iPhone 16 Pro Max"`, `"iPad"`, `"iPad Mini"`, `"iPad Pro 11"`, `"Pixel 5"`, `"Galaxy S9+"`, `"Galaxy Tab S4"`), or `"reset"` |
+| `landscape` | bool | no | Emulate landscape orientation (default `false`; forbidden when `device="reset"`) |
+
+Returns: `{device, width?, height?, device_scale_factor?, mobile?, touch?, landscape?, user_agent?}`.
+
 ### Network Control
 
 #### `emulate_network`
@@ -1074,11 +1166,13 @@ chromedp-mcp/
       network.go        # get_network_requests, get_response_body, get_request_body, get_websocket_frames
       intercept.go      # add_intercept_rule, remove_intercept_rule, list_intercept_rules, clear_intercept_rules
       js.go             # evaluate (with optional selector)
-      interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, get_dialog, handle_dialog
+      interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, get_dialog, handle_dialog, drag_and_drop
       cookies.go        # get_cookies, set_cookie, delete_cookies
       storage.go        # get_storage, set_storage, delete_storage, get_storage_keys
+      indexeddb.go      # get_indexeddb, delete_indexeddb
+      cachestorage.go   # get_cache_storage, delete_cache_storage
       performance.go    # get_performance_metrics, get_layout_shifts, get_lcp, get_coverage
-      emulation.go      # set_geolocation, set_timezone, set_locale, set_user_agent, set_cpu_throttling, set_vision_deficiency, emulate_network, block_urls
+      emulation.go      # set_geolocation, set_timezone, set_locale, set_user_agent, set_cpu_throttling, set_vision_deficiency, force_pseudo_state, emulate_device, emulate_network, block_urls
 ```
 
 ### Key Types
@@ -1152,7 +1246,7 @@ type RingBuffer[T any] struct {
 - Each tab has its own `chromedp.Context` and collectors. Tools targeting different tabs can run concurrently.
 - Collectors use `sync.Mutex` for thread-safe access.
 - `tab.Manager` and `browser.Manager` use `sync.RWMutex` for concurrent lookups with exclusive creation/deletion.
-- chromedp serializes actions on a single target, so concurrent tool calls on the same tab are safe (they queue).
+- `chromedp` multiplexes concurrent CDP commands on a single target, so stateful multi-step per-tab sequences (Fetch interception lifecycle, CSS forced pseudo-states and coverage, and `drag_and_drop` interception) are explicitly serialized via per-tab mutexes on `tab.Tab`.
 
 ## Tool Annotations
 
@@ -1185,13 +1279,13 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Cookies (`get_cookies`) | true | false | true |
 | Cookies (`set_cookie`) | false | false | true |
 | Cookies (`delete_cookies`) | false | true | false |
-| Storage (`get_storage`, `get_storage_keys`) | true | false | true |
-| Storage (`set_storage`) | false | false | false |
-| Storage (`delete_storage`) | false | true | false |
+| Storage (`get_storage`, `get_storage_keys`, `get_indexeddb`, `get_cache_storage`) | true | false | true |
+| Storage (`set_storage`) | false | false | true |
+| Storage (`delete_storage`, `delete_indexeddb`, `delete_cache_storage`) | false | true | false |
 | Performance (`get_performance_metrics`) | true | false | true |
 | Performance (`get_layout_shifts`, `get_lcp`) | false | false | false |
 | Performance (`get_coverage`) | true | false | true |
-| Emulation (`set_geolocation`, `set_timezone`, `set_locale`, `set_user_agent`, `set_cpu_throttling`, `set_vision_deficiency`) | false | false | true |
+| Emulation (`set_geolocation`, `set_timezone`, `set_locale`, `set_user_agent`, `set_cpu_throttling`, `set_vision_deficiency`, `force_pseudo_state`, `emulate_device`) | false | false | true |
 | Network (`emulate_network`, `block_urls`, `clear_intercept_rules`) | false | false | true |
 | Network (`list_intercept_rules`) | true | false | true |
 | Network (`add_intercept_rule`) | false | false | false |
@@ -1227,18 +1321,9 @@ Note that Chrome enforces a singleton lock on user data directories. Only one Ch
 
 Features not in the initial scope but supported by CDP and worth adding later.
 
-### Storage
-
-- **IndexedDB** — List databases, inspect object stores, read/query data, delete entries via `indexeddb` domain. Useful for debugging offline-first apps.
-- **Cache Storage** — List caches, inspect entries, read cached responses, delete caches via `cachestorage` domain. Useful for debugging service worker caching strategies.
-
 ### Network Control
 
 - **Certificate Inspection** — Get site certificate details via `network.GetCertificate`.
-
-### Emulation
-
-- **Device Emulation** — Emulate specific devices (iPhone, Pixel, etc.) with appropriate viewport, user agent, touch, and device scale factor.
 
 ### Security & Auth
 
@@ -1251,7 +1336,7 @@ Features not in the initial scope but supported by CDP and worth adding later.
 
 ### Debugging
 
-- **CSS Manipulation** — Add CSS rules, modify styles, force pseudo-states (`:hover`, `:focus`, `:active`) via `css` domain. Useful for visually inspecting and debugging styles.
+- **CSS Manipulation** — Add CSS rules and modify stylesheets via `css` domain (`force_pseudo_state` is already implemented).
 - **DOM Manipulation** — Modify the DOM tree directly (set attributes, set outer HTML, remove nodes) via `dom` domain.
 - **DOM Snapshots** — Capture full DOM snapshots including styles and layout via `domsnapshot` domain. Useful for visual regression testing.
 - **MHTML Snapshots** — Capture a complete page as a single MHTML file via `page.CaptureSnapshot`.
@@ -1273,7 +1358,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 
 ### Other
 
-- **Drag and Drop** — Simulate drag-and-drop interactions via `input.DispatchDragEvent`.
 - **Touch Gestures** — Simulate multi-touch, pinch, and swipe gestures via `input.DispatchTouchEvent` and `input.SynthesizePinchGesture` / `SynthesizeScrollGesture`.
 - **Animations** — Inspect and control CSS animations via `animation` domain. Pause, seek, change playback rate.
 - **Layer Tree** — Inspect compositing layers for debugging rendering performance and GPU usage via `layertree` domain.
