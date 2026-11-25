@@ -239,6 +239,10 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `set_vision_deficiency`         | Simulate vision deficiencies for accessibility testing        |
 | `emulate_network`               | Emulate network conditions (offline, latency, throttling)     |
 | `block_urls`                    | Block URLs matching wildcard patterns                         |
+| `add_intercept_rule`            | Intercept, mock (`fulfill`), rewrite (`modify`), or `fail` network requests |
+| `remove_intercept_rule`         | Remove an interception rule by ID                             |
+| `list_intercept_rules`          | List active interception rules and match counts               |
+| `clear_intercept_rules`         | Clear all interception rules and disable Fetch interception   |
 
 ### Observation
 

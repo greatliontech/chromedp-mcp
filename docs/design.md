@@ -928,6 +928,58 @@ Block URLs matching patterns using CDP's `Network.setBlockedURLs` (`urlPatterns`
 | `tab` | string | no | Tab ID |
 | `patterns` | []string | yes | Non-empty URL patterns to block. Pass empty array to clear. |
 
+#### `add_intercept_rule`
+
+Add a per-tab network request interception rule using CDP's `Fetch` domain (`Fetch.enable` is toggled lazily when the first rule is added and disabled when the last rule is removed or cleared). Interception applies to the tab's page target (main frame and same-process iframes, not cross-origin OOPIFs). Rules are evaluated in insertion order (first match wins); non-matching requests pass through untouched. `clear_buffers` does not clear interception rules.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `url_pattern` | string | yes | Glob pattern matching request URLs (`*` = any characters including `/`, `?` = single character, `\` = escape) |
+| `method` | string | no | Optional case-insensitive HTTP method filter |
+| `resource_type` | string | no | Optional case-insensitive CDP resource type filter (e.g. `XHR`, `Document`, `Script`, `Image`, `Stylesheet`; Chromium's `Fetch` domain reports `XHR` for both `fetch()` and `XMLHttpRequest`) |
+| `action` | string | yes | `"fulfill"`, `"modify"`, or `"fail"` |
+| `status` | int | no | HTTP status code (`100`–`599`, default `200`, `fulfill` only; bodyless statuses `1xx`, `204`, `205`, `304` forbid non-empty `body`) |
+| `body` | string | no | Response body text or base64 (`fulfill` only) |
+| `body_base64` | bool | no | Decode `body` from base64 (`fulfill` only) |
+| `headers` | object | no | Response headers (`fulfill`), or case-insensitive request header overrides merged onto original headers (`modify`; setting `""` sends an empty header value rather than deleting the header). Header names must be valid RFC 9110 tokens without case-colliding duplicates; values must not contain CR/LF/NUL. |
+| `url` | string | no | Replacement absolute URL (`modify` only) |
+| `override_method` | string | no | Replacement HTTP method token (`modify` only) |
+| `post_data` | string | no | Non-empty replacement request body text or base64 (`modify` only; CDP omits empty `postData`) |
+| `post_data_base64` | bool | no | Decode `post_data` from base64 (`modify` only; requires non-empty payload) |
+| `error_reason` | string | no | CDP `network.ErrorReason` (`fail` only, default `"Failed"`) |
+
+Returns: `{id}`.
+
+#### `remove_intercept_rule`
+
+Remove an interception rule by ID. Disables CDP `Fetch` interception automatically when the last rule is removed.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `id` | string | yes | Rule ID returned by `add_intercept_rule` |
+
+#### `list_intercept_rules`
+
+List active interception rules on a tab in evaluation order, including match counts.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+
+Returns: `{rules}` array of rule summaries with `{id, url_pattern, method?, resource_type?, action, status?, url?, override_method?, headers?, error_reason?, matches}`.
+
+#### `clear_intercept_rules`
+
+Remove all interception rules on a tab and disable CDP `Fetch` interception.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+
+Returns: `{removed}`.
+
 ### Observation
 
 Observation detects a **silent no-op**: an action that dispatches cleanly and reports success while the page does nothing. A click lands on a live element whose handler early-returns; a form submit is swallowed by a validation guard. The tool result looks identical in both cases, so without observation the caller can only find out by polling afterwards and guessing.
@@ -1008,6 +1060,7 @@ chromedp-mcp/
       performance.go    # Performance timeline collector (LCP, layout shifts)
       execcontext.go    # Per-frame main-world JS execution contexts and frame hierarchy (observation & frame targeting)
       dialog.go         # Active JavaScript modal dialog state per tab
+      intercept.go      # Ordered per-tab network request interception rules and glob/header helpers
     tools/
       browser.go        # browser_launch, browser_connect, browser_activate, browser_close, browser_list
       profile.go        # browser_list_profiles
@@ -1018,7 +1071,8 @@ chromedp-mcp/
       frames.go         # list_frames and same-origin iframe evaluation/wait helpers
       console.go        # get_console_logs, get_js_errors, clear_console
       buffers.go        # clear_buffers
-      network.go        # get_network_requests, get_response_body
+      network.go        # get_network_requests, get_response_body, get_request_body, get_websocket_frames
+      intercept.go      # add_intercept_rule, remove_intercept_rule, list_intercept_rules, clear_intercept_rules
       js.go             # evaluate (with optional selector)
       interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, get_dialog, handle_dialog
       cookies.go        # get_cookies, set_cookie, delete_cookies
@@ -1138,7 +1192,10 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Performance (`get_layout_shifts`, `get_lcp`) | false | false | false |
 | Performance (`get_coverage`) | true | false | true |
 | Emulation (`set_geolocation`, `set_timezone`, `set_locale`, `set_user_agent`, `set_cpu_throttling`, `set_vision_deficiency`) | false | false | true |
-| Network (`emulate_network`, `block_urls`) | false | false | true |
+| Network (`emulate_network`, `block_urls`, `clear_intercept_rules`) | false | false | true |
+| Network (`list_intercept_rules`) | true | false | true |
+| Network (`add_intercept_rule`) | false | false | false |
+| Network (`remove_intercept_rule`) | false | true | false |
 
 ## Configuration
 
@@ -1177,7 +1234,6 @@ Features not in the initial scope but supported by CDP and worth adding later.
 
 ### Network Control
 
-- **Request Interception** — Intercept, modify, mock, or fail network requests via `fetch` domain. Enables testing error states, simulating API responses, and injecting faults.
 - **Certificate Inspection** — Get site certificate details via `network.GetCertificate`.
 
 ### Emulation

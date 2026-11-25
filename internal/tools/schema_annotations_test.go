@@ -81,6 +81,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"list_frames":             {true, false, true},
 		"get_response_body":       {true, false, true},
 		"get_request_body":        {true, false, true},
+		"list_intercept_rules":    {true, false, true},
 		"get_cookies":             {true, false, true},
 		"get_storage":             {true, false, true},
 		"get_storage_keys":        {true, false, true},
@@ -105,9 +106,10 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"reload":          {false, false, false},
 		"go_back":         {false, false, false},
 		"go_forward":      {false, false, false},
-		"evaluate":        {false, false, false},
-		"add_script":      {false, false, false},
-		"click":           {false, false, false},
+		"evaluate":           {false, false, false},
+		"add_script":         {false, false, false},
+		"add_intercept_rule": {false, false, false},
+		"click":              {false, false, false},
 		"type":            {false, false, false},
 		"select_option":   {false, false, false},
 		"submit_form":     {false, false, false},
@@ -138,13 +140,15 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"set_vision_deficiency":         {false, false, true},
 		"emulate_network":               {false, false, true},
 		"block_urls":                    {false, false, true},
+		"clear_intercept_rules":         {false, false, true},
 
 		// Destructive
-		"browser_close":  {false, true, false},
-		"tab_close":      {false, true, false},
-		"delete_cookies": {false, true, false},
-		"delete_storage": {false, true, false},
-		"remove_script":  {false, true, false},
+		"browser_close":         {false, true, false},
+		"tab_close":             {false, true, false},
+		"delete_cookies":        {false, true, false},
+		"delete_storage":        {false, true, false},
+		"remove_script":         {false, true, false},
+		"remove_intercept_rule": {false, true, false},
 	}
 
 	// Enforce exact bijection so newly registered tools cannot bypass annotation checks.
@@ -224,6 +228,8 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"get_downloads", "mode", false, []string{ModePeek, ModeDrain}},
 		{"set_permission", "setting", false, permissionSettingValues},
 		{"set_vision_deficiency", "type", false, visionDeficiencyValues},
+		{"add_intercept_rule", "action", false, interceptActionValues},
+		{"add_intercept_rule", "error_reason", false, interceptErrorReasonValues},
 	}
 
 	for _, tc := range checks {
@@ -524,6 +530,10 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"get_lcp", map[string]any{"mode": "peek", "limit": -1}, "limit"},
 		{"clear_buffers", map[string]any{"targets": []string{"bogus"}}, "bogus"},
 		{"clear_buffers", map[string]any{"targets": []string{}}, "must not be empty"},
+		{"add_intercept_rule", map[string]any{"url_pattern": "", "action": "fail"}, "url_pattern"},
+		{"add_intercept_rule", map[string]any{"url_pattern": "*", "action": "fulfill", "status": 99}, "status"},
+		{"add_intercept_rule", map[string]any{"url_pattern": "*", "action": "modify"}, "requires at least one"},
+		{"remove_intercept_rule", map[string]any{"id": ""}, "rule id"},
 		{"click", map[string]any{"selector": ""}, "selector"},
 		{"browser_activate", map[string]any{"browser": ""}, "browser ID"},
 	}

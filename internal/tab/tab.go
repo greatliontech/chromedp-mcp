@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -26,6 +27,10 @@ var ErrNotFound = errors.New("tab not found")
 // defaultTabInfoTimeout bounds Target.getTargetInfo calls in Tab.Info/URL/Title
 // so a wedged browser target cannot block tab_list indefinitely.
 const defaultTabInfoTimeout = 2 * time.Second
+
+// defaultInterceptDispatchTimeout bounds asynchronous Fetch.continueRequest /
+// fulfillRequest / failRequest calls dispatched for paused requests.
+const defaultInterceptDispatchTimeout = 5 * time.Second
 
 // DefaultConsoleBuffer is the default console log buffer size.
 const DefaultConsoleBuffer = 1000
@@ -115,6 +120,13 @@ type Tab struct {
 	// Dialog tracks the active JavaScript modal dialog (alert, confirm,
 	// prompt, beforeunload) on this tab.
 	Dialog *collector.Dialog
+	// Intercept stores ordered network request interception rules for this tab.
+	Intercept *collector.Intercept
+
+	// interceptOpMu serializes lazy Fetch.enable/Fetch.disable domain toggles
+	// with rule mutations (outer lock; never acquired by EventRequestPaused).
+	interceptOpMu sync.Mutex
+	fetchEnabled  bool
 }
 
 // New creates a new tab from a parent browser context. It creates a new
@@ -159,6 +171,7 @@ func newTab(parentCtx, startupCtx context.Context, id string, targetID target.ID
 		Performance:  collector.NewPerformance(DefaultPerformanceBuffer, 50),
 		ExecContexts: collector.NewExecContexts(),
 		Dialog:       collector.NewDialog(),
+		Intercept:    collector.NewIntercept(),
 	}
 
 	// Register CDP event listeners via WithListener so they are attached
@@ -219,6 +232,15 @@ func newTab(parentCtx, startupCtx context.Context, id string, targetID target.ID
 				t.ExecContexts.HandleExecutionContextsCleared()
 			case *performancetimeline.EventTimelineEventAdded:
 				t.Performance.HandleTimelineEvent(ev)
+			case *fetch.EventRequestPaused:
+				if ev == nil || ev.RequestID == "" {
+					return
+				}
+				rule, matched := t.Intercept.Match(ev)
+				// Dispatch CDP Fetch responses asynchronously: WithListener
+				// runs synchronously on chromedp's event reader goroutine and
+				// calling chromedp.Call inline would deadlock.
+				go t.handleRequestPaused(ev, rule, matched)
 			}
 		}),
 	}
@@ -380,6 +402,26 @@ func (t *Tab) CloseTarget(browserCtx context.Context) {
 	}
 }
 
+// linkContext derives a child context from t.ctx (carrying the tab's chromedp
+// target) that also cancels when caller ctx finishes, optionally bounded by
+// timeout when timeout > 0.
+func (t *Tab) linkContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	var (
+		runCtx context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		runCtx, cancel = context.WithTimeout(t.ctx, timeout)
+	} else {
+		runCtx, cancel = context.WithCancel(t.ctx)
+	}
+	stop := context.AfterFunc(ctx, cancel)
+	return runCtx, func() {
+		stop()
+		cancel()
+	}
+}
+
 // Info returns the tab's current URL and title via CDP Target.getTargetInfo.
 // Unlike Runtime.evaluate (chromedp.Location/Title), Target.getTargetInfo runs
 // in Chrome's browser process and does not block when the renderer is paused by
@@ -391,10 +433,8 @@ func (t *Tab) Info(ctx context.Context) (url, title string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	runCtx, cancel := context.WithTimeout(t.ctx, defaultTabInfoTimeout)
+	runCtx, cancel := t.linkContext(ctx, defaultTabInfoTimeout)
 	defer cancel()
-	stop := context.AfterFunc(ctx, cancel)
-	defer stop()
 
 	res, err := chromedp.Call(runCtx, target.GetTargetInfo, target.GetTargetInfoParams{})
 	if err != nil {
@@ -423,4 +463,174 @@ func (t *Tab) URL(ctx context.Context) (string, error) {
 func (t *Tab) Title(ctx context.Context) (string, error) {
 	_, title, err := t.Info(ctx)
 	return title, err
+}
+
+// AddInterceptRule enables CDP Fetch interception lazily on the first rule and
+// registers rule on this tab. Returns the assigned rule ID.
+func (t *Tab) AddInterceptRule(ctx context.Context, rule collector.InterceptRule) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	t.interceptOpMu.Lock()
+	defer t.interceptOpMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	if !t.fetchEnabled {
+		callCtx, cancel := t.linkContext(ctx, 0)
+		_, err := chromedp.Call(callCtx, fetch.Enable, fetch.EnableParams{
+			Patterns: []*fetch.RequestPattern{{URLPattern: "*"}},
+		})
+		cancel()
+		if err != nil {
+			// If caller ctx cancelled while Fetch.enable was in flight, Chrome
+			// may have already enabled Fetch before our reply arrived; disable
+			// best-effort so Fetch cannot stay stuck enabled with zero rules.
+			if t.ctx.Err() == nil && ctx.Err() != nil {
+				t.disableFetchLocked()
+			}
+			return "", fmt.Errorf("enable fetch interception: %w", err)
+		}
+		t.fetchEnabled = true
+	}
+
+	return t.Intercept.Add(rule), nil
+}
+
+// RemoveInterceptRule deletes a rule by ID and disables CDP Fetch interception
+// when the last rule is removed.
+func (t *Tab) RemoveInterceptRule(ctx context.Context, ruleID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	t.interceptOpMu.Lock()
+	defer t.interceptOpMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	remaining, err := t.Intercept.Remove(ruleID)
+	if err != nil {
+		return err
+	}
+	if remaining == 0 && t.fetchEnabled {
+		t.disableFetchLocked()
+	}
+	return nil
+}
+
+// ClearInterceptRules removes all rules on this tab and disables CDP Fetch
+// interception if enabled. Returns the number of rules removed.
+func (t *Tab) ClearInterceptRules(ctx context.Context) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	t.interceptOpMu.Lock()
+	defer t.interceptOpMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	removed := t.Intercept.Clear()
+	if t.fetchEnabled {
+		t.disableFetchLocked()
+	}
+	return removed, nil
+}
+
+// ListInterceptRules returns summaries of active interception rules in order.
+func (t *Tab) ListInterceptRules() []collector.InterceptRuleInfo {
+	return t.Intercept.List()
+}
+
+// disableFetchLocked calls Fetch.disable under a short bounded context derived
+// from t.ctx so caller cancellation cannot leave Fetch stuck enabled with zero
+// active rules. Caller must hold t.interceptOpMu.
+func (t *Tab) disableFetchLocked() {
+	if t.ctx.Err() != nil {
+		t.fetchEnabled = false
+		return
+	}
+	disableCtx, cancel := context.WithTimeout(t.ctx, defaultTabInfoTimeout)
+	defer cancel()
+	if _, err := chromedp.Call(disableCtx, fetch.Disable, cdp.Empty{}); err == nil || t.ctx.Err() != nil {
+		t.fetchEnabled = false
+	}
+}
+
+func (t *Tab) handleRequestPaused(ev *fetch.EventRequestPaused, rule collector.InterceptRule, matched bool) {
+	callCtx, cancel := context.WithTimeout(t.ctx, defaultInterceptDispatchTimeout)
+	defer cancel()
+
+	if !matched {
+		_, _ = chromedp.Call(callCtx, fetch.ContinueRequest, fetch.ContinueRequestParams{
+			RequestID: ev.RequestID,
+		})
+		return
+	}
+
+	var err error
+	switch rule.Action {
+	case collector.InterceptActionFulfill:
+		status := rule.Status
+		if status == 0 {
+			status = 200
+		}
+		_, err = chromedp.Call(callCtx, fetch.FulfillRequest, fetch.FulfillRequestParams{
+			RequestID:       ev.RequestID,
+			ResponseCode:    int64(status),
+			ResponseHeaders: collector.HeaderEntriesFromMap(rule.Headers),
+			Body:            rule.Body,
+		})
+	case collector.InterceptActionModify:
+		params := fetch.ContinueRequestParams{
+			RequestID: ev.RequestID,
+			URL:       rule.URL,
+			Method:    rule.OverrideMethod,
+			PostData:  rule.PostData,
+		}
+		if len(rule.Headers) > 0 {
+			if ev.Request != nil {
+				params.Headers = collector.MergeRequestHeaders(ev.Request.Headers, rule.Headers)
+			} else {
+				params.Headers = collector.HeaderEntriesFromMap(rule.Headers)
+			}
+		}
+		_, err = chromedp.Call(callCtx, fetch.ContinueRequest, params)
+	case collector.InterceptActionFail:
+		reason := rule.ErrorReason
+		if reason == "" {
+			reason = network.ErrorReasonFailed
+		}
+		_, err = chromedp.Call(callCtx, fetch.FailRequest, fetch.FailRequestParams{
+			RequestID:   ev.RequestID,
+			ErrorReason: reason,
+		})
+	default:
+		_, _ = chromedp.Call(callCtx, fetch.ContinueRequest, fetch.ContinueRequestParams{
+			RequestID: ev.RequestID,
+		})
+		return
+	}
+
+	// Best-effort fallback continue if the matched action failed while the tab
+	// is still alive so a paused request never stalls the browser indefinitely.
+	if err != nil && callCtx.Err() == nil {
+		_, _ = chromedp.Call(callCtx, fetch.ContinueRequest, fetch.ContinueRequestParams{
+			RequestID: ev.RequestID,
+		})
+	}
 }
