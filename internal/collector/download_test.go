@@ -373,3 +373,58 @@ func TestDownloadConcurrentRenameAndClear(t *testing.T) {
 		t.Errorf("after Clear, expected empty buffer and pending")
 	}
 }
+
+func TestDownloadClearPreservesInProgressAndRenamesOnComplete(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDownload(10, dir)
+
+	// Completed download dl-done + in-progress download dl-live.
+	if err := os.WriteFile(filepath.Join(dir, "dl-done"), []byte("done"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dl-live"), []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.HandleDownloadWillBegin(&browser.EventDownloadWillBegin{
+		GUID:              "dl-done",
+		URL:               "https://example.com/done.txt",
+		SuggestedFilename: "done.txt",
+	})
+	d.HandleDownloadProgress(&browser.EventDownloadProgress{
+		GUID:  "dl-done",
+		State: browser.DownloadProgressStateCompleted,
+	})
+	d.HandleDownloadWillBegin(&browser.EventDownloadWillBegin{
+		GUID:              "dl-live",
+		URL:               "https://example.com/live.txt",
+		SuggestedFilename: "live.txt",
+	})
+
+	d.Clear()
+
+	if got := d.Peek(0); len(got) != 0 {
+		t.Fatalf("after Clear, completed buffer = %+v, want empty", got)
+	}
+	if inProg := d.InProgress(); len(inProg) != 1 || inProg[0].GUID != "dl-live" {
+		t.Fatalf("after Clear, InProgress = %+v, want [dl-live]", inProg)
+	}
+
+	// Completing dl-live after Clear must still rename its GUID file and record it.
+	d.HandleDownloadProgress(&browser.EventDownloadProgress{
+		GUID:          "dl-live",
+		TotalBytes:    4,
+		ReceivedBytes: 4,
+		State:         browser.DownloadProgressStateCompleted,
+	})
+	entries := d.Peek(0)
+	if len(entries) != 1 || entries[0].GUID != "dl-live" {
+		t.Fatalf("completed post-Clear download = %+v, want [dl-live]", entries)
+	}
+	wantPath := filepath.Join(dir, "live.txt")
+	if entries[0].Path != wantPath {
+		t.Errorf("post-Clear renamed path = %q, want %q", entries[0].Path, wantPath)
+	}
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("renamed file missing on disk at %q: %v", wantPath, err)
+	}
+}

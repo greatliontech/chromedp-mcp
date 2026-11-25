@@ -52,6 +52,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerVisualTools(s, mgr, opts)
 	registerDOMTools(s, mgr)
 	registerConsoleTools(s, mgr)
+	registerBufferTools(s, mgr)
 	registerNetworkTools(s, mgr)
 	registerJSTools(s, mgr)
 	registerInteractionTools(s, mgr)
@@ -65,7 +66,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 // Buffer-read modes for tools that consume per-tab event buffers
 // (get_console_logs, get_js_errors, get_network_requests,
-// get_websocket_frames, get_layout_shifts, get_downloads).
+// get_websocket_frames, get_layout_shifts, get_lcp, get_downloads).
 //
 // Mode is a required parameter on those tools to make the destructive
 // vs. non-destructive choice explicit at every call site — the previous
@@ -163,6 +164,14 @@ func validateSelectorTimeout(timeoutMs int) error {
 func validateNonNegativeFinite(param string, v float64) error {
 	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 		return fmt.Errorf("%s must be a finite number >= 0, got %v", param, v)
+	}
+	return nil
+}
+
+// validateLimit rejects negative entry limits (0 means default/unlimited).
+func validateLimit(limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("limit must be >= 0, got %d", limit)
 	}
 	return nil
 }

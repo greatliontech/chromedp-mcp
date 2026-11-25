@@ -195,7 +195,8 @@ func TestNetworkResponseReceivedWithoutRequest(t *testing.T) {
 	}
 }
 
-// TestNetworkClear verifies that Clear empties both pending and completed.
+// TestNetworkClear verifies that Clear empties completed entries while
+// preserving in-flight requests so they still record when they finish.
 func TestNetworkClear(t *testing.T) {
 	n := NewNetwork(10)
 	now := time.Now()
@@ -228,18 +229,25 @@ func TestNetworkClear(t *testing.T) {
 
 	n.Clear()
 
-	// Pending should be empty.
-	n.mu.Lock()
-	pendingLen := len(n.pending)
-	n.mu.Unlock()
-	if pendingLen != 0 {
-		t.Errorf("after Clear, pending = %d, want 0", pendingLen)
-	}
-
-	// Buffer should be empty.
+	// Completed buffer should be empty.
 	entries := n.Drain(nil, 0)
 	if len(entries) != 0 {
 		t.Errorf("after Clear, buffer = %d, want 0", len(entries))
+	}
+
+	// In-flight req-1 must stay pending and complete cleanly into the buffer.
+	n.HandleResponseReceived(&network.EventResponseReceived{
+		RequestID: reqID,
+		Type:      "Document",
+		Response:  &network.Response{Status: 200, Headers: network.Headers{}},
+	})
+	n.HandleLoadingFinished(&network.EventLoadingFinished{
+		RequestID: reqID,
+		Timestamp: monoTime(now.Add(100 * time.Millisecond)),
+	})
+	entries = n.Drain(nil, 0)
+	if len(entries) != 1 || entries[0].ID != "req-1" {
+		t.Errorf("after in-flight req-1 finishes post-Clear, buffer = %+v, want [req-1]", entries)
 	}
 }
 

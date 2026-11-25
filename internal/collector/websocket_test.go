@@ -500,3 +500,58 @@ func TestWSEmptyControlFrameCountCreatedSinceAndNilGuards(t *testing.T) {
 		t.Errorf("CountCreatedSince(future) = %d, want 0", got)
 	}
 }
+
+func TestWSClearDropsClosedAndPreservesOpenConnections(t *testing.T) {
+	w := newWS(10, 10, 1024)
+	openID := fireCreated(w, "ws-open", "wss://example.com/open")
+	closedID := fireCreated(w, "ws-closed", "wss://example.com/closed")
+
+	w.HandleFrameSent(&network.EventWebSocketFrameSent{
+		RequestID: openID,
+		Timestamp: monoTime(time.Now()),
+		Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: []byte("before")},
+	})
+	w.HandleFrameReceived(&network.EventWebSocketFrameReceived{
+		RequestID: openID,
+		Timestamp: monoTime(time.Now()),
+		Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: []byte("reply-before")},
+	})
+	w.HandleClosed(&network.EventWebSocketClosed{
+		RequestID: closedID,
+		Timestamp: monoTime(time.Now()),
+	})
+
+	w.Clear()
+
+	conns := w.Connections()
+	if len(conns) != 1 || conns[0].ID != "ws-open" {
+		t.Fatalf("after Clear, Connections = %+v, want only [ws-open]", conns)
+	}
+	if conns[0].FramesSentCount != 0 || conns[0].FramesReceivedCount != 0 {
+		t.Errorf("after Clear, open conn counts = (%d, %d), want (0, 0)", conns[0].FramesSentCount, conns[0].FramesReceivedCount)
+	}
+	if sent, ok := w.Frames("ws-open", WSDirectionSent, 0, true); !ok || len(sent) != 0 {
+		t.Errorf("after Clear, open conn sent = %+v (ok=%v), want empty ok=true", sent, ok)
+	}
+	if _, ok := w.Frames("ws-closed", WSDirectionSent, 0, true); ok {
+		t.Error("closed connection still queryable after Clear")
+	}
+
+	// Open connection must continue capturing frames and close events after Clear.
+	w.HandleFrameReceived(&network.EventWebSocketFrameReceived{
+		RequestID: openID,
+		Timestamp: monoTime(time.Now()),
+		Response:  &network.WebSocketFrame{Opcode: 1, PayloadData: []byte("after")},
+	})
+	recvd, ok := w.Frames("ws-open", WSDirectionReceived, 0, true)
+	if !ok || len(recvd) != 1 || recvd[0].Payload != "after" {
+		t.Fatalf("post-Clear frames on open conn = %+v (ok=%v), want ['after']", recvd, ok)
+	}
+	w.HandleClosed(&network.EventWebSocketClosed{
+		RequestID: openID,
+		Timestamp: monoTime(time.Now()),
+	})
+	if !w.Connections()[0].Closed {
+		t.Error("post-Clear close event was not recorded on open connection")
+	}
+}

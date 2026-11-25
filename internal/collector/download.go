@@ -320,16 +320,13 @@ func (d *Download) InProgress() []DownloadEntry {
 	return entries
 }
 
-// Clear removes all entries from both the pending map and completed buffer.
+// Clear removes all completed and canceled entries from the buffer while
+// preserving in-progress downloads (and seen-GUID deduplication) so active
+// downloads remain visible in InProgress and still rename cleanly on disk when
+// they complete.
 func (d *Download) Clear() {
 	d.mu.Lock()
 	d.gen++
-	d.pending = make(map[string]*DownloadEntry)
-	clear(d.pendingOrder)
-	d.pendingOrder = d.pendingOrder[:0]
-	d.seen = make(map[string]struct{})
-	clear(d.seenOrder)
-	d.seenOrder = d.seenOrder[:0]
 	d.buf.Clear()
 	d.waitRenamesLocked()
 	d.mu.Unlock()

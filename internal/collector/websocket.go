@@ -326,13 +326,34 @@ func (w *WebSocket) Frames(reqID string, dir WSDirection, limit int, peek bool) 
 	return rb.Drain(nil, limit), true
 }
 
-// Clear removes all connections and their frames.
+// Clear removes closed connections and clears buffered frames and frame counts
+// on still-open connections. Open WebSocket entries are retained so subsequent
+// frames, errors, and close events continue to be captured (Chrome never
+// re-emits WebSocketCreated for an already-open socket).
 func (w *WebSocket) Clear() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.conns = make(map[network.RequestID]*wsConnState)
-	clear(w.order)
-	w.order = w.order[:0]
+	kept := w.order[:0]
+	for _, id := range w.order {
+		c := w.conns[id]
+		if c == nil {
+			continue
+		}
+		c.mu.Lock()
+		if c.info.Closed {
+			c.mu.Unlock()
+			delete(w.conns, id)
+			continue
+		}
+		c.sent.Clear()
+		c.received.Clear()
+		c.info.FramesSentCount = 0
+		c.info.FramesReceivedCount = 0
+		c.mu.Unlock()
+		kept = append(kept, id)
+	}
+	clear(w.order[len(kept):])
+	w.order = kept
 }
 
 // evictIfFullLocked drops one connection when the cap is reached, preferring

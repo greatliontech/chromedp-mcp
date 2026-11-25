@@ -261,8 +261,8 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 		if err != nil {
 			return nil, GetStorageKeysOutput{}, err
 		}
-		if input.Limit < 0 {
-			return nil, GetStorageKeysOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		if err := validateLimit(input.Limit); err != nil {
+			return nil, GetStorageKeysOutput{}, err
 		}
 		tab, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

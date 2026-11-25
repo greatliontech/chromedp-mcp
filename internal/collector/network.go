@@ -420,12 +420,11 @@ func (n *Network) CountStartedSince(t time.Time) int {
 	return count
 }
 
-// Clear removes all entries from both the pending map and completed buffer.
+// Clear removes all completed entries from the buffer while preserving
+// in-flight requests in pending so slow requests and redirect chains stay
+// consistent when their completion events arrive.
 func (n *Network) Clear() {
 	n.mu.Lock()
-	n.pending = make(map[network.RequestID]*NetworkEntry)
-	clear(n.pendingOrder)
-	n.pendingOrder = n.pendingOrder[:0]
 	n.buf.Clear()
 	n.mu.Unlock()
 }

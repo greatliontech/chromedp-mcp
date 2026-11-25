@@ -183,6 +183,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | `get_console_logs` | Get captured console messages (log, warn, error, info, debug) |
 | `get_js_errors`    | Get captured JavaScript exceptions                            |
 | `clear_console`    | Clear console and error buffers                               |
+| `clear_buffers`    | Clear selected or all event collector buffers                 |
 
 ### Network
 
@@ -217,6 +218,7 @@ chromedp-mcp exposes 40+ tools organized by category. The browser lifecycle is e
 | ------------------------- | -------------------------------------------------------- |
 | `get_performance_metrics` | Get runtime metrics (heap, DOM nodes, layout, scripting) |
 | `get_layout_shifts`       | Get Cumulative Layout Shift (CLS) data                   |
+| `get_lcp`                 | Get Largest Contentful Paint (LCP) timeline entries      |
 | `get_coverage`            | Get CSS/JS code coverage data                            |
 
 ### Configuration & Emulation

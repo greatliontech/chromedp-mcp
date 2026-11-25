@@ -372,6 +372,18 @@ Clear the console and JS error buffers for a tab.
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
 
+#### `clear_buffers`
+
+Clear one or more event collector buffers. Clears completed/historical buffered entries while preserving live/in-flight state: open WebSockets stay tracked (clearing their frame rings and frame counts and removing closed connections), in-progress downloads remain tracked and still rename on completion, in-flight HTTP requests remain tracked, the URL-change baseline is preserved, and live modal dialog state is untouched. Clearing only `["downloads"]` without `tab` succeeds even with zero open tabs.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID. When provided without `browser`, `downloads` resolves to that tab's owning browser. |
+| `browser` | string | no | Browser ID (defaults to active browser). When provided without `tab`, tab-scoped targets clear that browser's active tab. When both are provided, `tab` ownership is validated. |
+| `targets` | []string | no | Subset of `"console"`, `"errors"`, `"network"`, `"websocket"`, `"performance"`, `"url_changes"`, `"downloads"`, `"all"`. Omit or pass `["all"]` to clear all buffers; an explicit empty array `[]` is rejected. |
+
+Returns: `{cleared}` listing the cleared buffer names in canonical order.
+
 ### Network Inspection
 
 #### `get_network_requests`
@@ -713,7 +725,19 @@ Get Cumulative Layout Shift (CLS) data.
 | `tab` | string | no | Tab ID |
 | `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume entries) |
 
-Returns: array of layout shift entries with `{value, sources, timestamp}`.
+Returns: array of layout shift entries with `{value, had_recent_input?, sources?, timestamp}` and `cumulative_ls` (excluding shifts with `had_recent_input: true`).
+
+#### `get_lcp`
+
+Get Largest Contentful Paint (LCP) timeline entries captured for a tab.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume returned entries) |
+| `limit` | int | no | Max entries to return (default all) |
+
+Returns: `{entries}` array of `{render_time?, load_time?, size, url?, timestamp}` objects.
 
 #### `get_coverage`
 
@@ -977,12 +1001,13 @@ chromedp-mcp/
       visual.go         # screenshot, pdf, set_viewport
       dom.go            # query, get_html, get_text, get_accessibility_tree
       console.go        # get_console_logs, get_js_errors, clear_console
+      buffers.go        # clear_buffers
       network.go        # get_network_requests, get_response_body
       js.go             # evaluate (with optional selector)
       interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, get_dialog, handle_dialog
       cookies.go        # get_cookies, set_cookie, delete_cookies
       storage.go        # get_storage, set_storage, delete_storage, get_storage_keys
-      performance.go    # get_performance_metrics, get_layout_shifts, get_coverage
+      performance.go    # get_performance_metrics, get_layout_shifts, get_lcp, get_coverage
       emulation.go      # set_geolocation, set_timezone, set_locale, set_user_agent, set_cpu_throttling, set_vision_deficiency, emulate_network, block_urls
 ```
 
@@ -1080,12 +1105,10 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Visual (`screenshot`, `pdf`) | true | false | true |
 | Visual (`set_viewport`) | false | false | true |
 | DOM Inspection (`query`, `get_html`, `get_text`, `get_accessibility_tree`) | true | false | true |
-| Console/Errors (drain mode) | false | false | false |
-| Console/Errors (peek mode) | true | false | true |
-| Console (`clear_console`) | false | false | true |
-| Network (drain mode) | false | false | false |
-| Network (peek mode) | true | false | true |
-| Network (`get_response_body`) | true | false | true |
+| Console/Errors (`get_console_logs`, `get_js_errors`) | false | false | false |
+| Console (`clear_console`, `clear_buffers`) | false | false | true |
+| Network (`get_network_requests`, `get_websocket_frames`) | false | false | false |
+| Network (`get_response_body`, `get_request_body`) | true | false | true |
 | JS Execution (`evaluate`) | false | false | false |
 | Interaction (`get_dialog`) | true | false | true |
 | Interaction (`click`, `type`, `handle_dialog`, etc.) | false | false | false |
@@ -1096,7 +1119,7 @@ All tools include MCP `ToolAnnotations` for client-side behavior hints:
 | Storage (`set_storage`) | false | false | false |
 | Storage (`delete_storage`) | false | true | false |
 | Performance (`get_performance_metrics`) | true | false | true |
-| Performance (`get_layout_shifts` drain) | false | false | false |
+| Performance (`get_layout_shifts`, `get_lcp`) | false | false | false |
 | Performance (`get_coverage`) | true | false | true |
 | Emulation (`set_geolocation`, `set_timezone`, `set_locale`, `set_user_agent`, `set_cpu_throttling`, `set_vision_deficiency`) | false | false | true |
 | Network (`emulate_network`, `block_urls`) | false | false | true |

@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -33,8 +32,8 @@ func registerDownloadTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetDownloadsOutput{}, err
 		}
-		if input.Limit < 0 {
-			return nil, GetDownloadsOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		if err := validateLimit(input.Limit); err != nil {
+			return nil, GetDownloadsOutput{}, err
 		}
 		b, err := mgr.Resolve(input.Browser)
 		if err != nil {

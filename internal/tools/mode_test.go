@@ -76,6 +76,7 @@ func TestModeRejectedAtToolBoundary(t *testing.T) {
 		{"get_js_errors", map[string]any{"tab": tabID}},
 		{"get_network_requests", map[string]any{"tab": tabID}},
 		{"get_layout_shifts", map[string]any{"tab": tabID}},
+		{"get_lcp", map[string]any{"tab": tabID}},
 		// get_websocket_frames also requires request_id; the schema lists
 		// every missing required prop, so the error still names 'mode'.
 		{"get_websocket_frames", map[string]any{"tab": tabID}},
@@ -106,9 +107,11 @@ func TestModeRejectedInvalidValueAtSchema(t *testing.T) {
 		name string
 		args map[string]any
 	}{
-		// Buffer-mode tool rejects garbage and rejects a type-mode value.
+		// Buffer-mode tools reject garbage and reject a type-mode value.
 		{"get_console_logs", map[string]any{"tab": tabID, "mode": "wipe"}},
 		{"get_console_logs", map[string]any{"tab": tabID, "mode": "replace"}},
+		{"get_lcp", map[string]any{"tab": tabID, "mode": "wipe"}},
+		{"get_lcp", map[string]any{"tab": tabID, "mode": "replace"}},
 		// Type-mode tool rejects garbage and rejects a buffer-mode value.
 		{"type", map[string]any{"tab": tabID, "selector": "#x", "text": "hi", "mode": "wipe"}},
 		{"type", map[string]any{"tab": tabID, "selector": "#x", "text": "hi", "mode": "drain"}},

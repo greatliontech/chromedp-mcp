@@ -93,6 +93,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"get_network_requests": {false, false, false},
 		"get_websocket_frames": {false, false, false},
 		"get_layout_shifts":    {false, false, false},
+		"get_lcp":              {false, false, false},
 		"get_downloads":        {false, false, false},
 
 		// Non-destructive, non-idempotent mutations
@@ -121,6 +122,7 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"tab_activate":                  {false, false, true},
 		"set_viewport":                  {false, false, true},
 		"clear_console":                 {false, false, true},
+		"clear_buffers":                 {false, false, true},
 		"set_cookie":                    {false, false, true},
 		"set_storage":                   {false, false, true},
 		"set_extra_headers":             {false, false, true},
@@ -215,6 +217,8 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"delete_storage", "type", false, storageTypeValues},
 		{"get_storage_keys", "type", false, storageTypeValues},
 		{"get_layout_shifts", "mode", false, []string{ModePeek, ModeDrain}},
+		{"get_lcp", "mode", false, []string{ModePeek, ModeDrain}},
+		{"clear_buffers", "targets", true, clearBufferTargetValues},
 		{"get_coverage", "type", false, coverageTypeValues},
 		{"get_downloads", "mode", false, []string{ModePeek, ModeDrain}},
 		{"set_permission", "setting", false, permissionSettingValues},
@@ -516,6 +520,9 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"emulate_network", map[string]any{"download_throughput": -0.5}, "download_throughput"},
 		{"get_websocket_frames", map[string]any{"mode": "peek", "request_id": ""}, "request_id"},
 		{"get_console_logs", map[string]any{"mode": "peek", "limit": -1}, "limit"},
+		{"get_lcp", map[string]any{"mode": "peek", "limit": -1}, "limit"},
+		{"clear_buffers", map[string]any{"targets": []string{"bogus"}}, "bogus"},
+		{"clear_buffers", map[string]any{"targets": []string{}}, "must not be empty"},
 		{"click", map[string]any{"selector": ""}, "selector"},
 		{"browser_activate", map[string]any{"browser": ""}, "browser ID"},
 	}

@@ -45,6 +45,18 @@ type GetLayoutShiftsOutput struct {
 	CumulativeLS float64                      `json:"cumulative_ls"`
 }
 
+// GetLCPInput is the input for get_lcp.
+type GetLCPInput struct {
+	TabInput
+	Mode  string `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the buffer, 'drain' to consume them. Required."`
+	Limit int    `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
+}
+
+// GetLCPOutput is the output for get_lcp.
+type GetLCPOutput struct {
+	Entries []collector.LCPEntry `json:"entries"`
+}
+
 // GetCoverageInput is the input for get_coverage.
 type GetCoverageInput struct {
 	TabInput
@@ -136,6 +148,35 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 
 		return nil, GetLayoutShiftsOutput{Shifts: shifts, CumulativeLS: cls}, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_lcp",
+		Description: "Get Largest Contentful Paint (LCP) timeline entries captured for a tab. 'mode' must be 'peek' (keep entries) or 'drain' (consume returned entries).",
+		InputSchema: modeSchemaFor[GetLCPInput](ModePeek, ModeDrain),
+		Annotations: mutatingAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetLCPInput) (*mcp.CallToolResult, GetLCPOutput, error) {
+		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
+			return nil, GetLCPOutput{}, err
+		}
+		if err := validateLimit(input.Limit); err != nil {
+			return nil, GetLCPOutput{}, err
+		}
+		t, err := mgr.ResolveTab("", input.Tab)
+		if err != nil {
+			return nil, GetLCPOutput{}, err
+		}
+
+		var entries []collector.LCPEntry
+		if input.Mode == ModePeek {
+			entries = t.Performance.PeekLCP(input.Limit)
+		} else {
+			entries = t.Performance.DrainLCP(input.Limit)
+		}
+		if entries == nil {
+			entries = []collector.LCPEntry{}
+		}
+		return nil, GetLCPOutput{Entries: entries}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

@@ -110,8 +110,8 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
 			return nil, QueryOutput{}, err
 		}
-		if input.Limit < 0 {
-			return nil, QueryOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		if err := validateLimit(input.Limit); err != nil {
+			return nil, QueryOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

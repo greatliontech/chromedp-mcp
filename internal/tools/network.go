@@ -108,8 +108,8 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, nil, err
 		}
-		if input.Limit < 0 {
-			return nil, nil, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		if err := validateLimit(input.Limit); err != nil {
+			return nil, nil, err
 		}
 		if input.StatusMin < 0 || input.StatusMax < 0 {
 			return nil, nil, fmt.Errorf("status_min and status_max must be >= 0, got %d..%d", input.StatusMin, input.StatusMax)
@@ -248,8 +248,8 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		if input.RequestID == "" {
 			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("request_id is required")
 		}
-		if input.Limit < 0 {
-			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		if err := validateLimit(input.Limit); err != nil {
+			return nil, GetWebSocketFramesOutput{}, err
 		}
 		if err := validateEnum("direction", input.Direction, true, wsDirectionValues); err != nil {
 			return nil, GetWebSocketFramesOutput{}, err
