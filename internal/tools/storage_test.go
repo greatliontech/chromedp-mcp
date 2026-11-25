@@ -304,7 +304,7 @@ func TestStorage_InvalidType(t *testing.T) {
 		"tab":  tabID,
 		"type": "invalid",
 	})
-	if !strings.Contains(errText, "invalid storage type") {
+	if !strings.Contains(errText, "type") || !strings.Contains(errText, "invalid") {
 		t.Errorf("expected invalid type error, got: %s", errText)
 	}
 }

@@ -1487,8 +1487,8 @@ func TestNavigateWaitUntilInvalid(t *testing.T) {
 		"url":        fixtureURL("index.html"),
 		"wait_until": "invalid_event",
 	})
-	if !strings.Contains(errText, "invalid wait_until") {
-		t.Errorf("error = %q, want it to contain 'invalid wait_until'", errText)
+	if !strings.Contains(errText, "wait_until") || !strings.Contains(errText, "invalid_event") {
+		t.Errorf("error = %q, want it to mention 'wait_until' and 'invalid_event'", errText)
 	}
 }
 

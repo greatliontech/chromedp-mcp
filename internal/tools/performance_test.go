@@ -157,7 +157,7 @@ func TestGetCoverageValidationAndEmptyArray(t *testing.T) {
 		"tab":  tabID,
 		"type": "invalid",
 	})
-	if !strings.Contains(errText, "invalid coverage type") {
+	if !strings.Contains(errText, "type") || !strings.Contains(errText, "invalid") {
 		t.Errorf("invalid type err = %q", errText)
 	}
 

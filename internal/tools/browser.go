@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -52,10 +53,11 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_launch",
 		Description: "Launch a new Chrome browser instance managed by the server.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: false,
-		},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserLaunchInput) (*mcp.CallToolResult, BrowserLaunchOutput, error) {
+		if input.Width < 0 || input.Height < 0 {
+			return nil, BrowserLaunchOutput{}, fmt.Errorf("width and height must be >= 0, got %dx%d", input.Width, input.Height)
+		}
 		launchOpts := browser.DefaultLaunchOptions()
 		if input.Headless != nil {
 			launchOpts.Headless = *input.Headless
@@ -94,11 +96,13 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_connect",
 		Description: "Connect to an already-running Chrome instance via its remote debugging URL.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: false,
-		},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserConnectInput) (*mcp.CallToolResult, BrowserConnectOutput, error) {
-		b, err := mgr.Connect(ctx, input.URL, browser.ConnectOptions{
+		urlStr := strings.TrimSpace(input.URL)
+		if urlStr == "" {
+			return nil, BrowserConnectOutput{}, fmt.Errorf("url is required")
+		}
+		b, err := mgr.Connect(ctx, urlStr, browser.ConnectOptions{
 			DownloadDir: opts.DownloadDir,
 		})
 		if err != nil {
@@ -110,9 +114,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_close",
 		Description: "Close a browser. In launch mode kills Chrome. In connect mode disconnects.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-		},
+		Annotations: destructiveAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BrowserCloseInput) (*mcp.CallToolResult, BrowserCloseOutput, error) {
 		id := input.Browser
 		if id == "" {
@@ -131,10 +133,7 @@ func registerBrowserTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_list",
 		Description: "List all managed browsers with their IDs, modes, and connection status.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, BrowserListOutput, error) {
 		return nil, BrowserListOutput{Browsers: mgr.List()}, nil
 	})

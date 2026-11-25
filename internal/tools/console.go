@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -42,12 +43,15 @@ type ClearConsoleInput struct {
 func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_console_logs",
-		Description: "Get captured console messages (log, warn, error, info, debug). 'mode' must be 'peek' (keep entries) or 'drain' (consume entries that match level).",
+		Description: "Get captured console messages (e.g. log, warn, error, info, debug, assert, trace). 'mode' must be 'peek' (keep entries) or 'drain' (consume entries that match level).",
 		InputSchema: modeSchemaFor[GetConsoleLogsInput](ModePeek, ModeDrain),
-		Annotations: &mcp.ToolAnnotations{},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetConsoleLogsInput) (*mcp.CallToolResult, GetConsoleLogsOutput, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetConsoleLogsOutput{}, err
+		}
+		if input.Limit < 0 {
+			return nil, GetConsoleLogsOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -70,10 +74,13 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "get_js_errors",
 		Description: "Get captured JavaScript exceptions and promise rejections. 'mode' must be 'peek' (keep entries) or 'drain' (consume entries).",
 		InputSchema: modeSchemaFor[GetJSErrorsInput](ModePeek, ModeDrain),
-		Annotations: &mcp.ToolAnnotations{},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetJSErrorsInput) (*mcp.CallToolResult, GetJSErrorsOutput, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetJSErrorsOutput{}, err
+		}
+		if input.Limit < 0 {
+			return nil, GetJSErrorsOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -95,9 +102,7 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "clear_console",
 		Description: "Clear the console and JS error buffers for a tab.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ClearConsoleInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

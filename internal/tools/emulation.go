@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -69,14 +70,43 @@ type BlockURLsInput struct {
 	Patterns []string `json:"patterns" jsonschema:"URL patterns to block (supports * wildcards). Pass empty array to clear."`
 }
 
+var visionDeficiencyValues = []string{
+	string(emulation.SetEmulatedVisionDeficiencyTypeNone),
+	string(emulation.SetEmulatedVisionDeficiencyTypeBlurredVision),
+	string(emulation.SetEmulatedVisionDeficiencyTypeReducedContrast),
+	string(emulation.SetEmulatedVisionDeficiencyTypeAchromatopsia),
+	string(emulation.SetEmulatedVisionDeficiencyTypeDeuteranopia),
+	string(emulation.SetEmulatedVisionDeficiencyTypeProtanopia),
+	string(emulation.SetEmulatedVisionDeficiencyTypeTritanopia),
+}
+
 func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_geolocation",
 		Description: "Override device geolocation. Omit all coordinate fields to reset to default. Requires geolocation permission to be granted via set_permission.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetGeolocationInput) (*mcp.CallToolResult, struct{}, error) {
+		if (input.Latitude == nil) != (input.Longitude == nil) {
+			return nil, struct{}{}, fmt.Errorf("latitude and longitude must both be provided (or both omitted to reset)")
+		}
+		if input.Latitude != nil {
+			lat := *input.Latitude
+			if math.IsNaN(lat) || math.IsInf(lat, 0) || lat < -90 || lat > 90 {
+				return nil, struct{}{}, fmt.Errorf("latitude must be between -90 and 90, got %v", lat)
+			}
+			lon := *input.Longitude
+			if math.IsNaN(lon) || math.IsInf(lon, 0) || lon < -180 || lon > 180 {
+				return nil, struct{}{}, fmt.Errorf("longitude must be between -180 and 180, got %v", lon)
+			}
+		} else if input.Accuracy != nil {
+			return nil, struct{}{}, fmt.Errorf("accuracy requires latitude and longitude")
+		}
+		if input.Accuracy != nil {
+			if err := validateNonNegativeFinite("accuracy", *input.Accuracy); err != nil {
+				return nil, struct{}{}, err
+			}
+		}
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -87,7 +117,7 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			Longitude: input.Longitude,
 			Accuracy:  input.Accuracy,
 		}
-		if params.Accuracy == nil && (input.Latitude != nil || input.Longitude != nil) {
+		if params.Accuracy == nil && input.Latitude != nil {
 			// Default accuracy when setting coordinates.
 			params.Accuracy = new(1.0)
 		}
@@ -101,9 +131,7 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_timezone",
 		Description: "Override timezone. Empty string resets to default. Uses IANA timezone IDs (e.g. America/New_York, Europe/London, Asia/Tokyo).",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetTimezoneInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -121,9 +149,7 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_locale",
 		Description: "Override browser locale. Empty string resets to default. Uses ICU locale IDs (e.g. en_US, fr_FR, ja_JP).",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetLocaleInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -141,9 +167,7 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_user_agent",
 		Description: "Override the browser user agent string. Also allows overriding accept-language and platform.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetUserAgentInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -163,10 +187,11 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_cpu_throttling",
 		Description: "Throttle CPU to simulate slow devices. Rate 1 = no throttle, 4 = 4x slowdown. Set to 1 to disable.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetCPUThrottlingInput) (*mcp.CallToolResult, struct{}, error) {
+		if err := validateNonNegativeFinite("rate", input.Rate); err != nil {
+			return nil, struct{}{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -188,27 +213,19 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_vision_deficiency",
 		Description: "Simulate vision deficiencies for accessibility testing: none, blurredVision, reducedContrast, achromatopsia, deuteranopia, protanopia, tritanopia.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[SetVisionDeficiencyInput](map[string][]string{
+			"type": visionDeficiencyValues,
+		}),
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetVisionDeficiencyInput) (*mcp.CallToolResult, struct{}, error) {
+		if err := validateEnum("vision deficiency type", input.Type, false, visionDeficiencyValues); err != nil {
+			return nil, struct{}{}, err
+		}
+		defType := emulation.SetEmulatedVisionDeficiencyType(input.Type)
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
-		}
-
-		defType := emulation.SetEmulatedVisionDeficiencyType(input.Type)
-		switch defType {
-		case emulation.SetEmulatedVisionDeficiencyTypeNone,
-			emulation.SetEmulatedVisionDeficiencyTypeBlurredVision,
-			emulation.SetEmulatedVisionDeficiencyTypeReducedContrast,
-			emulation.SetEmulatedVisionDeficiencyTypeAchromatopsia,
-			emulation.SetEmulatedVisionDeficiencyTypeDeuteranopia,
-			emulation.SetEmulatedVisionDeficiencyTypeProtanopia,
-			emulation.SetEmulatedVisionDeficiencyTypeTritanopia:
-			// valid
-		default:
-			return nil, struct{}{}, fmt.Errorf("invalid vision deficiency type %q: must be none, blurredVision, reducedContrast, achromatopsia, deuteranopia, protanopia, or tritanopia", input.Type)
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -222,10 +239,18 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "emulate_network",
 		Description: "Emulate network conditions (offline, latency, throttled bandwidth). Call with all zeros/defaults to reset to normal.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EmulateNetworkInput) (*mcp.CallToolResult, struct{}, error) {
+		if err := validateNonNegativeFinite("latency", input.Latency); err != nil {
+			return nil, struct{}{}, err
+		}
+		if math.IsNaN(input.DownloadThroughput) || math.IsInf(input.DownloadThroughput, 0) || (input.DownloadThroughput < 0 && input.DownloadThroughput != -1) {
+			return nil, struct{}{}, fmt.Errorf("download_throughput must be -1 or a finite number >= 0, got %v", input.DownloadThroughput)
+		}
+		if math.IsNaN(input.UploadThroughput) || math.IsInf(input.UploadThroughput, 0) || (input.UploadThroughput < 0 && input.UploadThroughput != -1) {
+			return nil, struct{}{}, fmt.Errorf("upload_throughput must be -1 or a finite number >= 0, got %v", input.UploadThroughput)
+		}
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -273,9 +298,7 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "block_urls",
 		Description: "Block URLs matching patterns (supports * wildcards and WHATWG URLPattern syntax). Pass empty array to clear all blocks.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input BlockURLsInput) (*mcp.CallToolResult, struct{}, error) {
 		urlPatterns := make([]*cdpnetwork.BlockPattern, 0, len(input.Patterns))
 		for _, p := range input.Patterns {

@@ -14,17 +14,15 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
+var storageTypeValues = []string{"local", "session"}
+
 // isLocalStorage validates the type parameter and returns true for local,
 // false for session.
 func isLocalStorage(typ string) (bool, error) {
-	switch typ {
-	case "", "local":
-		return true, nil
-	case "session":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid storage type %q: must be \"local\" or \"session\"", typ)
+	if err := validateEnum("storage type", typ, true, storageTypeValues); err != nil {
+		return false, err
 	}
+	return typ != "session", nil
 }
 
 // resolveStorageID builds a domstorage.StorageID for the current page.
@@ -115,14 +113,14 @@ type GetStorageKeysOutput struct {
 }
 
 func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
+	storageTypeEnum := map[string][]string{"type": storageTypeValues}
+
 	// get_storage
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_storage",
 		Description: "Read one or all items from localStorage or sessionStorage.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[GetStorageInput](storageTypeEnum),
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetStorageInput) (*mcp.CallToolResult, GetStorageOutput, error) {
 		isLocal, err := isLocalStorage(input.Type)
 		if err != nil {
@@ -178,9 +176,8 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_storage",
 		Description: "Write a key-value pair to localStorage or sessionStorage.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: false,
-		},
+		InputSchema: schemaWithEnums[SetStorageInput](storageTypeEnum),
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetStorageInput) (*mcp.CallToolResult, struct{}, error) {
 		isLocal, err := isLocalStorage(input.Type)
 		if err != nil {
@@ -218,9 +215,8 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_storage",
 		Description: "Delete one or all items from localStorage or sessionStorage. If key is omitted, clears all items.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-		},
+		InputSchema: schemaWithEnums[DeleteStorageInput](storageTypeEnum),
+		Annotations: destructiveAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteStorageInput) (*mcp.CallToolResult, struct{}, error) {
 		isLocal, err := isLocalStorage(input.Type)
 		if err != nil {
@@ -258,14 +254,15 @@ func registerStorageTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_storage_keys",
 		Description: "List all keys in localStorage or sessionStorage with value sizes. Useful for discovering stored data without retrieving potentially large values.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[GetStorageKeysInput](storageTypeEnum),
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetStorageKeysInput) (*mcp.CallToolResult, GetStorageKeysOutput, error) {
 		isLocal, err := isLocalStorage(input.Type)
 		if err != nil {
 			return nil, GetStorageKeysOutput{}, err
+		}
+		if input.Limit < 0 {
+			return nil, GetStorageKeysOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
 		}
 		tab, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

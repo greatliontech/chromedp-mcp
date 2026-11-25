@@ -148,7 +148,7 @@ func TestClickValidationRejectsInvalidButtonAndNegativeCount(t *testing.T) {
 		"selector": "h1",
 		"button":   "side",
 	})
-	if !strings.Contains(errText, "invalid button") {
+	if !strings.Contains(errText, "button") || !strings.Contains(errText, "side") {
 		t.Errorf("expected invalid button error, got: %s", errText)
 	}
 

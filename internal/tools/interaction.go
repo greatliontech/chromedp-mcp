@@ -274,18 +274,31 @@ type HandleDialogInput struct {
 	Text   string `json:"text,omitempty" jsonschema:"Text to enter in a prompt dialog"`
 }
 
+var (
+	clickButtonValues      = []string{"left", "right", "middle"}
+	pressKeyModifierValues = []string{"ctrl", "shift", "alt", "meta"}
+)
+
 func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "click",
 		Description: "Click an element by CSS selector. Returns the post-resolution state of the target (disabled, aria_disabled, pointer_events, visible) plus a warning string when the click likely had no observable effect (e.g. pointer-events:none, hidden). Errors out before dispatching when the target has the 'disabled' attribute or aria-disabled='true', since clicking a disabled element is almost always a bug in the caller's plan. Pass observe_window_ms > 0 to also observe browser activity (network/DOM/URL/console/JS errors) for that many ms after dispatch — use this to detect silent no-ops where the click landed but the handler short-circuited.",
+		InputSchema: schemaWithEnums[ClickInput](map[string][]string{
+			"button": clickButtonValues,
+		}),
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ClickInput) (*mcp.CallToolResult, ClickOutput, error) {
+		if inp.Selector == "" {
+			return nil, ClickOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ClickOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ClickOutput{}, err
 		}
-		switch inp.Button {
-		case "", "left", "right", "middle":
-		default:
-			return nil, ClickOutput{}, fmt.Errorf("invalid button %q: must be \"left\", \"right\", or \"middle\"", inp.Button)
+		if err := validateEnum("button", inp.Button, true, clickButtonValues); err != nil {
+			return nil, ClickOutput{}, err
 		}
 		if inp.ClickCount < 0 {
 			return nil, ClickOutput{}, fmt.Errorf("click_count must be >= 0, got %d", inp.ClickCount)
@@ -441,8 +454,15 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "type",
 		Description: "Type text into an element matching a CSS selector. 'mode' must be 'replace' (clear the field first — the correct choice for almost every form interaction, since real pages pre-populate fields with placeholders, geocoded defaults, or previous values) or 'append' (type after the existing value — rare; e.g. for contenteditable mid-composition).",
 		InputSchema: modeSchemaFor[TypeInput](TypeModeReplace, TypeModeAppend),
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp TypeInput) (*mcp.CallToolResult, ActionOutput, error) {
 		if err := validateMode(inp.Mode, TypeModeReplace, TypeModeAppend); err != nil {
+			return nil, ActionOutput{}, err
+		}
+		if inp.Selector == "" {
+			return nil, ActionOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
 			return nil, ActionOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
@@ -543,7 +563,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "select_option",
 		Description: "Select an option from a <select> element. Exactly one of value, label, or index must be provided.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SelectOptionInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if inp.Selector == "" {
+			return nil, ActionOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
@@ -627,7 +654,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "submit_form",
 		Description: "Submit a form by CSS selector. Fires the submit event so JS handlers can intercept it. Pass observe_window_ms > 0 to detect submits that fire the event but short-circuit (HTML5 validation, JS validation, framework guards) — non-zero observed counts confirm the submit landed.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SubmitFormInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if inp.Selector == "" {
+			return nil, ActionOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
@@ -666,7 +700,11 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scroll",
 		Description: "Scroll a page or scroll an element into view.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ScrollInput) (*mcp.CallToolResult, ScrollOutput, error) {
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ScrollOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ScrollOutput{}, err
 		}
@@ -722,7 +760,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "hover",
 		Description: "Hover over an element by CSS selector.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp HoverInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if inp.Selector == "" {
+			return nil, ActionOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
@@ -768,7 +813,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "focus",
 		Description: "Focus an element by CSS selector.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp FocusInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if inp.Selector == "" {
+			return nil, ActionOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
@@ -799,6 +851,10 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "press_key",
 		Description: "Press a keyboard key, optionally with modifiers. Pass observe_window_ms > 0 to detect Enter (form submit), Escape (modal dismiss), or arrow-key handler effects.",
+		InputSchema: schemaWithEnums[PressKeyInput](map[string][]string{
+			"modifiers": pressKeyModifierValues,
+		}),
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp PressKeyInput) (*mcp.CallToolResult, ActionOutput, error) {
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
@@ -860,7 +916,14 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "upload_files",
 		Description: "Set files on a file input element. Pass observe_window_ms > 0 to catch the upload XHR that an onchange handler typically fires.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp UploadFilesInput) (*mcp.CallToolResult, ActionOutput, error) {
+		if inp.Selector == "" {
+			return nil, ActionOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(inp.Timeout); err != nil {
+			return nil, ActionOutput{}, err
+		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
 			return nil, ActionOutput{}, err
 		}
@@ -909,6 +972,7 @@ func registerInteractionTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "handle_dialog",
 		Description: "Handle a JavaScript dialog (alert, confirm, prompt, beforeunload).",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, inp HandleDialogInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {

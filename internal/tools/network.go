@@ -92,19 +92,30 @@ type GetWebSocketFramesOutput struct {
 	Received []collector.WSFrame `json:"received"`
 }
 
+var wsDirectionValues = []string{"sent", "received", "both"}
+
 func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:         "get_network_requests",
-		Description:  "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. 'mode' must be 'peek' (keep entries in the HTTP buffer) or 'drain' (consume entries that match the filter). WebSocket connections are long-lived and always returned by snapshot regardless of mode. Pass 'fields' (e.g. ['id','method','url','status']) to project each entry to a subset of JSON keys — useful when listing many entries.",
-		InputSchema:  modeSchemaFor[GetNetworkRequestsInput](ModePeek, ModeDrain),
+		Name:        "get_network_requests",
+		Description: "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. 'mode' must be 'peek' (keep entries in the HTTP buffer) or 'drain' (consume entries that match the filter). WebSocket connections are long-lived and always returned by snapshot regardless of mode. Pass 'fields' (e.g. ['id','method','url','status']) to project each entry to a subset of JSON keys — useful when listing many entries.",
+		InputSchema: schemaWithEnums[GetNetworkRequestsInput](map[string][]string{
+			"mode":   {ModePeek, ModeDrain},
+			"fields": sortedKeys(networkEntryFieldSet),
+		}),
 		OutputSchema: networkRequestsOutputSchema(),
-		Annotations:  &mcp.ToolAnnotations{},
+		Annotations:  mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkRequestsInput) (*mcp.CallToolResult, any, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, nil, err
 		}
 		if input.Limit < 0 {
 			return nil, nil, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		}
+		if input.StatusMin < 0 || input.StatusMax < 0 {
+			return nil, nil, fmt.Errorf("status_min and status_max must be >= 0, got %d..%d", input.StatusMin, input.StatusMax)
+		}
+		if input.StatusMax > 0 && input.StatusMin > input.StatusMax {
+			return nil, nil, fmt.Errorf("status_max (%d) must be >= status_min (%d)", input.StatusMax, input.StatusMin)
 		}
 		var allowedFields map[string]struct{}
 		if len(input.Fields) > 0 {
@@ -165,11 +176,11 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_response_body",
 		Description: "Get the response body of a specific network request by its request ID. Use range_start/range_end to fetch a slice of large bodies; total_bytes always reports the full body size so you can plan paging.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetResponseBodyInput) (*mcp.CallToolResult, GetResponseBodyOutput, error) {
+		if input.RequestID == "" {
+			return nil, GetResponseBodyOutput{}, fmt.Errorf("request_id is required")
+		}
 		if err := validateRange(input.RangeStart, input.RangeEnd); err != nil {
 			return nil, GetResponseBodyOutput{}, err
 		}
@@ -194,11 +205,11 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_request_body",
 		Description: "Get the full request body (POST/PUT/PATCH/DELETE payload) of a specific network request by its request ID. Use when get_network_requests returned has_request_body=true and the inline request_body was empty or truncated. Use range_start/range_end to fetch a slice of large bodies; total_bytes always reports the full body size.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetRequestBodyInput) (*mcp.CallToolResult, GetRequestBodyOutput, error) {
+		if input.RequestID == "" {
+			return nil, GetRequestBodyOutput{}, fmt.Errorf("request_id is required")
+		}
 		if err := validateRange(input.RangeStart, input.RangeEnd); err != nil {
 			return nil, GetRequestBodyOutput{}, err
 		}
@@ -225,28 +236,31 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_websocket_frames",
 		Description: "Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with type=websocket from get_network_requests. 'mode' must be 'peek' (keep frames buffered) or 'drain' (consume them).",
-		InputSchema: modeSchemaFor[GetWebSocketFramesInput](ModePeek, ModeDrain),
-		Annotations: &mcp.ToolAnnotations{},
+		InputSchema: schemaWithEnums[GetWebSocketFramesInput](map[string][]string{
+			"mode":      {ModePeek, ModeDrain},
+			"direction": wsDirectionValues,
+		}),
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetWebSocketFramesInput) (*mcp.CallToolResult, GetWebSocketFramesOutput, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetWebSocketFramesOutput{}, err
 		}
+		if input.RequestID == "" {
+			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("request_id is required")
+		}
 		if input.Limit < 0 {
 			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		}
+		if err := validateEnum("direction", input.Direction, true, wsDirectionValues); err != nil {
+			return nil, GetWebSocketFramesOutput{}, err
+		}
+		direction := input.Direction
+		if direction == "" {
+			direction = "both"
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetWebSocketFramesOutput{}, err
-		}
-
-		direction := strings.ToLower(strings.TrimSpace(input.Direction))
-		if direction == "" {
-			direction = "both"
-		}
-		switch direction {
-		case "sent", "received", "both":
-		default:
-			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("direction must be sent, received, or both")
 		}
 
 		peek := input.Mode == ModePeek

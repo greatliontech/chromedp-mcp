@@ -52,15 +52,32 @@ type SetViewportInput struct {
 	Mobile            bool    `json:"mobile,omitempty" jsonschema:"Emulate mobile device (default false)"`
 }
 
+var screenshotFormatValues = []string{"png", "jpeg"}
+
 func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
+	// screenshot and pdf are read-only when --download-dir is not configured
+	// (filename always errors), and write/overwrite files on disk when it is.
+	captureAnnotations := func() *mcp.ToolAnnotations {
+		if opts.DownloadDir != "" {
+			return idempotentWriteAnnotations()
+		}
+		return readOnlyAnnotations()
+	}
+
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "screenshot",
 		Description: "Capture a screenshot of the viewport, full page, or a specific element.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[ScreenshotInput](map[string][]string{
+			"format": screenshotFormatValues,
+		}),
+		Annotations: captureAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ScreenshotInput) (*mcp.CallToolResult, struct{}, error) {
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, struct{}{}, err
+		}
+		if err := validateEnum("format", input.Format, true, screenshotFormatValues); err != nil {
+			return nil, struct{}{}, err
+		}
 		format := page.CaptureScreenshotFormatPng
 		mimeType := "image/png"
 		ext := ".png"
@@ -68,9 +85,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		if input.Quality < 0 || input.Quality > 100 {
 			return nil, struct{}{}, fmt.Errorf("quality must be between 1 and 100, got %d", input.Quality)
 		}
-		switch input.Format {
-		case "", "png":
-		case "jpeg":
+		if input.Format == "jpeg" {
 			format = page.CaptureScreenshotFormatJpeg
 			mimeType = "image/jpeg"
 			ext = ".jpg"
@@ -78,8 +93,6 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			if jpegQuality == 0 {
 				jpegQuality = 80
 			}
-		default:
-			return nil, struct{}{}, fmt.Errorf("invalid format %q: must be \"png\" or \"jpeg\"", input.Format)
 		}
 		if input.MaxDimension < 0 {
 			return nil, struct{}{}, fmt.Errorf("max_dimension must be >= 0, got %d", input.MaxDimension)
@@ -184,19 +197,16 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pdf",
 		Description: "Generate a PDF of the current page.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: captureAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input PDFInput) (*mcp.CallToolResult, struct{}, error) {
-		if input.Scale < 0 {
-			return nil, struct{}{}, fmt.Errorf("scale must be >= 0, got %v", input.Scale)
+		if err := validateNonNegativeFinite("scale", input.Scale); err != nil {
+			return nil, struct{}{}, err
 		}
-		if input.PaperWidth < 0 {
-			return nil, struct{}{}, fmt.Errorf("paper_width must be >= 0, got %v", input.PaperWidth)
+		if err := validateNonNegativeFinite("paper_width", input.PaperWidth); err != nil {
+			return nil, struct{}{}, err
 		}
-		if input.PaperHeight < 0 {
-			return nil, struct{}{}, fmt.Errorf("paper_height must be >= 0, got %v", input.PaperHeight)
+		if err := validateNonNegativeFinite("paper_height", input.PaperHeight); err != nil {
+			return nil, struct{}{}, err
 		}
 		var saveName string
 		if input.Filename != "" {
@@ -269,15 +279,13 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_viewport",
 		Description: "Set the browser viewport dimensions and device emulation settings.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetViewportInput) (*mcp.CallToolResult, struct{}, error) {
 		if input.Width <= 0 || input.Height <= 0 {
 			return nil, struct{}{}, fmt.Errorf("width and height must be > 0, got %dx%d", input.Width, input.Height)
 		}
-		if input.DeviceScaleFactor < 0 {
-			return nil, struct{}{}, fmt.Errorf("device_scale_factor must be >= 0, got %v", input.DeviceScaleFactor)
+		if err := validateNonNegativeFinite("device_scale_factor", input.DeviceScaleFactor); err != nil {
+			return nil, struct{}{}, err
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)

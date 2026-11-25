@@ -364,8 +364,8 @@ func TestSetPermissionInvalidSetting(t *testing.T) {
 		"name":    "geolocation",
 		"setting": "invalid",
 	})
-	if !strings.Contains(errText, "invalid permission setting") {
-		t.Fatalf("expected validation error, got: %s", errText)
+	if !strings.Contains(errText, "setting") || !strings.Contains(errText, "invalid") {
+		t.Fatalf("expected setting validation error, got: %s", errText)
 	}
 }
 

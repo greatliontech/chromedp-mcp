@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -100,28 +102,116 @@ func validateMode(mode string, allowed ...string) error {
 	return fmt.Errorf("mode must be one of %v, got %q", allowed, mode)
 }
 
-// modeSchemaFor returns the JSON Schema inferred from the input type In
-// with its "mode" property constrained to the given enum values. Tools
-// that take a "mode" parameter use this so the LLM sees the valid values
-// at the schema layer, not only via handler error messages.
+// schemaWithEnums returns the JSON Schema inferred from the input type In
+// with enum constraints applied to the named properties. For scalar string
+// properties, Enum is set on the property; for string-array properties, Enum
+// is set on the array's Items schema.
 //
-// Inference failures are programmer errors and panic at registration
-// time rather than ship a misconfigured tool.
-func modeSchemaFor[In any](allowed ...string) *jsonschema.Schema {
+// Inference or wiring failures (including non-string or nullable *string
+// properties) are programmer errors and panic at registration time rather than
+// ship a misconfigured tool.
+func schemaWithEnums[In any](enums map[string][]string) *jsonschema.Schema {
 	s, err := jsonschema.For[In](nil)
 	if err != nil {
-		panic(fmt.Sprintf("modeSchemaFor: %v", err))
+		panic(fmt.Sprintf("schemaWithEnums: %v", err))
 	}
-	prop, ok := s.Properties["mode"]
-	if !ok {
-		panic("modeSchemaFor: input type has no 'mode' property")
+	for name, allowed := range enums {
+		if len(allowed) == 0 {
+			panic(fmt.Sprintf("schemaWithEnums: empty enum for property %q", name))
+		}
+		prop, ok := s.Properties[name]
+		if !ok {
+			panic(fmt.Sprintf("schemaWithEnums: input type has no %q property", name))
+		}
+		target := prop
+		if prop.Items != nil {
+			target = prop.Items
+		}
+		if target.Type != "string" {
+			panic(fmt.Sprintf("schemaWithEnums: property %q target type is %q (types=%v), want \"string\"", name, target.Type, target.Types))
+		}
+		vals := make([]any, len(allowed))
+		for i, v := range allowed {
+			vals[i] = v
+		}
+		target.Enum = vals
 	}
-	enum := make([]any, len(allowed))
-	for i, v := range allowed {
-		enum[i] = v
-	}
-	prop.Enum = enum
 	return s
+}
+
+// validateEnum validates val against allowed values as defense-in-depth behind
+// schema-level enum validation.
+func validateEnum(param, val string, allowEmpty bool, allowed []string) error {
+	if val == "" && allowEmpty {
+		return nil
+	}
+	if slices.Contains(allowed, val) {
+		return nil
+	}
+	return fmt.Errorf("invalid %s %q: must be one of %v", param, val, allowed)
+}
+
+// validateSelectorTimeout rejects negative timeout values on SelectorInput tools.
+func validateSelectorTimeout(timeoutMs int) error {
+	if timeoutMs < 0 {
+		return fmt.Errorf("timeout must be >= 0, got %d", timeoutMs)
+	}
+	return nil
+}
+
+// validateNonNegativeFinite rejects NaN, +/-Inf, and negative values.
+func validateNonNegativeFinite(param string, v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return fmt.Errorf("%s must be a finite number >= 0, got %v", param, v)
+	}
+	return nil
+}
+
+// modeSchemaFor returns the JSON Schema inferred from the input type In
+// with its "mode" property constrained to the given enum values.
+func modeSchemaFor[In any](allowed ...string) *jsonschema.Schema {
+	return schemaWithEnums[In](map[string][]string{"mode": allowed})
+}
+
+// readOnlyAnnotations returns MCP ToolAnnotations for tools that never mutate
+// browser, tab, or buffer state.
+func readOnlyAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    true,
+		DestructiveHint: new(false),
+		IdempotentHint:  true,
+	}
+}
+
+// idempotentWriteAnnotations returns MCP ToolAnnotations for non-destructive
+// mutating tools whose repeated invocation with the same inputs produces the
+// same resulting state.
+func idempotentWriteAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    false,
+		DestructiveHint: new(false),
+		IdempotentHint:  true,
+	}
+}
+
+// mutatingAnnotations returns MCP ToolAnnotations for non-destructive mutating
+// tools that are not idempotent (including peek/drain buffer readers).
+func mutatingAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    false,
+		DestructiveHint: new(false),
+		IdempotentHint:  false,
+	}
+}
+
+// destructiveAnnotations returns MCP ToolAnnotations for tools that close
+// resources or delete state.
+func destructiveAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    false,
+		DestructiveHint: new(true),
+		IdempotentHint:  false,
+	}
 }
 
 // TabInput is embedded by tool inputs that operate on a tab but do not

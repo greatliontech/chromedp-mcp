@@ -102,13 +102,13 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "query",
 		Description: "Query the DOM and return information about matching elements.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input QueryInput) (*mcp.CallToolResult, QueryOutput, error) {
 		if input.Selector == "" {
 			return nil, QueryOutput{}, fmt.Errorf("selector is required")
+		}
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, QueryOutput{}, err
 		}
 		if input.Limit < 0 {
 			return nil, QueryOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
@@ -210,11 +210,11 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_html",
 		Description: "Get the HTML content of the page or a subtree.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetHTMLInput) (*mcp.CallToolResult, GetHTMLOutput, error) {
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, GetHTMLOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetHTMLOutput{}, err
@@ -245,11 +245,11 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_text",
 		Description: "Get the visible text content of the page or an element.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetTextInput) (*mcp.CallToolResult, GetTextOutput, error) {
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, GetTextOutput{}, err
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, GetTextOutput{}, err
@@ -281,11 +281,11 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:         "get_accessibility_tree",
 		Description:  "Get the accessibility tree of the page. A compact, token-efficient representation of page structure. Uses CDP's accessibility domain directly.",
 		OutputSchema: accessibilityTreeOutputSchema(),
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations:  readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetAccessibilityTreeInput) (*mcp.CallToolResult, GetAccessibilityTreeOutput, error) {
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, GetAccessibilityTreeOutput{}, err
+		}
 		if input.Depth < 0 {
 			return nil, GetAccessibilityTreeOutput{}, fmt.Errorf("depth must be >= 0, got %d", input.Depth)
 		}

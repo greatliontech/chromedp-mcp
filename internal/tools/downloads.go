@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -27,12 +28,13 @@ func registerDownloadTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "get_downloads",
 		Description: "Get tracked file downloads with their status, progress, and file paths. Shows both completed and in-progress downloads. Requires --download-dir to be configured. 'mode' must be 'peek' or 'drain'.",
 		InputSchema: modeSchemaFor[GetDownloadsInput](ModePeek, ModeDrain),
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint: true,
-		},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetDownloadsInput) (*mcp.CallToolResult, GetDownloadsOutput, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetDownloadsOutput{}, err
+		}
+		if input.Limit < 0 {
+			return nil, GetDownloadsOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
 		}
 		b, err := mgr.Resolve(input.Browser)
 		if err != nil {

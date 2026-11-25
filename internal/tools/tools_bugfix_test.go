@@ -111,8 +111,8 @@ func TestPressKeyInvalidModifier(t *testing.T) {
 		"key":       "a",
 		"modifiers": []string{"invalid_mod"},
 	})
-	if !strings.Contains(errText, "unknown modifier") {
-		t.Errorf("error = %q, want to contain 'unknown modifier'", errText)
+	if !strings.Contains(errText, "modifiers") || !strings.Contains(errText, "invalid_mod") {
+		t.Errorf("error = %q, want to mention modifiers and 'invalid_mod'", errText)
 	}
 }
 
@@ -126,8 +126,8 @@ func TestPressKeyMultipleInvalidModifiers(t *testing.T) {
 		"key":       "a",
 		"modifiers": []string{"ctrl", "superkey"},
 	})
-	if !strings.Contains(errText, "unknown modifier") {
-		t.Errorf("error = %q, want to contain 'unknown modifier'", errText)
+	if !strings.Contains(errText, "modifiers") {
+		t.Errorf("error = %q, want to mention 'modifiers'", errText)
 	}
 	if !strings.Contains(errText, "superkey") {
 		t.Errorf("error = %q, want to mention the invalid modifier 'superkey'", errText)

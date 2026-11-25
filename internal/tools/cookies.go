@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/url"
 	"strings"
 
@@ -62,14 +61,13 @@ type DeleteCookiesInput struct {
 	Path   string `json:"path,omitempty" jsonschema:"Scope deletion to a path"`
 }
 
+var cookieSameSiteValues = []string{"Strict", "Lax", "None"}
+
 func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_cookies",
 		Description: "Get browser cookies for the current page or specified URLs.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetCookiesInput) (*mcp.CallToolResult, GetCookiesOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -106,9 +104,10 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_cookie",
 		Description: "Set a browser cookie.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[SetCookieInput](map[string][]string{
+			"same_site": cookieSameSiteValues,
+		}),
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetCookieInput) (*mcp.CallToolResult, struct{}, error) {
 		if input.Name == "" {
 			return nil, struct{}{}, fmt.Errorf("cookie name is required")
@@ -117,13 +116,11 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 		if input.Domain != "" && (domain == "" || domain == ".") {
 			return nil, struct{}{}, fmt.Errorf("invalid cookie domain %q", input.Domain)
 		}
-		if math.IsNaN(input.Expires) || math.IsInf(input.Expires, 0) || input.Expires < 0 {
-			return nil, struct{}{}, fmt.Errorf("expires must be a finite number >= 0, got %v", input.Expires)
+		if err := validateNonNegativeFinite("expires", input.Expires); err != nil {
+			return nil, struct{}{}, err
 		}
-		switch input.SameSite {
-		case "", "Strict", "Lax", "None":
-		default:
-			return nil, struct{}{}, fmt.Errorf("invalid same_site %q: must be \"Strict\", \"Lax\", or \"None\"", input.SameSite)
+		if err := validateEnum("same_site", input.SameSite, true, cookieSameSiteValues); err != nil {
+			return nil, struct{}{}, err
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -171,9 +168,7 @@ func registerCookieTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_cookies",
 		Description: "Delete cookies by name, optionally scoped to a domain and path. If name, domain, and path are all omitted, clears all browser cookies. If name is omitted with domain or path set, deletes only matching cookies.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-		},
+		Annotations: destructiveAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteCookiesInput) (*mcp.CallToolResult, struct{}, error) {
 		domain := strings.TrimSpace(input.Domain)
 		if input.Domain != "" && (domain == "" || domain == ".") {

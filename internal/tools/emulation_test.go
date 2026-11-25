@@ -331,8 +331,8 @@ func TestSetVisionDeficiencyInvalid(t *testing.T) {
 		"tab":  tabID,
 		"type": "invalid_type",
 	})
-	if !strings.Contains(errText, "invalid vision deficiency type") {
-		t.Fatalf("expected validation error, got: %s", errText)
+	if !strings.Contains(errText, "type") || !strings.Contains(errText, "invalid_type") {
+		t.Fatalf("expected vision deficiency validation error, got: %s", errText)
 	}
 }
 

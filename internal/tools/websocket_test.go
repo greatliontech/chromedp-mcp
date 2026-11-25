@@ -390,8 +390,8 @@ func TestGetWebSocketFramesInvalidDirection(t *testing.T) {
 		"direction":  "sideways",
 		"mode":       "peek",
 	})
-	if !strings.Contains(errText, "direction must be") {
-		t.Errorf("error text = %q, want substring 'direction must be'", errText)
+	if !strings.Contains(errText, "direction") || !strings.Contains(errText, "sideways") {
+		t.Errorf("error text = %q, want mention of 'direction' and 'sideways'", errText)
 	}
 }
 

@@ -3,7 +3,6 @@ package tools
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"slices"
 	"sync"
 
@@ -65,14 +64,13 @@ type GetCoverageOutput struct {
 	Entries []CoverageEntry `json:"entries"`
 }
 
+var coverageTypeValues = []string{"css", "js", "all"}
+
 func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_performance_metrics",
 		Description: "Get Chrome runtime performance metrics including JS heap size, DOM node count, layout counts, and timing data.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetPerformanceMetricsInput) (*mcp.CallToolResult, GetPerformanceMetricsOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -108,7 +106,7 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "get_layout_shifts",
 		Description: "Get Cumulative Layout Shift (CLS) data. 'mode' must be 'peek' (keep entries) or 'drain' (consume them).",
 		InputSchema: modeSchemaFor[GetLayoutShiftsInput](ModePeek, ModeDrain),
-		Annotations: &mcp.ToolAnnotations{},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetLayoutShiftsInput) (*mcp.CallToolResult, GetLayoutShiftsOutput, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetLayoutShiftsOutput{}, err
@@ -143,19 +141,17 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_coverage",
 		Description: "Get CSS and/or JavaScript code coverage data showing used vs unused bytes per file.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[GetCoverageInput](map[string][]string{
+			"type": coverageTypeValues,
+		}),
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetCoverageInput) (*mcp.CallToolResult, GetCoverageOutput, error) {
+		if err := validateEnum("coverage type", input.Type, true, coverageTypeValues); err != nil {
+			return nil, GetCoverageOutput{}, err
+		}
 		coverageType := input.Type
 		if coverageType == "" {
 			coverageType = "all"
-		}
-		switch coverageType {
-		case "all", "js", "css":
-		default:
-			return nil, GetCoverageOutput{}, fmt.Errorf("invalid coverage type %q: must be \"css\", \"js\", or \"all\"", input.Type)
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)

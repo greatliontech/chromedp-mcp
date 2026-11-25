@@ -46,6 +46,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tab_new",
 		Description: "Create a new browser tab, optionally navigating to a URL. The new tab becomes the active tab.",
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabNewInput) (*mcp.CallToolResult, TabNewOutput, error) {
 		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
@@ -77,10 +78,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tab_list",
 		Description: "List all open tabs with their IDs, URLs, and titles.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabListInput) (*mcp.CallToolResult, TabListOutput, error) {
 		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
@@ -96,9 +94,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tab_activate",
 		Description: "Set a tab as the active tab by ID.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabActivateInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := mgr.ActivateTab(input.Tab); err != nil {
 			return nil, struct{}{}, err
@@ -109,9 +105,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tab_close",
 		Description: "Close a tab by ID. If the active tab is closed, the most recently used remaining tab becomes active.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-		},
+		Annotations: destructiveAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabCloseInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := mgr.CloseTab(input.Tab); err != nil {
 			return nil, struct{}{}, err

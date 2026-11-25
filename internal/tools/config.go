@@ -23,9 +23,9 @@ type AddScriptInput struct {
 	// EvaluateNow controls whether the script also runs once on the
 	// document currently loaded in the tab. Required so the LLM declares
 	// intent — silently defaulting either way creates real footguns:
-	// false misses the common 'instrument now and future' case and
-	// caused issue 006; true would silently double-execute side-effecting
-	// scripts (window.fetch wrappers etc.) on the current page.
+	// false misses the common 'instrument now and future' case; true would
+	// silently double-execute side-effecting scripts (window.fetch wrappers
+	// etc.) on the current page.
 	EvaluateNow bool `json:"evaluate_now" jsonschema:"If true, also evaluate the script once on the currently loaded document via Runtime.evaluate. The returned identifier removes only the new-document registration; current-document side effects cannot be undone via remove_script. Required."`
 }
 
@@ -78,14 +78,19 @@ type SetIgnoreCertErrorsInput struct {
 	Ignore bool `json:"ignore" jsonschema:"If true, all certificate errors will be ignored."`
 }
 
+var permissionSettingValues = []string{
+	string(cdpbrowser.PermissionSettingGranted),
+	string(cdpbrowser.PermissionSettingDenied),
+	string(cdpbrowser.PermissionSettingPrompt),
+}
+
 func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "add_script",
 		Description: "Inject JavaScript to run on every new document before any page scripts. Useful for test fixtures, polyfills, disabling animations, or intercepting APIs. The 'evaluate_now' parameter controls whether the script also runs once on the currently loaded document — set true for the common 'instrument now and future loads' case, false to register only for future navigations. Use the 'evaluate' tool if you only want one-shot execution on the current document. Caveat for evaluate_now=true: scripts that wrap globals (window.fetch, XMLHttpRequest.prototype.send, console.log) will run once on top of any existing wrapper and again on every future navigation; guard side-effecting code with `if (window.__myInstalled) return; window.__myInstalled = true;` to keep installation idempotent.",
-		// IdempotentHint is intentionally omitted: with evaluate_now=true,
-		// successive calls produce additive current-document side effects.
-		// Returning the original identifier-only contract as idempotent
-		// would be misleading.
+		// IdempotentHint is false: with evaluate_now=true, successive calls
+		// produce additive current-document side effects.
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input AddScriptInput) (*mcp.CallToolResult, AddScriptOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -155,10 +160,11 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "remove_script",
 		Description: "Remove an injected script by its identifier (returned by add_script).",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: new(true),
-		},
+		Annotations: destructiveAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input RemoveScriptInput) (*mcp.CallToolResult, struct{}, error) {
+		if input.Identifier == "" {
+			return nil, struct{}{}, fmt.Errorf("script identifier is required")
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -175,9 +181,7 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_extra_headers",
 		Description: "Inject custom HTTP headers into all requests from this tab. Useful for auth tokens, feature flags, API keys. Pass an empty headers object to clear.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetExtraHeadersInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -200,21 +204,22 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_permission",
 		Description: "Grant, deny, or reset a browser permission (geolocation, notifications, camera, microphone, clipboard-read, clipboard-write, etc.).",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		InputSchema: schemaWithEnums[SetPermissionInput](map[string][]string{
+			"setting": permissionSettingValues,
+		}),
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetPermissionInput) (*mcp.CallToolResult, struct{}, error) {
+		if input.Name == "" {
+			return nil, struct{}{}, fmt.Errorf("permission name is required")
+		}
+		if err := validateEnum("permission setting", input.Setting, false, permissionSettingValues); err != nil {
+			return nil, struct{}{}, err
+		}
+		setting := cdpbrowser.PermissionSetting(input.Setting)
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
-		}
-
-		setting := cdpbrowser.PermissionSetting(input.Setting)
-		switch setting {
-		case cdpbrowser.PermissionSettingGranted, cdpbrowser.PermissionSettingDenied, cdpbrowser.PermissionSettingPrompt:
-			// valid
-		default:
-			return nil, struct{}{}, fmt.Errorf("invalid permission setting %q: must be granted, denied, or prompt", input.Setting)
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -230,9 +235,7 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_emulated_media",
 		Description: "Override CSS media type and features. Use to test dark mode (prefers-color-scheme: dark), reduced motion (prefers-reduced-motion: reduce), or print styles (media: print). Call with no arguments to reset.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetEmulatedMediaInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -259,9 +262,7 @@ func registerConfigTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_ignore_certificate_errors",
 		Description: "Ignore or enforce TLS certificate errors. Enable to test against local dev servers with self-signed certificates.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetIgnoreCertErrorsInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {

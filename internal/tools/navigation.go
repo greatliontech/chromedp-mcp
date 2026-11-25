@@ -60,23 +60,26 @@ type WaitForInput struct {
 	Timeout    int    `json:"timeout,omitempty" jsonschema:"Timeout in milliseconds (default 30000)"`
 }
 
+var navigateWaitUntilValues = []string{"load", "domcontentloaded", "networkidle"}
+
 func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "navigate",
 		Description: "Navigate a tab to a URL. Returns the final URL (after redirects), page title, and HTTP status code.",
-		Annotations: &mcp.ToolAnnotations{},
+		InputSchema: schemaWithEnums[NavigateInput](map[string][]string{
+			"wait_until": navigateWaitUntilValues,
+		}),
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input NavigateInput) (*mcp.CallToolResult, NavigateOutput, error) {
 		if input.URL == "" {
 			return nil, NavigateOutput{}, fmt.Errorf("url is required")
 		}
-		waitEvent := "load"
-		if input.WaitUntil != "" {
-			switch input.WaitUntil {
-			case "load", "domcontentloaded", "networkidle":
-				waitEvent = input.WaitUntil
-			default:
-				return nil, NavigateOutput{}, fmt.Errorf("invalid wait_until value %q: must be load, domcontentloaded, or networkidle", input.WaitUntil)
-			}
+		if err := validateEnum("wait_until", input.WaitUntil, true, navigateWaitUntilValues); err != nil {
+			return nil, NavigateOutput{}, err
+		}
+		waitEvent := input.WaitUntil
+		if waitEvent == "" {
+			waitEvent = "load"
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -120,9 +123,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "reload",
 		Description: "Reload the current page. Returns the final URL and page title after reload.",
-		Annotations: &mcp.ToolAnnotations{
-			IdempotentHint: true,
-		},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReloadInput) (*mcp.CallToolResult, ReloadOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -164,7 +165,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "go_back",
 		Description: "Navigate back in browser history.",
-		Annotations: &mcp.ToolAnnotations{},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GoBackInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -183,7 +184,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "go_forward",
 		Description: "Navigate forward in browser history.",
-		Annotations: &mcp.ToolAnnotations{},
+		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GoForwardInput) (*mcp.CallToolResult, struct{}, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -202,10 +203,7 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wait_for",
 		Description: "Wait for a CSS selector to become visible or a JS expression to become truthy. Exactly one of selector or expression must be provided.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input WaitForInput) (*mcp.CallToolResult, struct{}, error) {
 		if input.Selector == "" && input.Expression == "" {
 			return nil, struct{}{}, fmt.Errorf("exactly one of selector or expression must be provided")

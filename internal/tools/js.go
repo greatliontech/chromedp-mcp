@@ -42,7 +42,11 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:         "evaluate",
 		Description:  "Execute JavaScript in the page context and return the result. Without a selector, evaluates an expression directly. When a selector is provided, runs inside a function body with the first matched element as 'el' (use 'return' to produce a value, e.g. 'return el.textContent').",
 		OutputSchema: evaluateOutputSchema(),
+		Annotations:  mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input EvaluateInput) (*mcp.CallToolResult, EvaluateOutput, error) {
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, EvaluateOutput{}, err
+		}
 		if input.MaxResultBytes < 0 {
 			return nil, EvaluateOutput{}, fmt.Errorf("max_result_bytes must be >= 0, got %d", input.MaxResultBytes)
 		}

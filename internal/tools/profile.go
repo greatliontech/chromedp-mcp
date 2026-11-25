@@ -40,16 +40,13 @@ func registerProfileTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_list_profiles",
 		Description: "List available Chrome/Chromium user profiles that can be used with browser_launch.",
-		Annotations: &mcp.ToolAnnotations{
-			ReadOnlyHint:   true,
-			IdempotentHint: true,
-		},
+		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, BrowserListProfilesOutput, error) {
 		all, err := profile.Discover(userDataDir)
 		if err != nil {
 			return nil, BrowserListProfilesOutput{}, err
 		}
-		var infos []ProfileInfo
+		infos := make([]ProfileInfo, 0, len(all))
 		for _, p := range all {
 			if allowed[p.Name] {
 				infos = append(infos, ProfileInfo{
