@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -53,10 +54,25 @@ type GetStorageInput struct {
 // GetStorageOutput is the output for get_storage.
 type GetStorageOutput struct {
 	// Value is set when a specific key is requested. Null when the key
-	// does not exist.
-	Value *string `json:"value"`
-	// Entries is set when no key is specified — all key-value pairs.
-	Entries map[string]string `json:"entries,omitempty"`
+	// does not exist. Omitted in all-entries mode.
+	Value *string `json:"value,omitempty"`
+	// Entries is set when no key is specified — all key-value pairs
+	// (empty object {} when storage is empty). Omitted in single-key mode.
+	Entries map[string]string `json:"entries,omitzero"`
+}
+
+// MarshalJSON ensures single-key mode always emits {"value": ...} (including
+// explicit null when the key is missing) and all-entries mode always emits
+// {"entries": {...}} (including {} when empty, without a spurious "value": null).
+func (o GetStorageOutput) MarshalJSON() ([]byte, error) {
+	if o.Entries != nil {
+		return json.Marshal(struct {
+			Entries map[string]string `json:"entries"`
+		}{Entries: o.Entries})
+	}
+	return json.Marshal(struct {
+		Value *string `json:"value"`
+	}{Value: o.Value})
 }
 
 // --- set_storage ---

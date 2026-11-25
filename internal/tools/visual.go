@@ -2,16 +2,18 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -20,13 +22,13 @@ import (
 
 // ScreenshotInput is the input for screenshot.
 type ScreenshotInput struct {
-	TabInput
+	SelectorInput
 	Selector     string `json:"selector,omitempty" jsonschema:"CSS selector to screenshot a specific element. If omitted captures the viewport."`
 	FullPage     bool   `json:"full_page,omitempty" jsonschema:"Capture the full scrollable page (default false). Ignored if selector is set."`
 	Format       string `json:"format,omitempty" jsonschema:"Image format: png (default) or jpeg"`
 	Quality      int    `json:"quality,omitempty" jsonschema:"JPEG quality 1-100 (default 80). Ignored for PNG."`
-	Filename     string `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Timestamp-based name used if empty. The image is still returned inline."`
-	MaxDimension int    `json:"max_dimension,omitempty" jsonschema:"Maximum allowed width or height in pixels. If the screenshot exceeds this in either dimension it is downscaled proportionally. Useful to stay within API image-size limits (e.g. 8000 for Anthropic)."`
+	Filename     string `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Omit to return inline only. The image is still returned inline."`
+	MaxDimension int    `json:"max_dimension,omitempty" jsonschema:"Maximum allowed width or height in physical pixels. If the screenshot exceeds this in either dimension it is downscaled proportionally. Useful to stay within API image-size limits (e.g. 8000 for Anthropic)."`
 }
 
 // PDFInput is the input for pdf.
@@ -38,7 +40,7 @@ type PDFInput struct {
 	PaperWidth      float64 `json:"paper_width,omitempty" jsonschema:"Paper width in inches (default 8.5)"`
 	PaperHeight     float64 `json:"paper_height,omitempty" jsonschema:"Paper height in inches (default 11)"`
 	PageRanges      string  `json:"page_ranges,omitempty" jsonschema:"Page ranges e.g. 1-5 8. Defaults to all pages."`
-	Filename        string  `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Timestamp-based name used if empty."`
+	Filename        string  `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Omit to return inline only."`
 }
 
 // SetViewportInput is the input for set_viewport.
@@ -59,6 +61,39 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ScreenshotInput) (*mcp.CallToolResult, struct{}, error) {
+		format := page.CaptureScreenshotFormatPng
+		mimeType := "image/png"
+		ext := ".png"
+		jpegQuality := int64(0)
+		if input.Quality < 0 || input.Quality > 100 {
+			return nil, struct{}{}, fmt.Errorf("quality must be between 1 and 100, got %d", input.Quality)
+		}
+		switch input.Format {
+		case "", "png":
+		case "jpeg":
+			format = page.CaptureScreenshotFormatJpeg
+			mimeType = "image/jpeg"
+			ext = ".jpg"
+			jpegQuality = int64(input.Quality)
+			if jpegQuality == 0 {
+				jpegQuality = 80
+			}
+		default:
+			return nil, struct{}{}, fmt.Errorf("invalid format %q: must be \"png\" or \"jpeg\"", input.Format)
+		}
+		if input.MaxDimension < 0 {
+			return nil, struct{}{}, fmt.Errorf("max_dimension must be >= 0, got %d", input.MaxDimension)
+		}
+
+		var saveName string
+		if input.Filename != "" {
+			var err error
+			saveName, err = validateSaveFilename(opts.DownloadDir, input.Filename, ext)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+		}
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -68,31 +103,22 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 
-		// Compute the CDP screenshot format/quality parameters once.
-		format := page.CaptureScreenshotFormatPng
-		jpegQuality := int64(0)
-		if input.Format == "jpeg" {
-			format = page.CaptureScreenshotFormatJpeg
-			jpegQuality = int64(input.Quality)
-			if jpegQuality <= 0 {
-				jpegQuality = 80
-			}
-		}
-
 		if input.Selector != "" {
-			// Element screenshot. We build the CDP command manually so
-			// that format and quality are respected (chromedp.ScreenshotScale
-			// hardcodes PNG). The approach mirrors chromedp's ScreenshotNodes:
-			// query the element's bounding rect, round it like Puppeteer does,
-			// then call Page.captureScreenshot with the computed clip.
-			scale := 1.0
-			if input.MaxDimension > 0 {
-				scale, err = elementScale(tctx, input.Selector, input.MaxDimension)
-				if err != nil {
-					return nil, struct{}{}, err
-				}
+			// Bound only the visibility wait with selectorContext so slow
+			// image encoding cannot produce a false "not visible" error.
+			sctx, scancel := selectorContext(tctx, input.Timeout)
+			nodes, waitErr := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSS(input.Selector), chromedp.NodeVisible))
+			scancel()
+			if waitErr != nil {
+				return nil, struct{}{}, selectorError(tctx, input.Selector, waitErr)
 			}
-			buf, err = chromedp.Run(tctx, elementScreenshot(input.Selector, format, jpegQuality, scale))
+			if len(nodes) == 0 {
+				return nil, struct{}{}, fmt.Errorf("selector %q did not return any nodes", input.Selector)
+			}
+			buf, err = chromedp.Run(tctx, captureElementNode(input.Selector, nodes[0].BackendNodeID, format, jpegQuality, input.MaxDimension))
+			if err != nil {
+				return nil, struct{}{}, err
+			}
 		} else {
 			// Viewport or full-page screenshot. Build the CDP command
 			// directly so we can set format, quality, and clip.Scale.
@@ -129,16 +155,9 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 				buf = res.Data
 				return nil
 			}))
-		}
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-
-		mimeType := "image/png"
-		ext := ".png"
-		if input.Format == "jpeg" {
-			mimeType = "image/jpeg"
-			ext = ".jpg"
+			if err != nil {
+				return nil, struct{}{}, err
+			}
 		}
 
 		content := []mcp.Content{
@@ -148,9 +167,9 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			},
 		}
 
-		// Save to disk if requested and download dir is configured.
-		if input.Filename != "" {
-			path, err := saveToDownloadDir(opts.DownloadDir, input.Filename, ext, buf)
+		// Save to disk if requested.
+		if saveName != "" {
+			path, err := writeDownloadFile(opts.DownloadDir, saveName, buf)
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -170,6 +189,24 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input PDFInput) (*mcp.CallToolResult, struct{}, error) {
+		if input.Scale < 0 {
+			return nil, struct{}{}, fmt.Errorf("scale must be >= 0, got %v", input.Scale)
+		}
+		if input.PaperWidth < 0 {
+			return nil, struct{}{}, fmt.Errorf("paper_width must be >= 0, got %v", input.PaperWidth)
+		}
+		if input.PaperHeight < 0 {
+			return nil, struct{}{}, fmt.Errorf("paper_height must be >= 0, got %v", input.PaperHeight)
+		}
+		var saveName string
+		if input.Filename != "" {
+			var err error
+			saveName, err = validateSaveFilename(opts.DownloadDir, input.Filename, ".pdf")
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+		}
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -202,8 +239,8 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 		// When saving to disk, return the file path instead of the
 		// (potentially large) inline blob.
-		if input.Filename != "" {
-			path, err := saveToDownloadDir(opts.DownloadDir, input.Filename, ".pdf", pdfData)
+		if saveName != "" {
+			path, err := writeDownloadFile(opts.DownloadDir, saveName, pdfData)
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -236,6 +273,13 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 			IdempotentHint: true,
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetViewportInput) (*mcp.CallToolResult, struct{}, error) {
+		if input.Width <= 0 || input.Height <= 0 {
+			return nil, struct{}{}, fmt.Errorf("width and height must be > 0, got %dx%d", input.Width, input.Height)
+		}
+		if input.DeviceScaleFactor < 0 {
+			return nil, struct{}{}, fmt.Errorf("device_scale_factor must be >= 0, got %v", input.DeviceScaleFactor)
+		}
+
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, struct{}{}, err
@@ -244,7 +288,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 		scale := input.DeviceScaleFactor
-		if scale <= 0 {
+		if scale == 0 {
 			scale = 1.0
 		}
 
@@ -260,31 +304,29 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	})
 }
 
-// saveToDownloadDir writes data to a file in the configured download
-// directory. If filename has no extension, defaultExt is appended. If
-// filename is empty, a timestamp-based name is generated. Returns the
-// absolute path of the written file.
-func saveToDownloadDir(dir, filename, defaultExt string, data []byte) (string, error) {
+// validateSaveFilename verifies that dir is configured and filename is a safe
+// single path segment (no traversal, separators, NUL bytes, "." or ".."),
+// appending defaultExt when filename has no extension.
+func validateSaveFilename(dir, filename, defaultExt string) (string, error) {
 	if dir == "" {
 		return "", fmt.Errorf("--download-dir not configured; cannot save to disk")
 	}
+	if filename == "" || filename == "." || filename == ".." ||
+		strings.ContainsAny(filename, `/\`) || strings.ContainsRune(filename, '\x00') ||
+		filepath.Base(filename) != filename {
+		return "", fmt.Errorf("invalid filename %q: must be a plain filename without path separators or traversal", filename)
+	}
+	if filepath.Ext(filename) == "" {
+		filename += defaultExt
+	}
+	return filename, nil
+}
 
-	// Ensure the directory exists.
+// writeDownloadFile writes data to a validated filename inside dir.
+func writeDownloadFile(dir, filename string, data []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating download dir: %w", err)
 	}
-
-	if filename == "" {
-		filename = time.Now().Format("20060102-150405") + defaultExt
-	} else if filepath.Ext(filename) == "" {
-		filename += defaultExt
-	}
-
-	// Prevent path traversal.
-	if filepath.Base(filename) != filename {
-		return "", fmt.Errorf("filename must not contain path separators: %q", filename)
-	}
-
 	path := filepath.Join(dir, filename)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("writing file: %w", err)
@@ -292,18 +334,45 @@ func saveToDownloadDir(dir, filename, defaultExt string, data []byte) (string, e
 	return path, nil
 }
 
+// pageDevicePixelRatio returns window.devicePixelRatio for the target,
+// defaulting to 1.0 if unavailable or non-positive.
+func pageDevicePixelRatio(ctx context.Context, tgt *chromedp.Target) float64 {
+	dpr, err := chromedp.Evaluate[float64]("window.devicePixelRatio || 1")(ctx, tgt)
+	if err != nil || dpr <= 0 || math.IsNaN(dpr) || math.IsInf(dpr, 0) {
+		return 1.0
+	}
+	return dpr
+}
+
+// downscaleFactor returns a CDP clip.Scale <= 1.0 so that Chrome's float32
+// scale conversion and pixel ceiling cannot exceed maxDim physical pixels.
+func downscaleFactor(w, h, dpr float64, maxDim int) float64 {
+	if maxDim <= 0 {
+		return 1.0
+	}
+	largestPx := math.Max(w, h) * dpr
+	if largestPx <= float64(maxDim) {
+		return 1.0
+	}
+	s32 := float32(float64(maxDim) / largestPx)
+	if math.Ceil(float64(s32)*largestPx) > float64(maxDim) {
+		s32 = math.Nextafter32(s32, 0)
+	}
+	return float64(s32)
+}
+
 // captureClip returns a page.Viewport clip and a scale factor for
-// Page.captureScreenshot. When the capture area exceeds maxDim in either
-// dimension the returned scale is < 1, telling Chrome to downscale during
-// capture (GPU-accelerated). If fullPage is true the clip covers the entire
-// document; otherwise it covers the CSS viewport.
+// Page.captureScreenshot. When the physical capture area (CSS dimensions * DPR)
+// exceeds maxDim in either dimension, the returned scale is < 1 so Chrome
+// downscales during capture. If fullPage is true the clip covers the entire
+// document; otherwise it covers the currently scrolled CSS viewport.
 func captureClip(ctx context.Context, tgt *chromedp.Target, fullPage bool, maxDim int) (*page.Viewport, float64, error) {
 	metrics, err := cdp.Call(ctx, tgt, page.GetLayoutMetrics, cdp.Empty{})
 	if err != nil {
 		return nil, 0, fmt.Errorf("getting layout metrics: %w", err)
 	}
 
-	var w, h float64
+	var x, y, w, h float64
 	if fullPage {
 		if metrics.CSSContentSize == nil {
 			return nil, 0, fmt.Errorf("getting layout metrics: missing CSS content size")
@@ -314,59 +383,105 @@ func captureClip(ctx context.Context, tgt *chromedp.Target, fullPage bool, maxDi
 		if metrics.CSSLayoutViewport == nil {
 			return nil, 0, fmt.Errorf("getting layout metrics: missing CSS layout viewport")
 		}
+		if metrics.CSSVisualViewport != nil {
+			x = metrics.CSSVisualViewport.PageX
+			y = metrics.CSSVisualViewport.PageY
+		} else {
+			x = float64(metrics.CSSLayoutViewport.PageX)
+			y = float64(metrics.CSSLayoutViewport.PageY)
+		}
 		w = float64(metrics.CSSLayoutViewport.ClientWidth)
 		h = float64(metrics.CSSLayoutViewport.ClientHeight)
 	}
 
-	scale := 1.0
-	largest := math.Max(w, h)
-	if largest > float64(maxDim) {
-		scale = float64(maxDim) / largest
-	}
+	dpr := pageDevicePixelRatio(ctx, tgt)
+	scale := downscaleFactor(w, h, dpr, maxDim)
 
 	return &page.Viewport{
-		X:      0,
-		Y:      0,
+		X:      x,
+		Y:      y,
 		Width:  w,
 		Height: h,
 		Scale:  scale,
 	}, scale, nil
 }
 
-// elementScreenshot captures a screenshot of the element matching selector with
-// the given format, quality, and scale. It mirrors chromedp's ScreenshotNodes
-// logic (bounding rect → rounded clip → CaptureScreenshot) but allows the
-// caller to specify format and quality instead of hardcoding PNG.
-func elementScreenshot(selector string, format page.CaptureScreenshotFormat, quality int64, scale float64) chromedp.Action[[]byte] {
-	return chromedp.QueryAfter(chromedp.CSS(selector), func(ctx context.Context, tgt *chromedp.Target, nodes []*chromedp.Node) ([]byte, error) {
-		if len(nodes) < 1 {
-			return nil, fmt.Errorf("selector %q did not return any nodes", selector)
-		}
-
-		// Get the element's viewport-relative bounding rect via CDP
-		// DOM.getContentQuads, which returns quads as 8 floats
-		// [x1,y1, x2,y2, x3,y3, x4,y4].
-		quadRes, err := cdp.Call(ctx, tgt, dom.GetContentQuads, dom.GetContentQuadsParams{
-			BackendNodeID: nodes[0].BackendNodeID,
+// captureElementNode captures a screenshot of a resolved DOM backend node with
+// the given format, quality, and optional maxDim physical-pixel cap. It uses
+// viewport bounding coordinates plus window.scrollX/scrollY (matching Chrome's
+// document-canvas clip origin even when <html> has margin, border, or transform)
+// and factors window.devicePixelRatio into scale.
+func captureElementNode(selector string, backendNodeID cdp.BackendNodeID, format page.CaptureScreenshotFormat, quality int64, maxDim int) chromedp.Action[[]byte] {
+	return func(ctx context.Context, tgt *chromedp.Target) ([]byte, error) {
+		objRes, err := cdp.Call(ctx, tgt, dom.ResolveNode, dom.ResolveNodeParams{
+			BackendNodeID: backendNodeID,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("getting content quads for %q: %w", selector, err)
+			return nil, fmt.Errorf("resolving element %q: %w", selector, err)
 		}
-		if len(quadRes.Quads) == 0 || len(quadRes.Quads[0]) < 8 {
-			return nil, fmt.Errorf("element %q has no content quads", selector)
+		if objRes.Object == nil || objRes.Object.ObjectID == "" {
+			return nil, fmt.Errorf("resolving element %q: empty remote object", selector)
 		}
-		q := quadRes.Quads[0]
-		// Derive bounding rect from the quad corners.
-		minX := math.Min(math.Min(q[0], q[2]), math.Min(q[4], q[6]))
-		minY := math.Min(math.Min(q[1], q[3]), math.Min(q[5], q[7]))
-		maxX := math.Max(math.Max(q[0], q[2]), math.Max(q[4], q[6]))
-		maxY := math.Max(math.Max(q[1], q[3]), math.Max(q[5], q[7]))
+		defer func() {
+			cleanCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			_, _ = cdp.Call(cleanCtx, tgt, runtime.ReleaseObject, runtime.ReleaseObjectParams{
+				ObjectID: objRes.Object.ObjectID,
+			})
+		}()
+
+		const rectFn = `function() {
+			const e = this.getBoundingClientRect();
+			return {
+				x: e.left + window.scrollX,
+				y: e.top + window.scrollY,
+				width: e.width,
+				height: e.height,
+				dpr: window.devicePixelRatio || 1
+			};
+		}`
+		callRes, err := cdp.Call(ctx, tgt, runtime.CallFunctionOn, runtime.CallFunctionOnParams{
+			FunctionDeclaration: rectFn,
+			ObjectID:            objRes.Object.ObjectID,
+			ReturnByValue:       new(true),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("measuring element %q: %w", selector, err)
+		}
+		if callRes.ExceptionDetails != nil {
+			return nil, fmt.Errorf("measuring element %q: %s", selector, callRes.ExceptionDetails.Text)
+		}
+		if callRes.Result == nil || len(callRes.Result.Value) == 0 {
+			return nil, fmt.Errorf("measuring element %q: empty bounding rect", selector)
+		}
+
+		var rect struct {
+			X      float64 `json:"x"`
+			Y      float64 `json:"y"`
+			Width  float64 `json:"width"`
+			Height float64 `json:"height"`
+			DPR    float64 `json:"dpr"`
+		}
+		if err := json.Unmarshal(callRes.Result.Value, &rect); err != nil {
+			return nil, fmt.Errorf("decoding bounding rect for %q: %w", selector, err)
+		}
+		if rect.Width <= 0 || rect.Height <= 0 {
+			return nil, fmt.Errorf("element %q has zero dimensions (%.0fx%.0f)", selector, rect.Width, rect.Height)
+		}
+		if rect.DPR <= 0 || math.IsNaN(rect.DPR) || math.IsInf(rect.DPR, 0) {
+			rect.DPR = 1.0
+		}
 
 		// Round coordinates the same way Puppeteer and chromedp do to
 		// handle fractional dimensions properly.
-		x, y := math.Round(minX), math.Round(minY)
-		w := math.Round(maxX - minX + minX - x)
-		h := math.Round(maxY - minY + minY - y)
+		x, y := math.Round(rect.X), math.Round(rect.Y)
+		w := math.Round(rect.Width + rect.X - x)
+		h := math.Round(rect.Height + rect.Y - y)
+		if w <= 0 || h <= 0 {
+			return nil, fmt.Errorf("element %q rounded to zero dimensions", selector)
+		}
+
+		scale := downscaleFactor(w, h, rect.DPR, maxDim)
 
 		clip := &page.Viewport{
 			X:      x,
@@ -391,37 +506,5 @@ func elementScreenshot(selector string, format page.CaptureScreenshotFormat, qua
 			return nil, err
 		}
 		return res.Data, nil
-	}, chromedp.NodeVisible)
-}
-
-// elementScale returns the scale factor needed to fit an element within
-// maxDim pixels. It evaluates the element's bounding rect in the browser.
-// We use JS here rather than CDP DOM.getBoxModel because this function runs
-// outside the QueryAfter callback where the element node isn't yet resolved,
-// and DOM.getDocument() would invalidate chromedp's internal DOM tracking.
-func elementScale(ctx context.Context, selector string, maxDim int) (float64, error) {
-	js := fmt.Sprintf(`(() => {
-		const el = document.querySelector(%q);
-		if (!el) return null;
-		const r = el.getBoundingClientRect();
-		return {w: r.width, h: r.height};
-	})()`, selector)
-
-	type elemDims struct {
-		W float64 `json:"w"`
-		H float64 `json:"h"`
 	}
-	result, err := chromedp.Run(ctx, chromedp.Evaluate[*elemDims](js))
-	if err != nil {
-		return 0, fmt.Errorf("evaluating element dimensions for %q: %w", selector, err)
-	}
-	if result == nil || (result.W == 0 && result.H == 0) {
-		return 1.0, nil
-	}
-
-	largest := math.Max(result.W, result.H)
-	if largest <= float64(maxDim) {
-		return 1.0, nil
-	}
-	return float64(maxDim) / largest, nil
 }

@@ -351,3 +351,45 @@ func TestStorage_CrossTabVisibility(t *testing.T) {
 		t.Errorf("cross-tab get_storage = %v, want %q", out.Value, "cross-tab-value")
 	}
 }
+
+func TestGetStorage_EmptyAllEntriesVsMissingKeyJSON(t *testing.T) {
+	tabID := navigateToFixture(t, "storage.html")
+	defer closeTab(t, tabID)
+
+	// Clear sessionStorage so all-entries mode returns an empty map.
+	callTool[struct{}](t, "delete_storage", map[string]any{
+		"tab":  tabID,
+		"type": "session",
+	})
+
+	allRaw := callToolRaw(t, "get_storage", map[string]any{
+		"tab":  tabID,
+		"type": "session",
+	})
+	if allRaw.IsError {
+		t.Fatalf("get_storage all entries error: %s", contentText(allRaw))
+	}
+	allJSON := contentText(allRaw)
+	if !strings.Contains(allJSON, `"entries":{}`) {
+		t.Errorf("empty all-entries JSON = %s, want '\"entries\":{}'", allJSON)
+	}
+	if strings.Contains(allJSON, `"value"`) {
+		t.Errorf("all-entries JSON should omit 'value', got: %s", allJSON)
+	}
+
+	missingRaw := callToolRaw(t, "get_storage", map[string]any{
+		"tab":  tabID,
+		"type": "session",
+		"key":  "definitely-missing",
+	})
+	if missingRaw.IsError {
+		t.Fatalf("get_storage missing key error: %s", contentText(missingRaw))
+	}
+	missingJSON := contentText(missingRaw)
+	if !strings.Contains(missingJSON, `"value":null`) {
+		t.Errorf("missing single-key JSON = %s, want '\"value\":null'", missingJSON)
+	}
+	if strings.Contains(missingJSON, `"entries"`) {
+		t.Errorf("single-key JSON should omit 'entries', got: %s", missingJSON)
+	}
+}

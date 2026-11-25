@@ -10,19 +10,17 @@ import (
 )
 
 // ===========================================================================
-// Fix #5: Unescaped selector in JS error message (js.go)
+// Selector escaping in evaluate JS wrapper (js.go)
 //
-// The fix uses %q to properly escape selector strings when embedding them
-// in JavaScript template strings. Without %q, selectors containing quotes
-// or backslashes would produce broken JS and confusing errors.
+// Selectors containing quotes or backslashes are escaped via jsQuote so
+// embedded JS strings and error messages remain syntactically valid.
 // ===========================================================================
 
 func TestEvaluateSelectorWithSpecialChars(t *testing.T) {
 	tabID := navigateToFixture(t, "special-selectors.html")
 	defer closeTab(t, tabID)
 
-	// Test with a selector containing a quote character. The %q formatting
-	// in js.go should properly escape it so the JS doesn't break.
+	// Test with a selector containing quotes so JS string escaping is exercised.
 	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "[data-value=\"test's\"]",
@@ -38,8 +36,7 @@ func TestEvaluateSelectorNotFoundMessage(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// A selector that doesn't match should produce a clear error message
-	// mentioning the selector. The %q escaping ensures the error message
-	// is well-formed even with special characters.
+	// mentioning the selector.
 	errText := callToolExpectErr(t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#does-not-exist",
@@ -51,11 +48,7 @@ func TestEvaluateSelectorNotFoundMessage(t *testing.T) {
 }
 
 // ===========================================================================
-// Fix #8: elementScale error propagation (visual.go)
-//
-// The fix ensures that when screenshot's max_dimension is set and the
-// selector can't be found, the error from elementScale is propagated
-// instead of silently returning scale=1.0.
+// Element screenshot max_dimension with valid and missing selectors (visual.go)
 // ===========================================================================
 
 func TestScreenshotMaxDimensionInvalidSelector(t *testing.T) {

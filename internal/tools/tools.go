@@ -3,8 +3,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -197,7 +199,7 @@ func selectorError(parentCtx context.Context, selector string, err error) error 
 	// which can break subsequent operations on the same tab.
 	checkCtx, cancel := context.WithTimeout(parentCtx, 500*time.Millisecond)
 	defer cancel()
-	js := fmt.Sprintf("document.querySelector(%q) !== null", selector)
+	js := fmt.Sprintf("document.querySelector(%s) !== null", jsQuote(selector))
 	exists, evalErr := chromedp.Run(checkCtx, chromedp.Evaluate[bool](js))
 	if evalErr != nil {
 		return err // Can't check, return original error.
@@ -206,4 +208,25 @@ func selectorError(parentCtx context.Context, selector string, err error) error 
 		return fmt.Errorf("element %q exists but is not visible (timed out waiting for it to become visible)", selector)
 	}
 	return fmt.Errorf("element %q not found in the DOM (timed out waiting for it to appear)", selector)
+}
+
+// cleanupContext derives a short bounded context for deferred CDP teardown
+// calls (e.g., ReleaseObject, Profiler.disable, CSS.disable) that must still
+// run even if the caller's request or selector context expired. chromedp still
+// short-circuits immediately if the target detaches or the browser dies.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+}
+
+var jsLineSepReplacer = strings.NewReplacer(
+	"\u2028", `\u2028`,
+	"\u2029", `\u2029`,
+)
+
+// jsQuote encodes s as a double-quoted JavaScript string literal.
+// Unlike Go's %q (which emits Go-only escapes like \a, \v, \xNN, \UXXXXXXXX),
+// JSON encoding plus U+2028/U+2029 escaping is valid across all JS engines.
+func jsQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return jsLineSepReplacer.Replace(string(b))
 }

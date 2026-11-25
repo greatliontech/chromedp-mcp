@@ -45,16 +45,16 @@ type ProjectedNetworkRequestsOutput struct {
 	Requests []map[string]any `json:"requests"`
 }
 
-// GetResponseBodyInput is the input for get_response_body.
-type GetResponseBodyInput struct {
+// BodyRangeInput is the shared input for get_response_body and get_request_body.
+type BodyRangeInput struct {
 	TabInput
 	RequestID  string `json:"request_id" jsonschema:"The request ID from get_network_requests"`
-	RangeStart int64  `json:"range_start,omitempty" jsonschema:"Inclusive byte offset to start returning from (default 0). Negative values are treated as 0."`
-	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"Exclusive byte offset to stop at (default 0 = end of body). When base64_encoded=true, offsets address the decoded binary, not the base64 text."`
+	RangeStart int64  `json:"range_start,omitempty" jsonschema:"Inclusive byte offset to start returning from (default 0, must be >= 0)."`
+	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"Exclusive byte offset to stop at (default 0 = end of body, must be 0 or >= range_start). When base64_encoded=true, offsets address the decoded binary, not the base64 text."`
 }
 
-// GetResponseBodyOutput is the output for get_response_body.
-type GetResponseBodyOutput struct {
+// BodySliceOutput is the shared output for get_response_body and get_request_body.
+type BodySliceOutput struct {
 	Body          string `json:"body"`
 	Base64Encoded bool   `json:"base64_encoded"`
 	// TotalBytes is the size of the full body (decoded for base64
@@ -65,21 +65,17 @@ type GetResponseBodyOutput struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-// GetRequestBodyInput is the input for get_request_body.
-type GetRequestBodyInput struct {
-	TabInput
-	RequestID  string `json:"request_id" jsonschema:"The request ID from get_network_requests"`
-	RangeStart int64  `json:"range_start,omitempty" jsonschema:"Inclusive byte offset to start returning from (default 0). Negative values are treated as 0."`
-	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"Exclusive byte offset to stop at (default 0 = end of body). When base64_encoded=true, offsets address the decoded binary, not the base64 text."`
-}
+// GetResponseBodyInput is an alias for BodyRangeInput.
+type GetResponseBodyInput = BodyRangeInput
 
-// GetRequestBodyOutput is the output for get_request_body.
-type GetRequestBodyOutput struct {
-	Body          string `json:"body"`
-	Base64Encoded bool   `json:"base64_encoded"`
-	TotalBytes    int64  `json:"total_bytes"`
-	Truncated     bool   `json:"truncated,omitempty"`
-}
+// GetResponseBodyOutput is an alias for BodySliceOutput.
+type GetResponseBodyOutput = BodySliceOutput
+
+// GetRequestBodyInput is an alias for BodyRangeInput.
+type GetRequestBodyInput = BodyRangeInput
+
+// GetRequestBodyOutput is an alias for BodySliceOutput.
+type GetRequestBodyOutput = BodySliceOutput
 
 // GetWebSocketFramesInput is the input for get_websocket_frames.
 type GetWebSocketFramesInput struct {
@@ -107,6 +103,17 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, nil, err
 		}
+		if input.Limit < 0 {
+			return nil, nil, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
+		}
+		var allowedFields map[string]struct{}
+		if len(input.Fields) > 0 {
+			var err error
+			allowedFields, err = validateNetworkFields(input.Fields)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
 			return nil, nil, err
@@ -120,39 +127,35 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			FailedOnly: input.FailedOnly,
 		}
 
-		// Merge HTTP and WebSocket entries before applying limit so a
-		// large HTTP buffer cannot starve WS visibility (a small limit
-		// must not silently hide active sockets). The HTTP collector is
-		// asked for everything matching its filter; WS connections are
-		// projected into NetworkEntry shape and run through the same
-		// filter via collector.MatchesFilter so semantics are identical.
+		// Pass input.Limit directly to the HTTP buffer so mode="drain"
+		// removes ONLY the entries actually returned — excess matching HTTP
+		// entries stay buffered for subsequent paginated drain calls.
+		// Remaining slots up to input.Limit (or all of them when limit <= 0
+		// or type="websocket") are filled with matching WebSocket snapshots.
 		var httpEntries []collector.NetworkEntry
 		if !strings.EqualFold(input.Type, "websocket") {
-			// type=websocket would filter out every HTTP entry anyway;
-			// skip the work (and avoid touching the HTTP buffer at all
-			// when mode=drain).
 			if input.Mode == ModePeek {
-				httpEntries = t.Network.Peek(f, 0)
+				httpEntries = t.Network.Peek(f, input.Limit)
 			} else {
-				httpEntries = t.Network.Drain(f, 0)
+				httpEntries = t.Network.Drain(f, input.Limit)
 			}
 		}
-		// WebSocket connections are long-lived; always peek so a single
-		// get_network_requests call doesn't lose visibility into open
-		// sockets, regardless of input.Peek.
 		wsEntries := websocketEntries(t.WebSocket.Connections(), f)
+		if input.Limit > 0 {
+			rem := max(input.Limit-len(httpEntries), 0)
+			if len(wsEntries) > rem {
+				wsEntries = wsEntries[:rem]
+			}
+		}
 
 		requests := make([]collector.NetworkEntry, 0, len(httpEntries)+len(wsEntries))
 		requests = append(requests, httpEntries...)
 		requests = append(requests, wsEntries...)
-		if input.Limit > 0 && len(requests) > input.Limit {
-			requests = requests[:input.Limit]
-		}
 
-		if len(input.Fields) == 0 {
+		if len(allowedFields) == 0 {
 			return nil, GetNetworkRequestsOutput{Requests: requests}, nil
 		}
-		projected, err := projectEntries(requests, input.Fields)
+		projected, err := projectEntries(requests, allowedFields)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -216,13 +219,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		// Multipart form uploads with binary parts (files) are excluded by
 		// Chrome — see CDP docs: "Request body string, omitting files from
 		// multipart requests". cdproto decodes base64 when base64Encoded=true.
-		resp := encodeBodySlice(res.PostData, input.RangeStart, input.RangeEnd)
-		return nil, GetRequestBodyOutput{
-			Body:          resp.Body,
-			Base64Encoded: resp.Base64Encoded,
-			TotalBytes:    resp.TotalBytes,
-			Truncated:     resp.Truncated,
-		}, nil
+		return nil, encodeBodySlice(res.PostData, input.RangeStart, input.RangeEnd), nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -233,6 +230,9 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetWebSocketFramesInput) (*mcp.CallToolResult, GetWebSocketFramesOutput, error) {
 		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
 			return nil, GetWebSocketFramesOutput{}, err
+		}
+		if input.Limit < 0 {
+			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("limit must be >= 0, got %d", input.Limit)
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
@@ -317,21 +317,16 @@ func websocketEntries(conns []collector.WSConnection, f *collector.NetworkFilter
 	return out
 }
 
-// isValidUTF8 checks if a byte slice is valid UTF-8 text.
-func isValidUTF8(s string) bool {
-	return utf8.ValidString(s)
-}
-
 // encodeBodySlice slices a body to the given byte range and returns the
 // shape get_response_body / get_request_body produce. Text vs binary is
 // classified on the *full* body so a UTF-8 body sliced mid-codepoint
 // stays text — the slice is trimmed back to the last valid rune
 // boundary on either end. Binary bodies are base64-encoded as before.
-func encodeBodySlice(body []byte, start, end int64) GetResponseBodyOutput {
+func encodeBodySlice(body []byte, start, end int64) BodySliceOutput {
 	total := int64(len(body))
 	isText := utf8.Valid(body)
 	sliced, truncated := applyByteRange(body, start, end)
-	out := GetResponseBodyOutput{TotalBytes: total, Truncated: truncated}
+	out := BodySliceOutput{TotalBytes: total, Truncated: truncated}
 	if isText {
 		text := trimByteSliceToValidUTF8(sliced)
 		out.Body = string(text)
@@ -365,27 +360,26 @@ func networkRequestsOutputSchema() *jsonschema.Schema {
 	}
 }
 
-// projectEntries serializes each NetworkEntry to a generic JSON map and
-// strips keys not in the requested fields list. The map shape (rather
-// than reflective struct projection) handles every JSON tag — including
-// the conditionally-emitted WebSocket fields and request-body fields —
-// without per-field special cases.
-//
-// Returns an error if any requested field name doesn't appear on the
-// entry shape, so a typo from the LLM doesn't silently produce empty
-// rows.
-func projectEntries(entries []collector.NetworkEntry, fields []string) ([]map[string]any, error) {
+// validateNetworkFields validates caller-supplied projection keys against
+// networkEntryFieldSet before any buffer drain occurs.
+func validateNetworkFields(fields []string) (map[string]struct{}, error) {
 	allowed := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
-		allowed[f] = struct{}{}
-	}
-	for f := range allowed {
 		if _, ok := networkEntryFieldSet[f]; !ok {
 			return nil, fmt.Errorf("unknown field %q in fields list; available: %v",
 				f, sortedKeys(networkEntryFieldSet))
 		}
+		allowed[f] = struct{}{}
 	}
+	return allowed, nil
+}
 
+// projectEntries serializes each NetworkEntry to a generic JSON map and
+// strips keys not in the validated allowed set. The map shape (rather
+// than reflective struct projection) handles every JSON tag — including
+// the conditionally-emitted WebSocket fields and request-body fields —
+// without per-field special cases.
+func projectEntries(entries []collector.NetworkEntry, allowed map[string]struct{}) ([]map[string]any, error) {
 	out := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		blob, err := json.Marshal(e)
@@ -483,7 +477,7 @@ func sortedKeys(m map[string]struct{}) []string {
 func applyByteRange(body []byte, start, end int64) (slice []byte, truncated bool) {
 	total := int64(len(body))
 	if start > total {
-		return body[total:total], true
+		return body[total:total], total > 0
 	}
 	if end == 0 || end > total {
 		end = total
@@ -496,10 +490,7 @@ func applyByteRange(body []byte, start, end int64) (slice []byte, truncated bool
 }
 
 // validateRange returns an error when range_start or range_end are
-// negative. Negative offsets are silently masked by Python-style
-// indexing in some languages — we reject them so the LLM gets a clear
-// "you typed -5, did you mean omit the field?" signal instead of
-// quietly receiving the whole body.
+// negative, or when a non-zero range_end precedes range_start.
 func validateRange(start, end int64) error {
 	if start < 0 {
 		return fmt.Errorf("range_start must be >= 0; got %d (negative offsets are not supported)", start)
@@ -507,23 +498,26 @@ func validateRange(start, end int64) error {
 	if end < 0 {
 		return fmt.Errorf("range_end must be >= 0; got %d (use 0 to mean end of body)", end)
 	}
+	if end > 0 && end < start {
+		return fmt.Errorf("range_end (%d) must be >= range_start (%d) (use 0 for end of body)", end, start)
+	}
 	return nil
 }
 
-// trimByteSliceToValidUTF8 walks back the trailing bytes of a slice
-// that are part of a partial multi-byte rune, so a slice cut from a
-// known-text body stays valid UTF-8 instead of being misclassified as
-// binary and base64-encoded. Same for a leading byte that's a UTF-8
-// continuation (0x80–0xBF, no leading-byte marker).
-//
-// At most 3 bytes are removed from each end since UTF-8 codepoints are
-// at most 4 bytes long.
+// trimByteSliceToValidUTF8 trims partial multi-byte UTF-8 runes from either
+// end of a slice cut from a known-valid UTF-8 body in O(1) time (at most 3
+// bytes per end since UTF-8 codepoints are at most 4 bytes long).
 func trimByteSliceToValidUTF8(b []byte) []byte {
 	for len(b) > 0 && !utf8.RuneStart(b[0]) {
 		b = b[1:]
 	}
-	for len(b) > 0 && !utf8.Valid(b) {
-		b = b[:len(b)-1]
+	for i := 1; i <= 3 && i <= len(b); i++ {
+		if utf8.RuneStart(b[len(b)-i]) {
+			if !utf8.FullRune(b[len(b)-i:]) {
+				b = b[:len(b)-i]
+			}
+			break
+		}
 	}
 	return b
 }

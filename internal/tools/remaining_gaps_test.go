@@ -42,45 +42,16 @@ func TestIsLocalStorage(t *testing.T) {
 }
 
 // ===========================================================================
-// Unit tests: isValidUTF8
+// Integration test: element screenshot max_dimension scaling
 // ===========================================================================
 
-func TestIsValidUTF8(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  bool
-	}{
-		{name: "ascii", input: "hello world", want: true},
-		{name: "empty", input: "", want: true},
-		{name: "unicode", input: "héllo wörld 🌍", want: true},
-		{name: "chinese", input: "你好世界", want: true},
-		{name: "invalid byte", input: "\xff\xfe", want: false},
-		{name: "truncated multibyte", input: "\xc0", want: false},
-		{name: "null bytes", input: "\x00\x00", want: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isValidUTF8(tt.input)
-			if got != tt.want {
-				t.Errorf("isValidUTF8(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-// ===========================================================================
-// Integration test: elementScale
-// ===========================================================================
-
-// TestElementScaleWithinMax verifies elementScale returns 1.0 when the
-// element is smaller than maxDim.
+// TestElementScaleWithinMax verifies element screenshots succeed without
+// downscaling when the element is smaller than max_dimension.
 func TestElementScaleWithinMax(t *testing.T) {
 	tabID := navigateToFixture(t, "cdp-coords.html")
 	defer closeTab(t, tabID)
 
-	// #top-box is 100x80 per the fixture.
-	// elementScale with maxDim=1000 should return 1.0 (no downscale).
+	// #top-box is 100x80 per the fixture; max_dimension=1000 requires no downscale.
 	result := callToolRaw(t, "screenshot", map[string]any{
 		"tab":           tabID,
 		"selector":      "#top-box",
@@ -89,11 +60,10 @@ func TestElementScaleWithinMax(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("screenshot with max_dimension (no downscale) failed: %s", contentText(result))
 	}
-	// The screenshot succeeds — if elementScale were broken, it would error.
 }
 
-// TestElementScaleDownscale verifies elementScale applies downscaling when
-// the element exceeds maxDim.
+// TestElementScaleDownscale verifies element screenshots downscale when
+// the element exceeds max_dimension.
 func TestElementScaleDownscale(t *testing.T) {
 	tabID := navigateToFixture(t, "cdp-coords.html")
 	defer closeTab(t, tabID)
