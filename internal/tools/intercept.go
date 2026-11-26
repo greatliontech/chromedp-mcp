@@ -14,13 +14,24 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
-// AddInterceptRuleInput is the input for add_intercept_rule.
-type AddInterceptRuleInput struct {
+const (
+	interceptOpRemove = "remove"
+	interceptOpList   = "list"
+	interceptOpClear  = "clear"
+)
+
+// InterceptInput is the input for intercept.
+type InterceptInput struct {
 	TabInput
-	URLPattern   string `json:"url_pattern" jsonschema:"Glob pattern matching request URLs ('*' matches any characters including '/', '?' matches any single character, '\\' escapes; e.g. '*/api/*', '*.png', '*'). Required."`
+	Action string `json:"action" jsonschema:"Interception action: 'fulfill' (add mock response rule), 'modify' (add request rewrite rule), 'fail' (add request block/abort rule), 'remove' (remove one rule by id), 'list' (list active rules), or 'clear' (remove all rules). Required."`
+
+	// Rule ID (for action='remove')
+	ID string `json:"id,omitempty" jsonschema:"Rule ID to remove (required for action='remove')."`
+
+	// Match criteria (for action='fulfill'|'modify'|'fail')
+	URLPattern   string `json:"url_pattern,omitempty" jsonschema:"Glob pattern matching request URLs ('*' matches any characters including '/', '?' matches one char, '\\' escapes; e.g. '*/api/*', '*.png', '*'). Required for fulfill/modify/fail."`
 	Method       string `json:"method,omitempty" jsonschema:"Optional HTTP method filter (case-insensitive, e.g. GET, POST)."`
-	ResourceType string `json:"resource_type,omitempty" jsonschema:"Optional CDP resource type filter (case-insensitive, e.g. XHR, Document, Script, Image, Stylesheet; note Chrome's Fetch domain reports 'XHR' for both fetch() and XMLHttpRequest)."`
-	Action       string `json:"action" jsonschema:"Action to apply to matching requests: 'fulfill' (mock response), 'modify' (rewrite request before forwarding), or 'fail' (abort with network error). Required."`
+	ResourceType string `json:"resource_type,omitempty" jsonschema:"Optional CDP resource type filter (e.g. xhr, document, script, image, stylesheet; Chrome's Fetch domain reports 'xhr' for both fetch() and XMLHttpRequest)."`
 
 	// Fulfill fields
 	Status     int    `json:"status,omitempty" jsonschema:"HTTP status code for action='fulfill' (100-599, default 200)."`
@@ -37,45 +48,24 @@ type AddInterceptRuleInput struct {
 	PostDataBase64 bool   `json:"post_data_base64,omitempty" jsonschema:"When true, decode 'post_data' from base64 as raw request bytes (action='modify' only)."`
 
 	// Fail field
-	ErrorReason string `json:"error_reason,omitempty" jsonschema:"CDP network error reason for action='fail' (default 'Failed')."`
+	ErrorReason string `json:"error_reason,omitempty" jsonschema:"CDP network error reason for action='fail' (default 'Failed'; e.g. 'BlockedByClient' to block URLs)."`
 }
 
-// AddInterceptRuleOutput is the output for add_intercept_rule.
-type AddInterceptRuleOutput struct {
-	ID string `json:"id"`
-}
-
-// RemoveInterceptRuleInput is the input for remove_intercept_rule.
-type RemoveInterceptRuleInput struct {
-	TabInput
-	ID string `json:"id" jsonschema:"Rule ID returned by add_intercept_rule"`
-}
-
-// ListInterceptRulesInput is the input for list_intercept_rules.
-type ListInterceptRulesInput struct {
-	TabInput
-}
-
-// ListInterceptRulesOutput is the output for list_intercept_rules.
-type ListInterceptRulesOutput struct {
-	Rules []collector.InterceptRuleInfo `json:"rules"`
-}
-
-// ClearInterceptRulesInput is the input for clear_intercept_rules.
-type ClearInterceptRulesInput struct {
-	TabInput
-}
-
-// ClearInterceptRulesOutput is the output for clear_intercept_rules.
-type ClearInterceptRulesOutput struct {
-	Removed int `json:"removed"`
+// InterceptOutput is the output for intercept.
+type InterceptOutput struct {
+	ID      string                         `json:"id,omitempty"`
+	Rules   *[]collector.InterceptRuleInfo `json:"rules,omitempty"`
+	Removed *int                           `json:"removed,omitempty"`
 }
 
 var (
-	interceptActionValues = []string{
+	interceptToolActionValues = []string{
 		string(collector.InterceptActionFulfill),
 		string(collector.InterceptActionModify),
 		string(collector.InterceptActionFail),
+		interceptOpRemove,
+		interceptOpList,
+		interceptOpClear,
 	}
 	interceptErrorReasonValues = []string{
 		string(network.ErrorReasonFailed),
@@ -127,33 +117,60 @@ func isValidHeaderValue(s string) bool {
 	return true
 }
 
+// validateHTTPHeaders validates header names (RFC 9110 tokens), values (no
+// CR/LF/NUL/control bytes), and case-insensitive uniqueness.
+func validateHTTPHeaders(headers map[string]string) error {
+	seenHeaders := make(map[string]string, len(headers))
+	for k, v := range headers {
+		if !isHTTPToken(k) {
+			return fmt.Errorf("invalid header name %q: must be a non-empty HTTP token", k)
+		}
+		if !isValidHeaderValue(v) {
+			return fmt.Errorf("invalid header value for %q: control characters (CR/LF/NUL) are not allowed", k)
+		}
+		lower := strings.ToLower(k)
+		if prev, dup := seenHeaders[lower]; dup {
+			return fmt.Errorf("duplicate header names differing only in case: %q and %q", prev, k)
+		}
+		seenHeaders[lower] = k
+	}
+	return nil
+}
+
 func isBodylessStatus(status int) bool {
 	return (status >= 100 && status <= 199) || status == 204 || status == 205 || status == 304
 }
 
-func buildInterceptRule(input AddInterceptRuleInput) (collector.InterceptRule, error) {
+func hasInterceptRuleFields(input InterceptInput) bool {
+	return input.URLPattern != "" ||
+		input.Method != "" ||
+		input.ResourceType != "" ||
+		input.Status != 0 ||
+		input.Body != "" ||
+		input.BodyBase64 ||
+		input.Headers != nil ||
+		input.URL != "" ||
+		input.OverrideMethod != "" ||
+		input.PostData != "" ||
+		input.PostDataBase64 ||
+		input.ErrorReason != ""
+}
+
+func buildInterceptRule(input InterceptInput) (collector.InterceptRule, error) {
+	if input.ID != "" {
+		return collector.InterceptRule{}, fmt.Errorf("id is only valid when action is 'remove'")
+	}
 	if input.URLPattern == "" {
 		return collector.InterceptRule{}, fmt.Errorf("url_pattern is required")
 	}
-	if err := validateEnum("action", input.Action, false, interceptActionValues); err != nil {
+	if err := validateEnum("resource_type", input.ResourceType, true, networkResourceTypeValues); err != nil {
 		return collector.InterceptRule{}, err
 	}
 	if err := validateEnum("error_reason", input.ErrorReason, true, interceptErrorReasonValues); err != nil {
 		return collector.InterceptRule{}, err
 	}
-	seenHeaders := make(map[string]string, len(input.Headers))
-	for k, v := range input.Headers {
-		if !isHTTPToken(k) {
-			return collector.InterceptRule{}, fmt.Errorf("invalid header name %q: must be a non-empty HTTP token", k)
-		}
-		if !isValidHeaderValue(v) {
-			return collector.InterceptRule{}, fmt.Errorf("invalid header value for %q: control characters (CR/LF/NUL) are not allowed", k)
-		}
-		lower := strings.ToLower(k)
-		if prev, dup := seenHeaders[lower]; dup {
-			return collector.InterceptRule{}, fmt.Errorf("duplicate header names differing only in case: %q and %q", prev, k)
-		}
-		seenHeaders[lower] = k
+	if err := validateHTTPHeaders(input.Headers); err != nil {
+		return collector.InterceptRule{}, err
 	}
 
 	rule := collector.InterceptRule{
@@ -227,7 +244,7 @@ func buildInterceptRule(input AddInterceptRuleInput) (collector.InterceptRule, e
 		}
 
 	case collector.InterceptActionFail:
-		if input.Status != 0 || input.Body != "" || input.BodyBase64 || input.URL != "" || input.OverrideMethod != "" || len(input.Headers) > 0 || input.PostData != "" || input.PostDataBase64 {
+		if input.Status != 0 || input.Body != "" || input.BodyBase64 || input.URL != "" || input.OverrideMethod != "" || input.Headers != nil || input.PostData != "" || input.PostDataBase64 {
 			return collector.InterceptRule{}, fmt.Errorf("action='fail' only accepts error_reason (not status, body, headers, url, override_method, or post_data)")
 		}
 		if input.ErrorReason == "" {
@@ -242,76 +259,78 @@ func buildInterceptRule(input AddInterceptRuleInput) (collector.InterceptRule, e
 
 func registerInterceptTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "add_intercept_rule",
-		Description: "Add a network request interception rule to a tab (via CDP Fetch domain). Rules are evaluated in insertion order (first match wins); non-matching requests pass through untouched. Lazily enables Fetch interception on the first rule.",
-		InputSchema: schemaWithEnums[AddInterceptRuleInput](map[string][]string{
-			"action":       interceptActionValues,
-			"error_reason": interceptErrorReasonValues,
+		Name:        "intercept",
+		Description: "Manage network request interception rules on a tab (via CDP Fetch domain). Add rules with action='fulfill' (mock), 'modify' (rewrite), or 'fail' (block/abort); remove one with 'remove'; inspect with 'list'; or remove all with 'clear'. Rules evaluate in insertion order (first match wins); Fetch interception enables lazily on the first rule and disables automatically when none remain.",
+		InputSchema: schemaWithEnums[InterceptInput](map[string][]string{
+			"action":        interceptToolActionValues,
+			"resource_type": networkResourceTypeValues,
+			"error_reason":  interceptErrorReasonValues,
 		}),
-		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input AddInterceptRuleInput) (*mcp.CallToolResult, AddInterceptRuleOutput, error) {
-		rule, err := buildInterceptRule(input)
-		if err != nil {
-			return nil, AddInterceptRuleOutput{}, err
-		}
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, AddInterceptRuleOutput{}, err
-		}
-		ruleID, err := t.AddInterceptRule(ctx, rule)
-		if err != nil {
-			return nil, AddInterceptRuleOutput{}, err
-		}
-		return nil, AddInterceptRuleOutput{ID: ruleID}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "remove_intercept_rule",
-		Description: "Remove a network request interception rule by ID. Disables CDP Fetch interception automatically when the last rule is removed.",
 		Annotations: destructiveAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input RemoveInterceptRuleInput) (*mcp.CallToolResult, struct{}, error) {
-		if input.ID == "" {
-			return nil, struct{}{}, fmt.Errorf("rule id is required")
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input InterceptInput) (*mcp.CallToolResult, InterceptOutput, error) {
+		if err := validateEnum("action", input.Action, false, interceptToolActionValues); err != nil {
+			return nil, InterceptOutput{}, err
 		}
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		if err := t.RemoveInterceptRule(ctx, input.ID); err != nil {
-			return nil, struct{}{}, err
-		}
-		return nil, struct{}{}, nil
-	})
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "list_intercept_rules",
-		Description: "List active network request interception rules on a tab in evaluation order, including match counts.",
-		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListInterceptRulesInput) (*mcp.CallToolResult, ListInterceptRulesOutput, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, ListInterceptRulesOutput{}, err
-		}
-		rules := t.ListInterceptRules()
-		if rules == nil {
-			rules = []collector.InterceptRuleInfo{}
-		}
-		return nil, ListInterceptRulesOutput{Rules: rules}, nil
-	})
+		switch input.Action {
+		case interceptOpRemove:
+			if input.ID == "" {
+				return nil, InterceptOutput{}, fmt.Errorf("rule id is required for action='remove'")
+			}
+			if hasInterceptRuleFields(input) {
+				return nil, InterceptOutput{}, fmt.Errorf("action='remove' only accepts id (not rule definition fields)")
+			}
+			t, err := mgr.ResolveTab("", input.Tab)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			if err := t.RemoveInterceptRule(ctx, input.ID); err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			return nil, InterceptOutput{}, nil
 
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "clear_intercept_rules",
-		Description: "Remove all network request interception rules on a tab and disable CDP Fetch interception.",
-		Annotations: idempotentWriteAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ClearInterceptRulesInput) (*mcp.CallToolResult, ClearInterceptRulesOutput, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, ClearInterceptRulesOutput{}, err
+		case interceptOpList:
+			if input.ID != "" || hasInterceptRuleFields(input) {
+				return nil, InterceptOutput{}, fmt.Errorf("action='list' does not accept id or rule definition fields")
+			}
+			t, err := mgr.ResolveTab("", input.Tab)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			rules := t.ListInterceptRules()
+			if rules == nil {
+				rules = []collector.InterceptRuleInfo{}
+			}
+			return nil, InterceptOutput{Rules: &rules}, nil
+
+		case interceptOpClear:
+			if input.ID != "" || hasInterceptRuleFields(input) {
+				return nil, InterceptOutput{}, fmt.Errorf("action='clear' does not accept id or rule definition fields")
+			}
+			t, err := mgr.ResolveTab("", input.Tab)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			removed, err := t.ClearInterceptRules(ctx)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			return nil, InterceptOutput{Removed: &removed}, nil
+
+		default:
+			rule, err := buildInterceptRule(input)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			t, err := mgr.ResolveTab("", input.Tab)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			ruleID, err := t.AddInterceptRule(ctx, rule)
+			if err != nil {
+				return nil, InterceptOutput{}, err
+			}
+			return nil, InterceptOutput{ID: ruleID}, nil
 		}
-		removed, err := t.ClearInterceptRules(ctx)
-		if err != nil {
-			return nil, ClearInterceptRulesOutput{}, err
-		}
-		return nil, ClearInterceptRulesOutput{Removed: removed}, nil
 	})
 }

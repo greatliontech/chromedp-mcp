@@ -439,147 +439,9 @@ func TestEmulateNetworkLatency(t *testing.T) {
 	})
 }
 
-// --- block_urls ---
-
-// TestBlockURLs verifies that blocked URLs fail to load.
-func TestBlockURLs(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Block the API endpoint.
-	callTool[struct{}](t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{"*/api/*"},
-	})
-
-	// A fetch to the blocked URL should fail.
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `fetch('/api/data').then(() => 'ok').catch(e => 'blocked: ' + e.message)`,
-	})
-	if !strings.Contains(result.Result, "blocked") {
-		t.Fatalf("expected fetch to be blocked, got: %q", result.Result)
-	}
-
-	// Clear blocks.
-	callTool[struct{}](t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{},
-	})
-
-	// Fetch should work now.
-	result = callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `fetch('/api/data').then(() => 'ok').catch(e => 'blocked: ' + e.message)`,
-	})
-	if result.Result != "ok" {
-		t.Fatalf("expected fetch to succeed after unblock, got: %q", result.Result)
-	}
-}
-
-// TestBlockURLsWildcard verifies wildcard matching.
-func TestBlockURLsWildcard(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Block all .png images.
-	callTool[struct{}](t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{"*.png"},
-	})
-
-	// Try to fetch the image — should fail.
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `fetch('/image.png').then(() => 'ok').catch(e => 'blocked')`,
-	})
-	if result.Result != "blocked" {
-		t.Fatalf("expected PNG to be blocked, got: %q", result.Result)
-	}
-
-	// Clear blocks.
-	callTool[struct{}](t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{},
-	})
-}
-
-func TestNormalizeBlockPattern(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"*", "*://*:*/*"},
-		{"https://example.com/api/*", "https://example.com/api/*"},
-		{"*://*:*/*.css", "*://*:*/*.css"},
-		{"*/api/*", "*://*:*/api/*"},
-		{"/api/secret", "*://*:*/api/secret"},
-		{"*.png", "*://*:*/*.png"},
-		{"*tracking*", "*://*:*/*tracking*"},
-		{"*api/v1*", "*://*:*/*api/v1*"},
-		{"*.example.com", "*://*.example.com:*/*"},
-		{"*.example.com/*", "*://*.example.com:*/*"},
-		{"*.example.com:8443/*", "*://*.example.com:8443/*"},
-		{"ads.example.com/pixel.gif", "*://ads.example.com:*/pixel.gif"},
-		{"ads.example.com", "*://ads.example.com:*/*"},
-		{"127.0.0.1/api/*", "*://127.0.0.1:*/api/*"},
-		{"localhost:3000/api/*", "*://localhost:3000/api/*"},
-		{"[::1]/api/*", "*://[::1]:*/api/*"},
-		{"[::1]:8080/api/*", "*://[::1]:8080/api/*"},
-	}
-	for _, tc := range tests {
-		if got := normalizeBlockPattern(tc.in); got != tc.want {
-			t.Errorf("normalizeBlockPattern(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-func TestBlockURLsHostWithoutPortAndEmptyPattern(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Empty pattern is rejected explicitly before calling Chrome.
-	errText := callToolExpectErr(t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{""},
-	})
-	if !strings.Contains(errText, "must not be empty") {
-		t.Fatalf("expected empty-pattern validation error, got: %s", errText)
-	}
-
-	// Host pattern without explicit port must still block the local test server's ephemeral port.
-	callTool[struct{}](t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{"127.0.0.1/api/*"},
-	})
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	res := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `fetch('/api/data').then(() => 'ok').catch(e => 'blocked: ' + e.message)`,
-	})
-	if !strings.Contains(res.Result, "blocked") {
-		t.Fatalf("expected 127.0.0.1/api/* to block ephemeral-port fetch, got: %q", res.Result)
-	}
-
-	// Clear blocks.
-	callTool[struct{}](t, "block_urls", map[string]any{
-		"tab":      tabID,
-		"patterns": []string{},
-	})
-}
-
 // --- force_pseudo_state ---
 
-func TestForcePseudoStateHoverFocusClearAndCoverageCoexistence(t *testing.T) {
+func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
@@ -593,7 +455,7 @@ func TestForcePseudoStateHoverFocusClearAndCoverageCoexistence(t *testing.T) {
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><button id="btn">Btn</button><button id="other">Other</button><button id="temp">Temp</button></body></html>`))
+		_, _ = w.Write([]byte(`<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><button id="btn">Btn</button><button id="other">Other</button></body></html>`))
 	})
 	mux.HandleFunc("/page2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -607,7 +469,7 @@ func TestForcePseudoStateHoverFocusClearAndCoverageCoexistence(t *testing.T) {
 	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	// Track CSS.styleSheetAdded events to verify CSS.disable actually ran when
-	// all forced states clear, when stale forced nodes are pruned, or on navigation.
+	// all forced states clear or on navigation.
 	tb, err := harness.mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
@@ -680,26 +542,6 @@ func TestForcePseudoStateHoverFocusClearAndCoverageCoexistence(t *testing.T) {
 		t.Fatal("expected EventStyleSheetAdded while CSS domain is enabled for forced pseudo-state")
 	}
 
-	// Coexistence with get_coverage(type="css"): CSS coverage must still see
-	// /style.css AND must preserve active forced pseudo-states afterward.
-	cov := callTool[GetCoverageOutput](t, "get_coverage", map[string]any{
-		"tab":  tabID,
-		"type": "css",
-	})
-	foundCSS := false
-	for _, e := range cov.Entries {
-		if strings.HasSuffix(e.URL, "/style.css") && e.TotalBytes > 0 {
-			foundCSS = true
-			break
-		}
-	}
-	if !foundCSS {
-		t.Fatalf("get_coverage(css) while pseudo-state forced missed /style.css: %+v", cov.Entries)
-	}
-	if st := getStyle("#btn"); st["color"] != "rgb(255, 0, 0)" || st["background-color"] != "rgb(0, 0, 255)" {
-		t.Fatalf("after get_coverage(css), #btn forced styles were lost: %+v", st)
-	}
-
 	// Force :hover on a second element; clearing #btn must NOT disturb #other.
 	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
 		"tab":      tabID,
@@ -730,20 +572,6 @@ func TestForcePseudoStateHoverFocusClearAndCoverageCoexistence(t *testing.T) {
 		t.Fatalf("cleared #other styles = %+v, want rgb(0, 0, 0)", st)
 	}
 	assertCSSDisabled("after clearing last forced element")
-
-	// Stale-node pruning: force :hover on #temp, remove #temp from DOM, then
-	// run get_coverage(css); stale node must be pruned and CSS disabled cleanly.
-	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
-		"tab":      tabID,
-		"selector": "#temp",
-		"states":   []string{"hover"},
-	})
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `document.getElementById('temp').remove(); true`,
-	})
-	callTool[GetCoverageOutput](t, "get_coverage", map[string]any{"tab": tabID, "type": "css"})
-	assertCSSDisabled("after get_coverage pruned removed forced element")
 
 	// Cross-document navigation resets forced states and disables CSS asynchronously.
 	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{

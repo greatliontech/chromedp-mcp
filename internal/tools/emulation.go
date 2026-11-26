@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -65,12 +64,6 @@ type EmulateNetworkInput struct {
 	Latency            float64 `json:"latency,omitempty" jsonschema:"Minimum latency in milliseconds (0 to disable)"`
 	DownloadThroughput float64 `json:"download_throughput,omitempty" jsonschema:"Maximum download throughput in bytes/sec (-1 = disabled, 0 = disabled)"`
 	UploadThroughput   float64 `json:"upload_throughput,omitempty" jsonschema:"Maximum upload throughput in bytes/sec (-1 = disabled, 0 = disabled)"`
-}
-
-// BlockURLsInput is the input for block_urls.
-type BlockURLsInput struct {
-	TabInput
-	Patterns []string `json:"patterns" jsonschema:"URL patterns to block (supports * wildcards). Pass empty array to clear."`
 }
 
 // ForcePseudoStateInput is the input for force_pseudo_state.
@@ -380,35 +373,6 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "block_urls",
-		Description: "Block URLs matching patterns (supports * wildcards and WHATWG URLPattern syntax). Pass empty array to clear all blocks.",
-		Annotations: idempotentWriteAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input BlockURLsInput) (*mcp.CallToolResult, struct{}, error) {
-		urlPatterns := make([]*cdpnetwork.BlockPattern, 0, len(input.Patterns))
-		for _, p := range input.Patterns {
-			if p == "" {
-				return nil, struct{}{}, fmt.Errorf("block_urls: pattern must not be empty")
-			}
-			urlPatterns = append(urlPatterns, &cdpnetwork.BlockPattern{
-				URLPattern: normalizeBlockPattern(p),
-				Block:      true,
-			})
-		}
-
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-
-		tctx, tcancel := tabContext(ctx, t.Context())
-		defer tcancel()
-		_, err = chromedp.Call(tctx, cdpnetwork.SetBlockedURLs, cdpnetwork.SetBlockedURLsParams{
-			URLPatterns: urlPatterns,
-		})
-		return nil, struct{}{}, err
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
 		Name:        "force_pseudo_state",
 		Description: "Force CSS pseudo-classes (:hover, :focus, :active, :visited, :focus-within, :focus-visible, :target) on an element for visual/style inspection. Omit states or pass [] to clear forced pseudo-states on that element.",
 		InputSchema: schemaWithEnums[ForcePseudoStateInput](map[string][]string{
@@ -536,54 +500,4 @@ func registerEmulationTools(s *mcp.Server, mgr *browser.Manager) {
 			UserAgent:         info.UserAgent,
 		}, nil
 	})
-}
-
-// normalizeBlockPattern converts shorthand wildcard patterns (e.g. "*.png",
-// "*/api/*", "*.example.com", "*.example.com/*", "ads.example.com",
-// "127.0.0.1/api/*") into absolute WHATWG URLPattern strings required by CDP's
-// Network.setBlockedURLs urlPatterns field. Already-absolute patterns
-// containing "://" are returned unchanged.
-//
-// Host patterns without an explicit port receive a ":*" port wildcard because
-// WHATWG URLPattern otherwise matches only protocol default ports (80/443).
-func normalizeBlockPattern(p string) string {
-	if p == "" || strings.Contains(p, "://") {
-		return p
-	}
-	if p == "*" {
-		return "*://*:*/*"
-	}
-	if strings.HasPrefix(p, "*/") {
-		return "*://*:*" + p[1:]
-	}
-	if strings.HasPrefix(p, "/") {
-		return "*://*:*" + p
-	}
-	if strings.HasPrefix(p, "*.") {
-		if host, rest, hasSlash := strings.Cut(p, "/"); hasSlash {
-			return "*://" + withWildcardPort(host) + "/" + rest
-		}
-		// Distinguish subdomain wildcards (*.example.com) from file-extension
-		// wildcards (*.png): a domain has at least one dot after "*.".
-		if strings.Contains(p[2:], ".") {
-			return "*://" + withWildcardPort(p) + "/*"
-		}
-		return "*://*:*/" + p
-	}
-	if strings.HasPrefix(p, "*") {
-		return "*://*:*/" + p
-	}
-	if host, rest, hasSlash := strings.Cut(p, "/"); hasSlash {
-		return "*://" + withWildcardPort(host) + "/" + rest
-	}
-	return "*://" + withWildcardPort(p) + "/*"
-}
-
-// withWildcardPort appends ":*" to a hostname or host wildcard when it does
-// not already specify an explicit port (respecting bracketed IPv6 literals).
-func withWildcardPort(host string) string {
-	if strings.LastIndex(host, ":") > strings.LastIndex(host, "]") {
-		return host
-	}
-	return host + ":*"
 }

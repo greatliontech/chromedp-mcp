@@ -45,8 +45,8 @@ func headersToMap(h network.Headers) map[string]string {
 // Network.Enable's MaxPostDataSize) to omit Request.PostDataEntries
 // entirely when the body exceeds this cap — Chrome gates on size, it does
 // not slice. So in practice decode receives either the full body or none
-// of it; for the latter the caller falls back to get_request_body, which
-// re-fetches via Network.getRequestPostData.
+// of it; for the latter the caller falls back to get_network_body(part="request"),
+// which re-fetches via Network.getRequestPostData.
 const MaxInlineRequestBody = 4096
 
 // NetworkEntry represents a captured network request/response pair.
@@ -81,7 +81,7 @@ type NetworkEntry struct {
 	// HasRequestBody is true when the request carried a body. It mirrors
 	// CDP's Request.hasPostData and is set even when no inline body was
 	// captured, so the caller knows it can fetch the full body via
-	// get_request_body.
+	// get_network_body(part="request").
 	HasRequestBody bool `json:"has_request_body,omitempty"`
 	// RequestBody is the request body inlined up to MaxInlineRequestBody
 	// bytes. Empty when the request has no body, or when the body is
@@ -92,7 +92,7 @@ type NetworkEntry struct {
 	// binary data (the body is not valid UTF-8 text).
 	RequestBodyBase64 bool `json:"request_body_base64,omitempty"`
 	// RequestBodyTruncated is true when the inline body was cut at
-	// MaxInlineRequestBody. Use get_request_body to retrieve the full
+	// MaxInlineRequestBody. Use get_network_body(part="request") to retrieve the full
 	// payload.
 	RequestBodyTruncated bool `json:"request_body_truncated,omitempty"`
 
@@ -212,7 +212,7 @@ func (n *Network) removePendingOrderLocked(id network.RequestID) {
 // Returns body, base64Encoded, truncated. body is empty when entries are
 // missing or empty (which can happen when CDP omits PostData because the
 // body exceeds MaxPostDataSize — caller should fall back to has_request_body
-// + get_request_body).
+// + get_network_body(part="request")).
 func decodePostDataEntries(entries []*network.PostDataEntry, maxBytes int) (string, bool, bool) {
 	if len(entries) == 0 {
 		return "", false, false

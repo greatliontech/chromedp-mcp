@@ -193,7 +193,7 @@ func TestGetResponseBody(t *testing.T) {
 		t.Fatal("could not find /api/data request in network log")
 	}
 
-	body := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	body := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": requestID,
 	})
@@ -202,6 +202,16 @@ func TestGetResponseBody(t *testing.T) {
 	}
 	if body.Base64Encoded {
 		t.Error("JSON response body should not be base64 encoded")
+	}
+
+	// Explicit part="response" matches default behavior.
+	explicit := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+		"tab":        tabID,
+		"request_id": requestID,
+		"part":       "response",
+	})
+	if explicit.Body != body.Body {
+		t.Errorf("explicit part=response body = %q, want %q", explicit.Body, body.Body)
 	}
 }
 
@@ -279,16 +289,28 @@ func TestGetNetworkRequestsTypeFilter(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	// Filter by XHR type.
+	// Filter by fetch type (lowercase enum, case-insensitive match against CDP "Fetch").
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
-		"type": "XHR",
+		"type": "fetch",
 	})
+	if len(out.Requests) == 0 {
+		t.Fatal("type='fetch' filter returned 0 requests for network.html fetch() calls")
+	}
 	for _, r := range out.Requests {
-		if r.Type != "XHR" {
-			t.Errorf("type filter returned type %q, want 'XHR'", r.Type)
+		if !strings.EqualFold(r.Type, "fetch") {
+			t.Errorf("type filter returned type %q, want 'Fetch'", r.Type)
 		}
+	}
+
+	// Invalid resource type enum is rejected cleanly.
+	if errText := callToolExpectErr(t, "get_network_requests", map[string]any{
+		"tab":  tabID,
+		"mode": "peek",
+		"type": "not-a-type",
+	}); !strings.Contains(errText, "not-a-type") && !strings.Contains(errText, "type") {
+		t.Errorf("invalid type err = %q, want mention of type/not-a-type", errText)
 	}
 }
 
@@ -360,7 +382,7 @@ func TestGetResponseBodyBinary(t *testing.T) {
 		t.Fatal("could not find /image.png request")
 	}
 
-	body := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	body := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": requestID,
 	})
@@ -376,12 +398,12 @@ func TestGetResponseBodyInvalidRequestID(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "get_response_body", map[string]any{
+	errText := callToolExpectErr(t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": "invalid-request-id-xyz",
 	})
 	if errText == "" {
-		t.Error("get_response_body with invalid request_id should return error")
+		t.Error("get_network_body with invalid request_id should return error")
 	}
 }
 
@@ -460,7 +482,7 @@ func TestGetResponseBodyUnicode(t *testing.T) {
 		t.Fatal("no requests for /api/unicode")
 	}
 
-	body := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	body := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": nout.Requests[0].ID,
 	})
@@ -480,11 +502,11 @@ func TestNetworkTypeFilterDocument(t *testing.T) {
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
-		"type": "Document",
+		"type": "document",
 	})
 	for _, r := range out.Requests {
-		if r.Type != "Document" {
-			t.Errorf("type filter 'Document' returned type %q", r.Type)
+		if !strings.EqualFold(r.Type, "document") {
+			t.Errorf("type filter 'document' returned type %q", r.Type)
 		}
 	}
 	// The initial page load should be a Document type.
@@ -551,14 +573,17 @@ func TestNetworkCombinedFilters(t *testing.T) {
 	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
-		"type":        "XHR",
+		"type":        "fetch",
 		"url_pattern": "/api/data",
 		"status_min":  200,
 		"status_max":  299,
 	})
+	if len(out.Requests) == 0 {
+		t.Fatal("combined filter returned 0 requests for fetch('/api/data')")
+	}
 	for _, r := range out.Requests {
-		if !strings.EqualFold(r.Type, "XHR") {
-			t.Errorf("combined filter returned type %q, want XHR", r.Type)
+		if !strings.EqualFold(r.Type, "fetch") {
+			t.Errorf("combined filter returned type %q, want Fetch", r.Type)
 		}
 		if !strings.Contains(r.URL, "/api/data") {
 			t.Errorf("combined filter returned URL %q, want to contain /api/data", r.URL)

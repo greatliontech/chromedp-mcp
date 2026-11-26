@@ -55,8 +55,8 @@ func TestRequestBodyInlinedSmallPOST(t *testing.T) {
 }
 
 // TestRequestBodyTruncatedLargePOST verifies that a body larger than the
-// inline cap is truncated, the truncated flag is set, and get_request_body
-// returns the full payload.
+// inline cap is truncated, the truncated flag is set, and get_network_body
+// with part="request" returns the full payload.
 func TestRequestBodyTruncatedLargePOST(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
@@ -64,7 +64,7 @@ func TestRequestBodyTruncatedLargePOST(t *testing.T) {
 	// 8 KB — larger than MaxInlineRequestBody (4 KB) and larger than the
 	// CDP MaxPostDataSize we configured. Chrome will set HasPostData=true
 	// but omit PostDataEntries from the requestWillBeSent event, so the
-	// inline body should be empty and only fetchable via get_request_body.
+	// inline body should be empty and only fetchable via get_network_body.
 	const total = 8192
 	callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
@@ -85,18 +85,19 @@ func TestRequestBodyTruncatedLargePOST(t *testing.T) {
 			len(r.RequestBody), r.RequestBodyTruncated)
 	}
 
-	full := callTool[GetRequestBodyOutput](t, "get_request_body", map[string]any{
+	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": r.ID,
+		"part":       "request",
 	})
 	if full.Base64Encoded {
 		t.Error("Base64Encoded = true, want false for ASCII body")
 	}
 	if len(full.Body) != total {
-		t.Errorf("get_request_body length = %d, want %d", len(full.Body), total)
+		t.Errorf("get_network_body(part=request) length = %d, want %d", len(full.Body), total)
 	}
 	if !strings.HasPrefix(full.Body, "AAAA") || !strings.HasSuffix(full.Body, "AAAA") {
-		t.Errorf("get_request_body body did not match expected payload (got %d chars)", len(full.Body))
+		t.Errorf("get_network_body(part=request) body did not match expected payload (got %d chars)", len(full.Body))
 	}
 }
 
@@ -165,8 +166,8 @@ func TestRequestBodyAbsentForGETIntegration(t *testing.T) {
 	}
 }
 
-// TestGetRequestBodyForSmallPOST verifies get_request_body returns the
-// full payload for a POST whose body was already inlined.
+// TestGetRequestBodyForSmallPOST verifies get_network_body(part="request")
+// returns the full payload and supports byte range slicing.
 func TestGetRequestBodyForSmallPOST(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
@@ -183,14 +184,26 @@ func TestGetRequestBodyForSmallPOST(t *testing.T) {
 	out := findRequest(t, tabID, "/submit")
 	r := out.Requests[0]
 
-	full := callTool[GetRequestBodyOutput](t, "get_request_body", map[string]any{
+	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": r.ID,
+		"part":       "request",
 	})
 	if full.Base64Encoded {
 		t.Error("Base64Encoded = true; want false")
 	}
 	if full.Body != body {
-		t.Errorf("get_request_body body = %q, want %q", full.Body, body)
+		t.Errorf("get_network_body(part=request) body = %q, want %q", full.Body, body)
+	}
+
+	sliced := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+		"tab":         tabID,
+		"request_id":  r.ID,
+		"part":        "request",
+		"range_start": 5,
+		"range_end":   10,
+	})
+	if sliced.Body != "alpha" || !sliced.Truncated || sliced.TotalBytes != int64(len(body)) {
+		t.Errorf("sliced request body = %+v, want body=\"alpha\" truncated=true total=%d", sliced, len(body))
 	}
 }

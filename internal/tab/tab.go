@@ -119,7 +119,10 @@ type Tab struct {
 	// (leaf lock; never held across CDP I/O).
 	cssStateMu sync.Mutex
 	cssDocGen  uint64
-	cssForced  map[cdp.BackendNodeID][]string
+	cssForced  map[cdp.BackendNodeID]struct{}
+
+	// perfOpMu serializes ephemeral Performance.enable/getMetrics/disable cycles.
+	perfOpMu sync.Mutex
 
 	// snapshotMu guards the latest accessibility snapshot ref map (leaf lock;
 	// never held across CDP I/O).

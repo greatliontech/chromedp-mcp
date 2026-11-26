@@ -24,7 +24,7 @@ type GetNetworkRequestsInput struct {
 	TabInput
 	Mode       string   `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the HTTP buffer, 'drain' to consume entries that match the filter. Required. WebSocket connections are never drained (long-lived); they are always returned by snapshot."`
 	Limit      int      `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
-	Type       string   `json:"type,omitempty" jsonschema:"Filter by resource type: document stylesheet script image xhr fetch websocket other"`
+	Type       string   `json:"type,omitempty" jsonschema:"Filter by resource type (e.g. document, stylesheet, script, image, xhr, fetch, websocket, other)"`
 	StatusMin  int      `json:"status_min,omitempty" jsonschema:"Filter by minimum HTTP status code"`
 	StatusMax  int      `json:"status_max,omitempty" jsonschema:"Filter by maximum HTTP status code"`
 	URLPattern string   `json:"url_pattern,omitempty" jsonschema:"Filter by URL substring match"`
@@ -45,15 +45,16 @@ type ProjectedNetworkRequestsOutput struct {
 	Requests []map[string]any `json:"requests"`
 }
 
-// BodyRangeInput is the shared input for get_response_body and get_request_body.
-type BodyRangeInput struct {
+// GetNetworkBodyInput is the input for get_network_body.
+type GetNetworkBodyInput struct {
 	TabInput
-	RequestID  string `json:"request_id" jsonschema:"The request ID from get_network_requests"`
+	RequestID  string `json:"request_id" jsonschema:"Request ID from get_network_requests."`
+	Part       string `json:"part,omitempty" jsonschema:"Which body to fetch: 'response' (default) or 'request'."`
 	RangeStart int64  `json:"range_start,omitempty" jsonschema:"Inclusive byte offset to start returning from (default 0, must be >= 0)."`
 	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"Exclusive byte offset to stop at (default 0 = end of body, must be 0 or >= range_start). When base64_encoded=true, offsets address the decoded binary, not the base64 text."`
 }
 
-// BodySliceOutput is the shared output for get_response_body and get_request_body.
+// BodySliceOutput is the output for get_network_body.
 type BodySliceOutput struct {
 	Body          string `json:"body"`
 	Base64Encoded bool   `json:"base64_encoded"`
@@ -64,18 +65,6 @@ type BodySliceOutput struct {
 	// body to be a strict subset of the full body.
 	Truncated bool `json:"truncated,omitempty"`
 }
-
-// GetResponseBodyInput is an alias for BodyRangeInput.
-type GetResponseBodyInput = BodyRangeInput
-
-// GetResponseBodyOutput is an alias for BodySliceOutput.
-type GetResponseBodyOutput = BodySliceOutput
-
-// GetRequestBodyInput is an alias for BodyRangeInput.
-type GetRequestBodyInput = BodyRangeInput
-
-// GetRequestBodyOutput is an alias for BodySliceOutput.
-type GetRequestBodyOutput = BodySliceOutput
 
 // GetWebSocketFramesInput is the input for get_websocket_frames.
 type GetWebSocketFramesInput struct {
@@ -92,7 +81,21 @@ type GetWebSocketFramesOutput struct {
 	Received []collector.WSFrame `json:"received"`
 }
 
-var wsDirectionValues = []string{"sent", "received", "both"}
+const (
+	networkBodyPartResponse = "response"
+	networkBodyPartRequest  = "request"
+)
+
+var (
+	wsDirectionValues         = []string{"sent", "received", "both"}
+	networkBodyPartValues     = []string{networkBodyPartResponse, networkBodyPartRequest}
+	networkResourceTypeValues = []string{
+		"document", "stylesheet", "image", "media", "font", "script",
+		"texttrack", "xhr", "fetch", "prefetch", "eventsource", "websocket",
+		"manifest", "signedexchange", "ping", "cspviolationreport", "preflight",
+		"fedcm", "emailverification", "other",
+	}
+)
 
 func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
@@ -100,6 +103,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		Description: "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. 'mode' must be 'peek' (keep entries in the HTTP buffer) or 'drain' (consume entries that match the filter). WebSocket connections are long-lived and always returned by snapshot regardless of mode. Pass 'fields' (e.g. ['id','method','url','status']) to project each entry to a subset of JSON keys — useful when listing many entries.",
 		InputSchema: schemaWithEnums[GetNetworkRequestsInput](map[string][]string{
 			"mode":   {ModePeek, ModeDrain},
+			"type":   networkResourceTypeValues,
 			"fields": sortedKeys(networkEntryFieldSet),
 		}),
 		OutputSchema: networkRequestsOutputSchema(),
@@ -109,6 +113,9 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil, nil, err
 		}
 		if err := validateLimit(input.Limit); err != nil {
+			return nil, nil, err
+		}
+		if err := validateEnum("type", input.Type, true, networkResourceTypeValues); err != nil {
 			return nil, nil, err
 		}
 		if input.StatusMin < 0 || input.StatusMax < 0 {
@@ -174,63 +181,53 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "get_response_body",
-		Description: "Get the response body of a specific network request by its request ID. Use range_start/range_end to fetch a slice of large bodies; total_bytes always reports the full body size so you can plan paging.",
+		Name:        "get_network_body",
+		Description: "Get the response ('response', default) or request ('request') body of a network request by request ID. Use range_start/range_end to fetch slices of large bodies; total_bytes always reports the full decoded size.",
+		InputSchema: schemaWithEnums[GetNetworkBodyInput](map[string][]string{
+			"part": networkBodyPartValues,
+		}),
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetResponseBodyInput) (*mcp.CallToolResult, GetResponseBodyOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkBodyInput) (*mcp.CallToolResult, BodySliceOutput, error) {
 		if input.RequestID == "" {
-			return nil, GetResponseBodyOutput{}, fmt.Errorf("request_id is required")
+			return nil, BodySliceOutput{}, fmt.Errorf("request_id is required")
+		}
+		if err := validateEnum("part", input.Part, true, networkBodyPartValues); err != nil {
+			return nil, BodySliceOutput{}, err
 		}
 		if err := validateRange(input.RangeStart, input.RangeEnd); err != nil {
-			return nil, GetResponseBodyOutput{}, err
+			return nil, BodySliceOutput{}, err
+		}
+		part := input.Part
+		if part == "" {
+			part = networkBodyPartResponse
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, GetResponseBodyOutput{}, err
+			return nil, BodySliceOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
+
+		if part == networkBodyPartRequest {
+			res, err := chromedp.Call(tctx, cdpnetwork.GetRequestPostData, cdpnetwork.GetRequestPostDataParams{
+				RequestID: cdpnetwork.RequestID(input.RequestID),
+			})
+			if err != nil {
+				return nil, BodySliceOutput{}, err
+			}
+			// Multipart form uploads with binary parts (files) are excluded by
+			// Chrome; cdproto decodes base64 when base64Encoded=true.
+			return nil, encodeBodySlice(res.PostData, input.RangeStart, input.RangeEnd), nil
+		}
+
 		res, err := chromedp.Call(tctx, cdpnetwork.GetResponseBody, cdpnetwork.GetResponseBodyParams{
 			RequestID: cdpnetwork.RequestID(input.RequestID),
 		})
 		if err != nil {
-			return nil, GetResponseBodyOutput{}, err
+			return nil, BodySliceOutput{}, err
 		}
-
-		out := encodeBodySlice(res.Body, input.RangeStart, input.RangeEnd)
-		return nil, out, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "get_request_body",
-		Description: "Get the full request body (POST/PUT/PATCH/DELETE payload) of a specific network request by its request ID. Use when get_network_requests returned has_request_body=true and the inline request_body was empty or truncated. Use range_start/range_end to fetch a slice of large bodies; total_bytes always reports the full body size.",
-		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetRequestBodyInput) (*mcp.CallToolResult, GetRequestBodyOutput, error) {
-		if input.RequestID == "" {
-			return nil, GetRequestBodyOutput{}, fmt.Errorf("request_id is required")
-		}
-		if err := validateRange(input.RangeStart, input.RangeEnd); err != nil {
-			return nil, GetRequestBodyOutput{}, err
-		}
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, GetRequestBodyOutput{}, err
-		}
-
-		tctx, tcancel := tabContext(ctx, t.Context())
-		defer tcancel()
-		res, err := chromedp.Call(tctx, cdpnetwork.GetRequestPostData, cdpnetwork.GetRequestPostDataParams{
-			RequestID: cdpnetwork.RequestID(input.RequestID),
-		})
-		if err != nil {
-			return nil, GetRequestBodyOutput{}, err
-		}
-
-		// Multipart form uploads with binary parts (files) are excluded by
-		// Chrome — see CDP docs: "Request body string, omitting files from
-		// multipart requests". cdproto decodes base64 when base64Encoded=true.
-		return nil, encodeBodySlice(res.PostData, input.RangeStart, input.RangeEnd), nil
+		return nil, encodeBodySlice(res.Body, input.RangeStart, input.RangeEnd), nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -332,7 +329,7 @@ func websocketEntries(conns []collector.WSConnection, f *collector.NetworkFilter
 }
 
 // encodeBodySlice slices a body to the given byte range and returns the
-// shape get_response_body / get_request_body produce. Text vs binary is
+// shape get_network_body produces. Text vs binary is
 // classified on the *full* body so a UTF-8 body sliced mid-codepoint
 // stays text — the slice is trimmed back to the last valid rune
 // boundary on either end. Binary bodies are base64-encoded as before.

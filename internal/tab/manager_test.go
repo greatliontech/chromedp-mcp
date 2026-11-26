@@ -900,3 +900,56 @@ func TestSnapshotRefsAndNavigationInvalidation(t *testing.T) {
 		t.Fatalf("stale commit leaked ref e3: err = %v", err)
 	}
 }
+
+func TestGetPerformanceMetricsDialogOpenedWhileQueued(t *testing.T) {
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	tb, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+
+	// Cancelled caller context fails immediately.
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tb.GetPerformanceMetrics(cctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetPerformanceMetrics(cancelled) err = %v, want context.Canceled", err)
+	}
+
+	// Hold perfOpMu so the second caller passes the pre-lock check and queues on
+	// perfOpMu; open a dialog before unlocking to exercise the post-lock
+	// OpeningNotify() check deterministically.
+	tb.perfOpMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := tb.GetPerformanceMetrics(context.Background())
+		done <- err
+	}()
+	// Give the goroutine time to pass the pre-lock check and queue on perfOpMu.
+	time.Sleep(25 * time.Millisecond)
+	tb.Dialog.HandleOpening(&page.EventJavascriptDialogOpening{
+		Type:    page.DialogTypeAlert,
+		Message: "queued-dialog",
+	})
+	tb.perfOpMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "dialog") {
+			t.Fatalf("GetPerformanceMetrics while dialog opened = %v, want dialog error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetPerformanceMetrics hung instead of failing fast on post-lock dialog check")
+	}
+
+	// Clearing the dialog restores normal GetPerformanceMetrics operation.
+	tb.Dialog.HandleClosed(&page.EventJavascriptDialogClosed{Result: true})
+	metrics, err := tb.GetPerformanceMetrics(context.Background())
+	if err != nil {
+		t.Fatalf("GetPerformanceMetrics after dialog closed: %v", err)
+	}
+	if len(metrics) == 0 {
+		t.Fatal("expected non-empty metrics after dialog closed")
+	}
+}

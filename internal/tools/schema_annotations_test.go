@@ -50,59 +50,51 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 	}
 	checks := map[string]wantHint{
 		// Read-only (screenshot/pdf are read-only when DownloadDir is empty)
-		"browser_list":            {true, false, true},
-		"browser_list_profiles":   {true, false, true},
-		"tab_list":                {true, false, true},
-		"wait_for":                {true, false, true},
-		"screenshot":              {true, false, true},
-		"pdf":                     {true, false, true},
-		"query":                   {true, false, true},
-		"get_dom":                 {true, false, true},
-		"snapshot":                {true, false, true},
-		"list_frames":             {true, false, true},
-		"get_response_body":       {true, false, true},
-		"get_request_body":        {true, false, true},
-		"list_intercept_rules":    {true, false, true},
-		"get_cookies":             {true, false, true},
-		"get_storage":             {true, false, true},
-		"get_storage_keys":        {true, false, true},
-		"get_indexeddb":           {true, false, true},
-		"get_cache_storage":       {true, false, true},
-		"get_performance_metrics": {true, false, true},
-		"get_coverage":            {true, false, true},
+		"browser_list":          {true, false, true},
+		"browser_list_profiles": {true, false, true},
+		"tab_list":              {true, false, true},
+		"wait_for":              {true, false, true},
+		"screenshot":            {true, false, true},
+		"pdf":                   {true, false, true},
+		"query":                 {true, false, true},
+		"get_dom":               {true, false, true},
+		"snapshot":              {true, false, true},
+		"list_frames":           {true, false, true},
+		"get_network_body":      {true, false, true},
+		"get_cookies":           {true, false, true},
+		"get_storage":           {true, false, true},
+		"get_storage_keys":      {true, false, true},
+		"get_indexeddb":         {true, false, true},
+		"get_cache_storage":     {true, false, true},
 
 		// Peek/drain buffer readers (must NOT claim ReadOnlyHint: true)
 		"get_console_logs":     {false, false, false},
 		"get_js_errors":        {false, false, false},
 		"get_network_requests": {false, false, false},
 		"get_websocket_frames": {false, false, false},
-		"get_layout_shifts":    {false, false, false},
-		"get_lcp":              {false, false, false},
-		"get_downloads":        {false, false, false},
+		"get_performance":      {false, false, false},
 
 		// Non-destructive, non-idempotent mutations
-		"browser_launch":     {false, false, false},
-		"browser_connect":    {false, false, false},
-		"tab_new":            {false, false, false},
-		"navigate":           {false, false, false},
-		"evaluate":           {false, false, false},
-		"add_script":         {false, false, false},
-		"add_intercept_rule": {false, false, false},
-		"click":              {false, false, false},
-		"type":               {false, false, false},
-		"select_option":      {false, false, false},
-		"scroll":             {false, false, false},
-		"hover":              {false, false, false},
-		"press_key":          {false, false, false},
-		"upload_files":       {false, false, false},
-		"dialog":             {false, false, false},
-		"drag_and_drop":      {false, false, false},
+		"browser_launch":  {false, false, false},
+		"browser_connect": {false, false, false},
+		"tab_new":         {false, false, false},
+		"navigate":        {false, false, false},
+		"evaluate":        {false, false, false},
+		"add_script":      {false, false, false},
+		"click":           {false, false, false},
+		"type":            {false, false, false},
+		"select_option":   {false, false, false},
+		"scroll":          {false, false, false},
+		"hover":           {false, false, false},
+		"press_key":       {false, false, false},
+		"upload_files":    {false, false, false},
+		"dialog":          {false, false, false},
+		"drag_and_drop":   {false, false, false},
 
 		// Idempotent non-destructive writes
 		"browser_activate":              {false, false, true},
 		"tab_activate":                  {false, false, true},
 		"set_viewport":                  {false, false, true},
-		"clear_console":                 {false, false, true},
 		"clear_buffers":                 {false, false, true},
 		"set_cookie":                    {false, false, true},
 		"set_storage":                   {false, false, true},
@@ -117,20 +109,18 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"set_cpu_throttling":            {false, false, true},
 		"set_vision_deficiency":         {false, false, true},
 		"emulate_network":               {false, false, true},
-		"block_urls":                    {false, false, true},
-		"clear_intercept_rules":         {false, false, true},
 		"force_pseudo_state":            {false, false, true},
 		"emulate_device":                {false, false, true},
 
 		// Destructive
-		"browser_close":         {false, true, false},
-		"tab_close":             {false, true, false},
-		"delete_cookies":        {false, true, false},
-		"delete_storage":        {false, true, false},
-		"delete_indexeddb":      {false, true, false},
-		"delete_cache_storage":  {false, true, false},
-		"remove_script":         {false, true, false},
-		"remove_intercept_rule": {false, true, false},
+		"browser_close":        {false, true, false},
+		"tab_close":            {false, true, false},
+		"intercept":            {false, true, false},
+		"delete_cookies":       {false, true, false},
+		"delete_storage":       {false, true, false},
+		"delete_indexeddb":     {false, true, false},
+		"delete_cache_storage": {false, true, false},
+		"remove_script":        {false, true, false},
 	}
 
 	// Enforce exact bijection so newly registered tools cannot bypass annotation checks.
@@ -157,8 +147,9 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 	}
 
 	// When DownloadDir is configured, screenshot and pdf can write files to disk
-	// and must not advertise ReadOnlyHint=true.
+	// (not ReadOnlyHint=true) and get_downloads is registered with mutating hints.
 	withDownloads := listAllRegisteredTools(t, &Options{DownloadDir: dir})
+	sawGetDownloads := false
 	for _, tool := range withDownloads {
 		if tool.Name == "screenshot" || tool.Name == "pdf" {
 			a := tool.Annotations
@@ -170,11 +161,25 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 					tool.Name, a.ReadOnlyHint, *a.DestructiveHint, a.IdempotentHint)
 			}
 		}
+		if tool.Name == "get_downloads" {
+			sawGetDownloads = true
+			a := tool.Annotations
+			if a == nil || a.DestructiveHint == nil {
+				t.Fatal("get_downloads missing annotations")
+			}
+			if a.ReadOnlyHint || *a.DestructiveHint || a.IdempotentHint {
+				t.Errorf("get_downloads annotations = (readOnly=%v, destructive=%v, idempotent=%v), want (false, false, false)",
+					a.ReadOnlyHint, *a.DestructiveHint, a.IdempotentHint)
+			}
+		}
+	}
+	if !sawGetDownloads {
+		t.Error("expected get_downloads to be registered when DownloadDir is non-empty")
 	}
 }
 
 func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
-	tools := listAllRegisteredTools(t, &Options{})
+	tools := listAllRegisteredTools(t, &Options{DownloadDir: t.TempDir()})
 	byName := make(map[string]*mcp.Tool, len(tools))
 	for _, tool := range tools {
 		byName[tool.Name] = tool
@@ -195,7 +200,9 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"get_console_logs", "mode", false, []string{ModePeek, ModeDrain}},
 		{"get_js_errors", "mode", false, []string{ModePeek, ModeDrain}},
 		{"get_network_requests", "mode", false, []string{ModePeek, ModeDrain}},
+		{"get_network_requests", "type", false, networkResourceTypeValues},
 		{"get_network_requests", "fields", true, sortedKeys(networkEntryFieldSet)},
+		{"get_network_body", "part", false, networkBodyPartValues},
 		{"get_websocket_frames", "mode", false, []string{ModePeek, ModeDrain}},
 		{"get_websocket_frames", "direction", false, wsDirectionValues},
 		{"click", "button", false, clickButtonValues},
@@ -208,15 +215,14 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"set_storage", "type", false, storageTypeValues},
 		{"delete_storage", "type", false, storageTypeValues},
 		{"get_storage_keys", "type", false, storageTypeValues},
-		{"get_layout_shifts", "mode", false, []string{ModePeek, ModeDrain}},
-		{"get_lcp", "mode", false, []string{ModePeek, ModeDrain}},
+		{"get_performance", "mode", false, performanceModeValues},
 		{"clear_buffers", "targets", true, clearBufferTargetValues},
-		{"get_coverage", "type", false, coverageTypeValues},
 		{"get_downloads", "mode", false, []string{ModePeek, ModeDrain}},
 		{"set_permission", "setting", false, permissionSettingValues},
 		{"set_vision_deficiency", "type", false, visionDeficiencyValues},
-		{"add_intercept_rule", "action", false, interceptActionValues},
-		{"add_intercept_rule", "error_reason", false, interceptErrorReasonValues},
+		{"intercept", "action", false, interceptToolActionValues},
+		{"intercept", "resource_type", false, networkResourceTypeValues},
+		{"intercept", "error_reason", false, interceptErrorReasonValues},
 		{"force_pseudo_state", "states", true, forcePseudoStateValues},
 		{"emulate_device", "device", false, emulateDeviceValues},
 	}
@@ -365,9 +371,13 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 	if err := callToolExpectErr(t, "get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_min": 500, "status_max": 200}); !strings.Contains(err, "status_max") {
 		t.Errorf("inverted status range err = %q", err)
 	}
-	for _, toolName := range []string{"get_response_body", "get_request_body"} {
-		if err := callToolExpectErr(t, toolName, map[string]any{"tab": tabID, "request_id": ""}); !strings.Contains(err, "request_id") {
-			t.Errorf("%s empty request_id err = %q", toolName, err)
+	for _, part := range []string{"", "response", "request"} {
+		args := map[string]any{"tab": tabID, "request_id": ""}
+		if part != "" {
+			args["part"] = part
+		}
+		if err := callToolExpectErr(t, "get_network_body", args); !strings.Contains(err, "request_id") {
+			t.Errorf("get_network_body(part=%q) empty request_id err = %q", part, err)
 		}
 	}
 	if err := callToolExpectErr(t, "get_websocket_frames", map[string]any{"tab": tabID, "mode": "peek", "request_id": ""}); !strings.Contains(err, "request_id") {
@@ -489,13 +499,20 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"emulate_network", map[string]any{"download_throughput": -0.5}, "download_throughput"},
 		{"get_websocket_frames", map[string]any{"mode": "peek", "request_id": ""}, "request_id"},
 		{"get_console_logs", map[string]any{"mode": "peek", "limit": -1}, "limit"},
-		{"get_lcp", map[string]any{"mode": "peek", "limit": -1}, "limit"},
+		{"get_network_requests", map[string]any{"mode": "peek", "type": "bogus"}, "bogus"},
+		{"get_network_body", map[string]any{"request_id": "1", "part": "bogus"}, "bogus"},
+		{"get_network_body", map[string]any{"request_id": ""}, "request_id"},
+		{"get_performance", map[string]any{"mode": "peek", "limit": -1}, "limit"},
+		{"get_performance", map[string]any{"mode": "bogus"}, "bogus"},
 		{"clear_buffers", map[string]any{"targets": []string{"bogus"}}, "bogus"},
 		{"clear_buffers", map[string]any{"targets": []string{}}, "must not be empty"},
-		{"add_intercept_rule", map[string]any{"url_pattern": "", "action": "fail"}, "url_pattern"},
-		{"add_intercept_rule", map[string]any{"url_pattern": "*", "action": "fulfill", "status": 99}, "status"},
-		{"add_intercept_rule", map[string]any{"url_pattern": "*", "action": "modify"}, "requires at least one"},
-		{"remove_intercept_rule", map[string]any{"id": ""}, "rule id"},
+		{"intercept", map[string]any{"url_pattern": "", "action": "fail"}, "url_pattern"},
+		{"intercept", map[string]any{"url_pattern": "*", "action": "fulfill", "status": 99}, "status"},
+		{"intercept", map[string]any{"url_pattern": "*", "action": "modify"}, "requires at least one"},
+		{"intercept", map[string]any{"action": "remove", "id": ""}, "rule id"},
+		{"intercept", map[string]any{"action": "list", "url_pattern": "*"}, "does not accept"},
+		{"intercept", map[string]any{"action": "clear", "id": "r1"}, "does not accept"},
+		{"intercept", map[string]any{"action": "fail", "url_pattern": "*", "resource_type": "bogus"}, "bogus"},
 		{"click", map[string]any{"selector": ""}, "selector"},
 		{"browser_activate", map[string]any{"browser": ""}, "browser ID"},
 		{"get_indexeddb", map[string]any{"store": "items"}, "requires database"},

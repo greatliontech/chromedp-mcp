@@ -9,7 +9,7 @@ import (
 )
 
 // TestGetResponseBodyRangeSlicesUTF8 verifies range_start/range_end on
-// get_response_body returns a byte slice of the body and reports the
+// get_network_body returns a byte slice of the body and reports the
 // total length so the caller can plan paging.
 func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
@@ -32,7 +32,7 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	rid := out.Requests[0].ID
 
 	// Full body fetch — total_bytes set, truncated false.
-	full := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": rid,
 	})
@@ -45,7 +45,7 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	wantBody := full.Body
 
 	// Slice to first 5 bytes.
-	slice := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	slice := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 0,
@@ -62,7 +62,7 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	}
 
 	// Slice from byte 5 to end (range_end=0 means "end of body").
-	tail := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	tail := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 5,
@@ -94,13 +94,13 @@ func TestGetResponseBodyRangePastEnd(t *testing.T) {
 	})
 	rid := rs.Requests[0].ID
 
-	full := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": rid,
 	})
 
 	// range_end past the total — clamped to total.
-	clamped := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	clamped := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 0,
@@ -111,7 +111,7 @@ func TestGetResponseBodyRangePastEnd(t *testing.T) {
 	}
 
 	// range_start past the total — empty body, truncated=true.
-	past := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	past := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": full.TotalBytes + 100,
@@ -255,7 +255,7 @@ func TestGetResponseBodyRangeMidCodepoint(t *testing.T) {
 	// Slicing to N+1 lands inside the codepoint. The body must remain
 	// reported as text (Base64Encoded=false) and the slice must end
 	// before the partial rune.
-	full := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": rid,
 	})
@@ -263,7 +263,7 @@ func TestGetResponseBodyRangeMidCodepoint(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("expected 'é' in unicode response body")
 	}
-	cut := callTool[GetResponseBodyOutput](t, "get_response_body", map[string]any{
+	cut := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 0,
@@ -304,7 +304,7 @@ func TestGetResponseBodyRangeRejectsNegative(t *testing.T) {
 		{"tab": tabID, "request_id": rid, "range_start": -5},
 		{"tab": tabID, "request_id": rid, "range_end": -1},
 	} {
-		errText := callToolExpectErr(t, "get_response_body", args)
+		errText := callToolExpectErr(t, "get_network_body", args)
 		if !strings.Contains(errText, ">= 0") {
 			t.Errorf("negative range %v: error %q should reject explicitly", args, errText)
 		}

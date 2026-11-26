@@ -54,7 +54,7 @@ type InterceptRule struct {
 	MatchCount int64
 }
 
-// InterceptRuleInfo is the JSON-serializable summary returned by list_intercept_rules.
+// InterceptRuleInfo is the JSON-serializable summary returned by intercept(action='list').
 type InterceptRuleInfo struct {
 	ID             string            `json:"id"`
 	URLPattern     string            `json:"url_pattern"`

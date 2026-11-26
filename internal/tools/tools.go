@@ -22,7 +22,8 @@ import (
 // Options configures optional behavior for the MCP tools.
 type Options struct {
 	// DownloadDir is the directory for saving screenshots, PDFs, and
-	// downloads. When empty, save-to-disk is unavailable and the tools
+	// downloads. When non-empty, get_downloads is registered and screenshot/pdf
+	// accept filename; when empty, get_downloads is omitted and visual tools
 	// return binary data inline only.
 	DownloadDir string
 	// AllowedProfiles is the list of Chrome profiles (by display name)
@@ -67,19 +68,19 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerIndexedDBTools(s, mgr)
 	registerCacheStorageTools(s, mgr)
 	registerPerformanceTools(s, mgr)
-	registerDownloadTools(s, mgr)
+	if opts.DownloadDir != "" {
+		registerDownloadTools(s, mgr)
+	}
 	registerConfigTools(s, mgr)
 	registerEmulationTools(s, mgr)
 }
 
 // Buffer-read modes for tools that consume per-tab event buffers
 // (get_console_logs, get_js_errors, get_network_requests,
-// get_websocket_frames, get_layout_shifts, get_lcp, get_downloads).
+// get_websocket_frames, get_performance, get_downloads).
 //
-// Mode is a required parameter on those tools to make the destructive
-// vs. non-destructive choice explicit at every call site — the previous
-// shape (a single boolean defaulting to drain) silently destroyed data
-// the LLM hadn't intended to consume.
+// Pure buffer-reading tools require mode explicitly; get_performance defaults
+// to ModePeek so no tool silently defaults to destructive consumption.
 const (
 	ModePeek  = "peek"
 	ModeDrain = "drain"
@@ -306,7 +307,7 @@ func selectorError(parentCtx context.Context, selector string, err error) error 
 }
 
 // cleanupContext derives a short bounded context for deferred CDP teardown
-// calls (e.g., ReleaseObject, Profiler.disable, CSS.disable) that must still
+// calls (e.g., ReleaseObject) that must still
 // run even if the caller's request or selector context expired. chromedp still
 // short-circuits immediately if the target detaches or the browser dies.
 func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {

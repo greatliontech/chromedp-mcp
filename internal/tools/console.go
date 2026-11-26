@@ -34,11 +34,6 @@ type GetJSErrorsOutput struct {
 	Errors []collector.JSErrorEntry `json:"errors"`
 }
 
-// ClearConsoleInput is the input for clear_console.
-type ClearConsoleInput struct {
-	TabInput
-}
-
 func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_console_logs",
@@ -96,19 +91,5 @@ func registerConsoleTools(s *mcp.Server, mgr *browser.Manager) {
 			errors = []collector.JSErrorEntry{}
 		}
 		return nil, GetJSErrorsOutput{Errors: errors}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "clear_console",
-		Description: "Clear the console and JS error buffers for a tab.",
-		Annotations: idempotentWriteAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ClearConsoleInput) (*mcp.CallToolResult, struct{}, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		t.Console.Clear()
-		t.JSErrors.Clear()
-		return nil, struct{}{}, nil
 	})
 }

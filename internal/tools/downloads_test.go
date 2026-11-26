@@ -288,3 +288,24 @@ func TestDownloadMultiTabNoDuplicatesAndNoOverwrite(t *testing.T) {
 		}
 	}
 }
+
+// TestGetDownloadsGatedOnDownloadDir verifies get_downloads is omitted from
+// tools/list when DownloadDir is empty and registered when DownloadDir is set.
+func TestGetDownloadsGatedOnDownloadDir(t *testing.T) {
+	hasGetDownloads := func(opts *Options) bool {
+		t.Helper()
+		for _, tool := range listAllRegisteredTools(t, opts) {
+			if tool.Name == "get_downloads" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasGetDownloads(&Options{}) {
+		t.Error("get_downloads must not be registered when DownloadDir is empty")
+	}
+	if !hasGetDownloads(&Options{DownloadDir: t.TempDir()}) {
+		t.Error("get_downloads must be registered when DownloadDir is non-empty")
+	}
+}

@@ -41,17 +41,17 @@ func TestInterceptFulfillTextBinaryAndPassThrough(t *testing.T) {
 	pausedCount, stopListen := attachPausedCounter(t, tabID)
 	defer stopListen()
 
-	// Empty list must serialize as [], never null.
-	rawList := callToolRaw(t, "list_intercept_rules", map[string]any{"tab": tabID})
+	// Empty list must serialize as {"rules":[]}, never null.
+	rawList := callToolRaw(t, "intercept", map[string]any{"tab": tabID, "action": "list"})
 	if rawList.IsError {
-		t.Fatalf("list_intercept_rules error: %s", contentText(rawList))
+		t.Fatalf("intercept(list) error: %s", contentText(rawList))
 	}
-	if strings.Contains(contentText(rawList), `"rules":null`) {
-		t.Fatalf("list_intercept_rules serialized rules as null: %s", contentText(rawList))
+	if !strings.Contains(contentText(rawList), `"rules":[]`) {
+		t.Fatalf("intercept(list) empty JSON = %s, want \"rules\":[]", contentText(rawList))
 	}
 
 	// Rule 1: mock JSON API response.
-	r1 := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	r1 := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":         tabID,
 		"url_pattern": "*/api/mock",
 		"action":      "fulfill",
@@ -63,12 +63,12 @@ func TestInterceptFulfillTextBinaryAndPassThrough(t *testing.T) {
 		"body": `{"mocked":true}`,
 	})
 	if r1.ID == "" {
-		t.Fatal("add_intercept_rule returned empty ID")
+		t.Fatal("intercept(fulfill) returned empty ID")
 	}
 
 	// Rule 2: mock binary response via body_base64.
 	wantBytes := []byte{0x00, 0x01, 0xfe, 0xff}
-	r2 := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	r2 := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":         tabID,
 		"url_pattern": "*/api/bin",
 		"action":      "fulfill",
@@ -78,7 +78,7 @@ func TestInterceptFulfillTextBinaryAndPassThrough(t *testing.T) {
 	})
 
 	// Rule 3: valid 204 No Content with empty body must succeed.
-	r3 := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	r3 := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":         tabID,
 		"url_pattern": "*/api/empty",
 		"action":      "fulfill",
@@ -148,18 +148,18 @@ func TestInterceptFulfillTextBinaryAndPassThrough(t *testing.T) {
 		t.Fatalf("expected >=4 EventRequestPaused events while rules active, got %d", pausedCount.Load())
 	}
 
-	// Verify list_intercept_rules reports order and match counts.
-	list := callTool[ListInterceptRulesOutput](t, "list_intercept_rules", map[string]any{"tab": tabID})
-	if len(list.Rules) != 3 ||
-		list.Rules[0].ID != r1.ID || list.Rules[0].Matches != 1 ||
-		list.Rules[1].ID != r2.ID || list.Rules[1].Matches != 1 ||
-		list.Rules[2].ID != r3.ID || list.Rules[2].Matches != 1 {
-		t.Fatalf("unexpected list_intercept_rules: %+v", list.Rules)
+	// Verify intercept(list) reports order and match counts.
+	list := callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "list"})
+	if list.Rules == nil || len(*list.Rules) != 3 ||
+		(*list.Rules)[0].ID != r1.ID || (*list.Rules)[0].Matches != 1 ||
+		(*list.Rules)[1].ID != r2.ID || (*list.Rules)[1].Matches != 1 ||
+		(*list.Rules)[2].ID != r3.ID || (*list.Rules)[2].Matches != 1 {
+		t.Fatalf("unexpected intercept(list): %+v", list.Rules)
 	}
 
 	// Remove r1; /api/mock must now hit the real server (404).
-	callTool[struct{}](t, "remove_intercept_rule", map[string]any{"tab": tabID, "id": r1.ID})
-	if errText := callToolExpectErr(t, "remove_intercept_rule", map[string]any{"tab": tabID, "id": r1.ID}); !strings.Contains(errText, "not found") {
+	callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "remove", "id": r1.ID})
+	if errText := callToolExpectErr(t, "intercept", map[string]any{"tab": tabID, "action": "remove", "id": r1.ID}); !strings.Contains(errText, "not found") {
 		t.Errorf("removing already-removed rule err = %q, want not found", errText)
 	}
 	evAfterRemove := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -170,14 +170,14 @@ func TestInterceptFulfillTextBinaryAndPassThrough(t *testing.T) {
 		t.Errorf("after removing r1, /api/mock status = %s, want 404", evAfterRemove.Result)
 	}
 
-	// Clear remaining rules and verify idempotency + actual Fetch.disable teardown.
-	cleared := callTool[ClearInterceptRulesOutput](t, "clear_intercept_rules", map[string]any{"tab": tabID})
-	if cleared.Removed != 2 {
-		t.Errorf("clear_intercept_rules Removed = %d, want 2", cleared.Removed)
+	// Clear remaining rules and verify idempotency + explicit removed:0 + actual Fetch.disable teardown.
+	cleared := callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "clear"})
+	if cleared.Removed == nil || *cleared.Removed != 2 {
+		t.Errorf("intercept(clear) Removed = %v, want 2", cleared.Removed)
 	}
-	cleared2 := callTool[ClearInterceptRulesOutput](t, "clear_intercept_rules", map[string]any{"tab": tabID})
-	if cleared2.Removed != 0 {
-		t.Errorf("second clear_intercept_rules Removed = %d, want 0", cleared2.Removed)
+	rawCleared2 := callToolRaw(t, "intercept", map[string]any{"tab": tabID, "action": "clear"})
+	if rawCleared2.IsError || !strings.Contains(contentText(rawCleared2), `"removed":0`) {
+		t.Errorf("second intercept(clear) raw = %s (err=%v), want \"removed\":0", contentText(rawCleared2), rawCleared2.IsError)
 	}
 
 	beforeClearFetch := pausedCount.Load()
@@ -189,7 +189,7 @@ func TestInterceptFulfillTextBinaryAndPassThrough(t *testing.T) {
 		t.Fatalf("post-clear fetch status = %s, want 200", evAfterClear.Result)
 	}
 	if after := pausedCount.Load(); after != beforeClearFetch {
-		t.Errorf("Fetch.disable did not stop EventRequestPaused after clear_intercept_rules: count went %d -> %d", beforeClearFetch, after)
+		t.Errorf("Fetch.disable did not stop EventRequestPaused after intercept(clear): count went %d -> %d", beforeClearFetch, after)
 	}
 }
 
@@ -225,7 +225,7 @@ func TestInterceptModifyPreservesHeadersAndRewritesRequest(t *testing.T) {
 	pausedCount, stopListen := attachPausedCounter(t, tabID)
 	defer stopListen()
 
-	rule := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	rule := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":             tabID,
 		"url_pattern":     "*/orig",
 		"action":          "modify",
@@ -239,7 +239,7 @@ func TestInterceptModifyPreservesHeadersAndRewritesRequest(t *testing.T) {
 	})
 
 	wantBinPost := []byte{0x00, 0x01, 0x7f, 0xfe, 0xff}
-	binRule := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	binRule := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":              tabID,
 		"url_pattern":      "*/bin-upload",
 		"action":           "modify",
@@ -288,10 +288,10 @@ func TestInterceptModifyPreservesHeadersAndRewritesRequest(t *testing.T) {
 		t.Fatalf("expected >=2 EventRequestPaused events while modify rules active, got %d", pausedCount.Load())
 	}
 
-	// Removing all rules via remove_intercept_rule disables Fetch cleanly;
+	// Removing all rules via intercept(remove) disables Fetch cleanly;
 	// /orig hits original path unmodified AND emits zero new EventRequestPaused events.
-	callTool[struct{}](t, "remove_intercept_rule", map[string]any{"tab": tabID, "id": binRule.ID})
-	callTool[struct{}](t, "remove_intercept_rule", map[string]any{"tab": tabID, "id": rule.ID})
+	callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "remove", "id": binRule.ID})
+	callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "remove", "id": rule.ID})
 
 	beforeRemoveFetch := pausedCount.Load()
 	evAfter := callTool[EvaluateOutput](t, "evaluate", map[string]any{
@@ -317,12 +317,12 @@ func TestInterceptResourceTypeFilter(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	// Rule 1 targets Image only; a fetch() request (reported by Chrome's Fetch
+	// Rule 1 targets image only; a fetch() request (reported by Chrome's Fetch
 	// domain as resource type "XHR") must bypass it.
-	imgRule := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	imgRule := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":           tabID,
 		"url_pattern":   "*/api/data",
-		"resource_type": "Image",
+		"resource_type": "image",
 		"action":        "fulfill",
 		"body":          "image-mocked",
 	})
@@ -332,11 +332,11 @@ func TestInterceptResourceTypeFilter(t *testing.T) {
 		"expression": `fetch('/api/data').then(r => r.json())`,
 	})
 	if !strings.Contains(string(evPass.Result), `"value":42`) {
-		t.Fatalf("fetch() request matched Image-only rule; got %s, want real /api/data", evPass.Result)
+		t.Fatalf("fetch() request matched image-only rule; got %s, want real /api/data", evPass.Result)
 	}
 
-	// Rule 2 targets XHR (case-insensitive); fetch() must now match rule 2, not rule 1.
-	xhrRule := callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	// Rule 2 targets xhr; fetch() must now match rule 2, not rule 1.
+	xhrRule := callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":           tabID,
 		"url_pattern":   "*/api/data",
 		"resource_type": "xhr",
@@ -352,7 +352,7 @@ func TestInterceptResourceTypeFilter(t *testing.T) {
 		t.Fatalf("fetch() with resource_type=xhr rule returned %s, want \"xhr-mocked\"", evMatch.Result)
 	}
 
-	// Trigger an actual Image request to /api/data and confirm it matches rule 1 (Image), not rule 2.
+	// Trigger an actual Image request to /api/data and confirm it matches rule 1 (image), not rule 2.
 	callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `new Promise(resolve => {
@@ -363,24 +363,24 @@ func TestInterceptResourceTypeFilter(t *testing.T) {
 		})`,
 	})
 
-	list := callTool[ListInterceptRulesOutput](t, "list_intercept_rules", map[string]any{"tab": tabID})
-	if len(list.Rules) != 2 ||
-		list.Rules[0].ID != imgRule.ID || list.Rules[0].Matches != 1 ||
-		list.Rules[1].ID != xhrRule.ID || list.Rules[1].Matches != 1 {
+	list := callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "list"})
+	if list.Rules == nil || len(*list.Rules) != 2 ||
+		(*list.Rules)[0].ID != imgRule.ID || (*list.Rules)[0].Matches != 1 ||
+		(*list.Rules)[1].ID != xhrRule.ID || (*list.Rules)[1].Matches != 1 {
 		t.Fatalf("unexpected resource_type rule match counts: %+v", list.Rules)
 	}
 
-	callTool[ClearInterceptRulesOutput](t, "clear_intercept_rules", map[string]any{"tab": tabID})
+	callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "clear"})
 }
 
-func TestInterceptFailMethodPrecedenceAndConcurrentFetches(t *testing.T) {
+func TestInterceptFailBlockedByClientAndConcurrentFetches(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
 	callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{"tab": tabID, "targets": []string{"network"}})
 
 	// Rule 1: fail POST /api/data with TimedOut.
-	callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":          tabID,
 		"url_pattern":  "*/api/data",
 		"method":       "POST",
@@ -388,21 +388,28 @@ func TestInterceptFailMethodPrecedenceAndConcurrentFetches(t *testing.T) {
 		"error_reason": "TimedOut",
 	})
 	// Rule 2: fulfill GET /api/data with custom body (first-match precedence).
-	callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":         tabID,
 		"url_pattern": "*/api/data",
 		"method":      "GET",
 		"action":      "fulfill",
 		"body":        "get-mocked",
 	})
-	// Rule 3: broader fallback fail that must NOT shadow Rule 2 for GET /api/data.
-	callTool[AddInterceptRuleOutput](t, "add_intercept_rule", map[string]any{
+	// Rule 3: block *.png via BlockedByClient (supersedes removed block_urls).
+	callTool[InterceptOutput](t, "intercept", map[string]any{
+		"tab":          tabID,
+		"url_pattern":  "*.png",
+		"action":       "fail",
+		"error_reason": "BlockedByClient",
+	})
+	// Rule 4: broader fallback fail that must NOT shadow Rule 2 for GET /api/data.
+	callTool[InterceptOutput](t, "intercept", map[string]any{
 		"tab":         tabID,
 		"url_pattern": "*/api/data",
 		"action":      "fail",
 	})
 
-	// Fire 8 concurrent requests mixing fail, fulfill, and pass-through to verify
+	// Fire concurrent requests mixing fail, blocked, fulfill, and pass-through to verify
 	// async EventRequestPaused dispatch never deadlocks or races.
 	ev := callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
@@ -415,7 +422,7 @@ func TestInterceptFailMethodPrecedenceAndConcurrentFetches(t *testing.T) {
 				fetch('/submit', {method: 'POST'}).then(r => r.text()),
 				fetch('/submit', {method: 'POST'}).then(r => r.text()),
 				fetch('/page2.html').then(r => r.status),
-				fetch('/page2.html').then(r => r.status),
+				fetch('/image.png').then(() => 'unexpected-ok', () => 'png-blocked'),
 			];
 			return await Promise.all(tasks);
 		})()`,
@@ -428,27 +435,34 @@ func TestInterceptFailMethodPrecedenceAndConcurrentFetches(t *testing.T) {
 		results[0] != "post-failed" || results[1] != "post-failed" ||
 		results[2] != "get-mocked" || results[3] != "get-mocked" ||
 		results[4] != "submitted" || results[5] != "submitted" ||
-		results[6] != float64(200) || results[7] != float64(200) {
+		results[6] != float64(200) || results[7] != "png-blocked" {
 		t.Fatalf("concurrent fetch results = %#v", results)
 	}
 
-	// Verify the exact error_reason (TimedOut -> ERR_TIMED_OUT) was applied by Chrome.
+	// Verify exact error reasons (TimedOut -> ERR_TIMED_OUT, BlockedByClient -> ERR_BLOCKED_BY_CLIENT).
 	netOut := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"failed_only": true,
 	})
 	timedOutCount := 0
+	blockedCount := 0
 	for _, r := range netOut.Requests {
 		if strings.HasSuffix(r.URL, "/api/data") && r.Method == "POST" && strings.Contains(r.Error, "ERR_TIMED_OUT") {
 			timedOutCount++
+		}
+		if strings.HasSuffix(r.URL, "/image.png") && strings.Contains(r.Error, "ERR_BLOCKED_BY_CLIENT") {
+			blockedCount++
 		}
 	}
 	if timedOutCount != 2 {
 		t.Fatalf("expected 2 failed POST /api/data requests with ERR_TIMED_OUT, got %d (entries=%+v)", timedOutCount, netOut.Requests)
 	}
+	if blockedCount != 1 {
+		t.Fatalf("expected 1 blocked /image.png request with ERR_BLOCKED_BY_CLIENT, got %d (entries=%+v)", blockedCount, netOut.Requests)
+	}
 
-	callTool[ClearInterceptRulesOutput](t, "clear_intercept_rules", map[string]any{"tab": tabID})
+	callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "clear"})
 }
 
 func TestInterceptValidation(t *testing.T) {
@@ -461,6 +475,17 @@ func TestInterceptValidation(t *testing.T) {
 		want string
 	}{
 		{"empty_pattern", map[string]any{"tab": tabID, "url_pattern": "", "action": "fail"}, "url_pattern"},
+		{"fulfill_with_id", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "id": "r1"}, "id is only valid"},
+		{"invalid_resource_type", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fail", "resource_type": "bogus"}, "resource_type"},
+		{"remove_missing_id", map[string]any{"tab": tabID, "action": "remove"}, "rule id"},
+		{"remove_stray_pattern", map[string]any{"tab": tabID, "action": "remove", "id": "r1", "url_pattern": "*"}, "only accepts id"},
+		{"remove_empty_headers", map[string]any{"tab": tabID, "action": "remove", "id": "r1", "headers": map[string]string{}}, "only accepts id"},
+		{"list_stray_id", map[string]any{"tab": tabID, "action": "list", "id": "r1"}, "does not accept"},
+		{"list_stray_pattern", map[string]any{"tab": tabID, "action": "list", "url_pattern": "*"}, "does not accept"},
+		{"list_empty_headers", map[string]any{"tab": tabID, "action": "list", "headers": map[string]string{}}, "does not accept"},
+		{"clear_stray_id", map[string]any{"tab": tabID, "action": "clear", "id": "r1"}, "does not accept"},
+		{"clear_stray_headers", map[string]any{"tab": tabID, "action": "clear", "headers": map[string]string{"X-A": "1"}}, "does not accept"},
+		{"clear_empty_headers", map[string]any{"tab": tabID, "action": "clear", "headers": map[string]string{}}, "does not accept"},
 		{"status_low", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "status": 99}, "status"},
 		{"status_high", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "status": 600}, "status"},
 		{"fulfill_100_with_body", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "status": 100, "body": "x"}, "forbids a non-empty response body"},
@@ -478,6 +503,7 @@ func TestInterceptValidation(t *testing.T) {
 		{"modify_stray_status", map[string]any{"tab": tabID, "url_pattern": "*", "action": "modify", "override_method": "PUT", "status": 200}, "modify"},
 		{"fail_stray_body", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fail", "body": "nope"}, "fail"},
 		{"fail_stray_headers", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fail", "headers": map[string]string{"X-A": "1"}}, "fail"},
+		{"fail_empty_headers", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fail", "headers": map[string]string{}}, "fail"},
 		{"blank_header_name", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "headers": map[string]string{"  ": "v"}}, "invalid header name"},
 		{"invalid_header_name_space", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "headers": map[string]string{"Bad Name": "v"}}, "invalid header name"},
 		{"invalid_header_value_crlf", map[string]any{"tab": tabID, "url_pattern": "*", "action": "fulfill", "headers": map[string]string{"X-A": "1\r\nX-B: 2"}}, "invalid header value"},
@@ -487,7 +513,7 @@ func TestInterceptValidation(t *testing.T) {
 	}
 	for _, tc := range badCases {
 		t.Run(tc.name, func(t *testing.T) {
-			errText := callToolExpectErr(t, "add_intercept_rule", tc.args)
+			errText := callToolExpectErr(t, "intercept", tc.args)
 			if !strings.Contains(errText, tc.want) {
 				t.Errorf("%s err = %q, want substring %q", tc.name, errText, tc.want)
 			}
@@ -495,8 +521,8 @@ func TestInterceptValidation(t *testing.T) {
 	}
 
 	// Ensure no rules were added by failed calls.
-	list := callTool[ListInterceptRulesOutput](t, "list_intercept_rules", map[string]any{"tab": tabID})
-	if len(list.Rules) != 0 {
-		t.Errorf("failed add_intercept_rule calls leaked %d rules", len(list.Rules))
+	list := callTool[InterceptOutput](t, "intercept", map[string]any{"tab": tabID, "action": "list"})
+	if list.Rules == nil || len(*list.Rules) != 0 {
+		t.Errorf("failed intercept calls leaked rules: %+v", list.Rules)
 	}
 }

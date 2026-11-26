@@ -54,26 +54,6 @@ func TestJSErrors(t *testing.T) {
 	}
 }
 
-func TestClearConsole(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	// Drain first to get any existing logs.
-	callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{"tab": tabID, "mode": "drain"})
-
-	// Clear.
-	callTool[struct{}](t, "clear_console", map[string]any{"tab": tabID})
-
-	// Should be empty now.
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab":  tabID,
-		"mode": "peek",
-	})
-	if len(out.Logs) != 0 {
-		t.Errorf("expected 0 logs after clear, got %d", len(out.Logs))
-	}
-}
-
 func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -252,33 +232,6 @@ func TestConsoleLogEntryFields(t *testing.T) {
 	}
 }
 
-func TestClearConsoleAlsoClearsJSErrors(t *testing.T) {
-	tabID := navigateToFixture(t, "errors.html")
-	defer closeTab(t, tabID)
-	waitForJSErrors(t, tabID)
-
-	// Verify JS errors exist.
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
-		"tab":  tabID,
-		"mode": "peek",
-	})
-	if len(out.Errors) == 0 {
-		t.Fatal("expected JS errors before clearing")
-	}
-
-	// Clear console (should also clear JS errors per design).
-	callTool[struct{}](t, "clear_console", map[string]any{"tab": tabID})
-
-	// Verify JS errors are cleared.
-	out = callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
-		"tab":  tabID,
-		"mode": "peek",
-	})
-	if len(out.Errors) != 0 {
-		t.Errorf("after clear_console, expected 0 JS errors, got %d", len(out.Errors))
-	}
-}
-
 func TestConsoleLogsLevelFilterError(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -432,23 +385,6 @@ func TestJSErrorsDetailedFields(t *testing.T) {
 			}
 			return
 		}
-	}
-}
-
-func TestClearConsoleIdempotent(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	// Clear twice.
-	callTool[struct{}](t, "clear_console", map[string]any{"tab": tabID})
-	callTool[struct{}](t, "clear_console", map[string]any{"tab": tabID})
-
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab":  tabID,
-		"mode": "peek",
-	})
-	if len(out.Logs) != 0 {
-		t.Errorf("after double clear, expected 0 logs, got %d", len(out.Logs))
 	}
 }
 

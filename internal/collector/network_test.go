@@ -539,7 +539,7 @@ func TestRequestBodyTruncatedMidUTF8(t *testing.T) {
 // TestRequestBodyHasButNoEntries verifies the case where Chrome reports
 // HasPostData=true but omits PostDataEntries (body too large for the
 // configured MaxPostDataSize). The flag should still be set so the LLM
-// knows to call get_request_body.
+// knows to call get_network_body(part="request").
 func TestRequestBodyHasButNoEntries(t *testing.T) {
 	n := NewNetwork(10)
 	e := captureRequest(t, n, &network.Request{
