@@ -11,19 +11,19 @@ An MCP server that gives LLMs a fully-featured headless browser for inspecting, 
 |  LLM / Host |   tools              |                |  <────────────────  | Browser |
 +-------------+                       |  - browser mgr |  events, results   +---------+
                                       |  - tab mgr     |
-                                      |  - collectors   |
+                                      |  - collectors  |
                                       +----------------+
 ```
 
-The server exposes MCP tools that map to browser operations. Under the hood, `chromedp` drives Chrome via the Chrome DevTools Protocol. The server captures console logs, network traffic, JS errors, and performance data in background collectors, making them available to the LLM on demand.
+The server exposes 41 MCP tools by default (plus 2 conditionally registered tools: `get_downloads` when `--download-dir` is configured and `browser_list_profiles` when `--allowed-profiles` is configured; 43 max). Under the hood, `chromedp` drives Chrome via the Chrome DevTools Protocol. The server captures console logs, network traffic, WebSocket frames, JS errors, dialog state, and performance timeline data in background collectors, making them available to the LLM on demand.
 
 ## Transport
 
-stdio only. This is the standard for CLI-integrated MCP servers (Claude Desktop, Claude CLI, etc.).
+stdio only. This is the standard for CLI-integrated MCP servers (Claude Desktop, Claude Code, OpenCode, etc.).
 
 ## Browser Lifecycle
 
-The browser lifecycle is entirely tool-driven. The LLM decides when to launch or connect to a browser, and with what settings. The only CLI-level configuration that affects browser launches is `--allowed-profiles` (which gates access to real Chrome user profiles) and `--user-data-dir` (which overrides where profiles are discovered). See [User Profile Security](#user-profile-security).
+The browser lifecycle is entirely tool-driven. The LLM decides when to launch or connect to a browser, and with what settings. The only CLI-level configuration flags are `--download-dir` (enables disk saving and downloads), `--allowed-profiles` (gates access to real Chrome user profiles), and `--user-data-dir` (overrides where profiles are discovered). See [Configuration](#configuration) and [User Profile Security](#user-profile-security).
 
 This means the LLM can:
 - Launch a headless browser for automated testing
@@ -40,23 +40,21 @@ Launch a new Chrome instance managed by the server. Connects at the browser CDP 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `headless` | bool | no | Run in headless mode (default `true`) |
-| `width` | int | no | Initial viewport width (default 1920) |
-| `height` | int | no | Initial viewport height (default 1080) |
-| `profile` | string | no | Chrome profile display name to use (e.g. `"Work"`). Must be in the allowed profiles list. Use `browser_list_profiles` to see available profiles. Requires `--allowed-profiles` to be configured. |
+| `width` | int | no | Initial viewport width in pixels (default `1920`) |
+| `height` | int | no | Initial viewport height in pixels (default `1080`) |
+| `profile` | string | no | Chrome profile display name to use (e.g. `"Work"`). Only exposed in `InputSchema` when `--allowed-profiles` is configured; rejected if passed otherwise. |
 
 Returns: `{browser_id, tabs}` where `tabs` is the array of attached initial tabs (`{id, url, title, active}`).
 
-When `profile` is specified, the browser is launched with `--user-data-dir` and `--profile-directory` pointing to the real Chrome profile. This gives the browser access to the profile's cookies, sessions, extensions, and other stored data. When omitted, a temporary ephemeral profile is used (default behavior).
-
-Closing the server kills any launched browsers.
+When `profile` is specified, the browser is launched with `--user-data-dir` and `--profile-directory` pointing to the real Chrome profile. When omitted, a temporary ephemeral profile is used. Closing the server kills any launched browsers.
 
 #### `browser_list_profiles`
 
-List available Chrome/Chromium user profiles that can be used with `browser_launch`. Only registered when `--allowed-profiles` is configured. Returns only profiles that are in the allowed list.
+List available Chrome/Chromium user profiles that can be used with `browser_launch`. Registered only when `--allowed-profiles` is configured. Returns only profiles in the allowed list.
 
 No parameters.
 
-Returns: `{profiles}` array of `{name, dir}` objects where `name` is the display name and `dir` is the profile directory name.
+Returns: `{profiles}` array of `{name, dir}` objects (always `[]` when none match).
 
 #### `browser_connect`
 
@@ -98,13 +96,15 @@ Returns: `{browsers}` array of `{id, mode, active, tabs}` objects (where `tabs` 
 
 ### Active Browser
 
-When multiple browsers are managed, one is the **active browser**. Tab tools that don't specify a browser operate on the active browser. The most recently launched/connected browser becomes active. If the active browser is closed, the most recently used remaining browser becomes active.
+When multiple browsers are managed, one is the **active browser** tracked in MRU order. Tab tools that omit `browser` operate on the active browser (or, when an explicit `tab` ID is given, resolve the tab across all managed browsers). Closing the active browser promotes the most recently used remaining browser.
 
 ## Tab Model
 
 The server supports multiple concurrent tabs per browser. Each tab is identified by a string **tab ID** returned on creation. Most tools accept an optional `tab` parameter; when omitted, the tool operates on the **active tab** of the active browser.
 
 Internally, each tab maps to a `chromedp` target `context.Context` derived from the browser context. Creating a tab creates a new Chrome target; closing a tab cancels its context.
+
+**Automatic popup adoption:** Each browser enables `Target.setDiscoverTargets` and listens for `Target.targetCreated` events. When a page opens a popup or `target="_blank"` tab (`OpenerID != ""`), the server automatically attaches it in the background (`AttachBackgroundTarget`) so it appears immediately in `tab_list` without stealing the caller's active tab.
 
 ### Tab Management Tools
 
@@ -117,11 +117,11 @@ Create a new tab, optionally navigating to a URL.
 | `url` | string | no | URL to navigate to |
 | `browser` | string | no | Browser ID. Defaults to active browser. |
 
-Returns: `{tab_id, url?}`. The new tab becomes the active tab.
+Returns: `{tab_id, url?}`. The new tab becomes the active tab. If navigation fails, the newly created tab is closed cleanly rather than orphaned.
 
 #### `tab_list`
 
-List all open tabs with their IDs, URLs, and titles.
+List all open tabs with their IDs, URLs, and titles (via non-blocking `Target.getTargetInfo`, so open JS dialogs do not hang listing).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -131,7 +131,7 @@ Returns: `{tabs}` array of `{id, url, title, active}` objects.
 
 #### `tab_activate`
 
-Set a tab as the active tab.
+Set a tab as the active tab (updating its owning browser to active as well) and bring the tab to the front via `Page.bringToFront`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -149,126 +149,98 @@ If the active tab is closed, the most recently used remaining tab becomes active
 
 ### Explicit Browser and Tab Lifecycle
 
-No implicit auto-creation. If no browser exists when a tool that requires one is called, an error is returned telling the LLM to call `browser_launch` or `browser_connect`. `browser_launch` attaches Chrome's initial default tab (and `browser_connect` adopts existing open tabs) so tab-scoped tools work immediately; if all tabs are later closed (or a connected browser has zero open tabs), calling a tab tool returns an error telling the LLM to call `tab_new`.
+No implicit auto-creation. If no browser exists when a tool that requires one is called, an error instructs the caller to call `browser_launch` or `browser_connect`. `browser_launch` attaches Chrome's initial default tab (and `browser_connect` adopts existing open tabs) so tab-scoped tools work immediately; if all tabs are later closed (or a connected browser has zero open tabs), calling a tab tool returns an error instructing the caller to call `tab_new`.
+
+## Element Targeting, Snapshot Refs, Shadow DOM & Iframes
+
+Tools that operate on elements share a unified target resolver (`internal/tools/target.go`) supporting three addressing modes:
+
+1. **Snapshot refs (`ref`)**: Short handles (`e1`, `e2`, ...) assigned by `snapshot`. Each `tab.SnapshotRef` records `(BackendNodeID, FrameID, Role, Name)`, while per-tab generation counters (`snapshotGen` and `snapshotFrameGen`) clear or prune refs automatically on main-frame navigation, subframe navigation/detach, or target crash with a stale-ref error directing the caller to re-snapshot. Refs pierce open Shadow DOM transparently and target elements in same-origin iframes directly (when snapshotted with `frame`). `ref` is mutually exclusive with `selector`, `frame`, and `(x, y)`.
+2. **CSS and Shadow DOM selectors (`selector`, optional `frame`)**: Standard CSS selectors plus `>>>` combinators to pierce nested open shadow roots (e.g. `my-app >>> my-card >>> button.save`). Quoted or escaped `>>>` inside attribute selectors is preserved. Passing a reachable `frame` ID from `list_frames` scopes selector lookup and evaluation to that same-origin iframe; cross-origin OOPIFs return an explicit out-of-process error.
+3. **Viewport coordinates (`x`, `y`)**: Supported on pointer tools (`click`, `hover`, and `source_x`/`source_y`/`target_x`/`target_y` on `drag_and_drop`) for canvas/SVG/custom hit targets. Both `x` and `y` must be finite numbers and are mutually exclusive with `ref`/`selector`/`frame`.
 
 ## Event Collectors
 
-The server registers CDP event listeners per tab that buffer events. These start automatically when a tab is created.
+The server registers CDP event listeners per tab that buffer events automatically from tab startup.
 
 ### Collected Event Types
 
 | Collector | CDP Events | Buffer Behavior |
-|-----------|-----------|-----------------|
+|-----------|------------|-----------------|
 | **Console** | `runtime.EventConsoleAPICalled` | Ring buffer (default 1000 entries). Normalizes CDP `"warning"` to `"warn"` and captures top stack frame `source` (`url:line:column`). |
-| **JS Errors** | `runtime.EventExceptionThrown` | Ring buffer (default 500 entries) |
-| **Network** | `network.EventRequestWillBeSent`, `network.EventResponseReceived`, `network.EventLoadingFinished`, `network.EventLoadingFailed` | Ring buffer of request/response pairs (default 1000 entries); preserves redirect chains, multi-value headers (joined with `\n`), failure details (`blocked_reason`, `cors_error`, `canceled`), and timing breakdown (`transfer_ms`, etc.). Response bodies captured lazily on demand. |
-| **WebSocket** | `network.EventWebSocketCreated`, `network.EventWebSocketWillSendHandshakeRequest`, `network.EventWebSocketHandshakeResponseReceived`, `network.EventWebSocketFrameSent`, `network.EventWebSocketFrameReceived`, `network.EventWebSocketFrameError`, `network.EventWebSocketClosed` | Tracks up to 100 connections per tab with bounded sent/received frame ring buffers (500 frames per direction per socket) |
-| **Performance Timeline** | `performancetimeline.EventTimelineEventAdded` | Ring buffers for layout shifts (default 200 entries) and LCP (default 50 entries) |
-| **URL Changes** | `page.EventFrameNavigated`, `page.EventNavigatedWithinDocument` | Ring buffer (default 100 entries) used by inline activity observation |
-| **Dialog** | `page.EventJavascriptDialogOpening`, `page.EventJavascriptDialogClosed` (plus crash/navigation/frame-detach clearing) | Tracks the single active JS modal dialog per tab without blocking on the renderer |
-| **Downloads** | `browser.EventDownloadWillBegin`, `browser.EventDownloadProgress` | Browser-scoped ring buffer (default 200 completed/canceled entries) plus live in-progress tracking and async GUID-to-filename renaming |
+| **JS Errors** | `runtime.EventExceptionThrown` | Ring buffer (default 500 entries). Preserves primitive throws (`throw "boom"` / `Promise.reject("x")`). |
+| **Network** | `network.EventRequestWillBeSent`, `network.EventResponseReceived`, `network.EventLoadingFinished`, `network.EventLoadingFailed` | Ring buffer of request/response pairs (default 1000 entries); preserves redirect chains, multi-value headers (joined with `\n`), failure details (`blocked_reason`, `cors_error`, `canceled`), and timing breakdown (`transfer_ms`, etc.). Bodies captured lazily on demand via `get_network_body`. |
+| **WebSocket** | `network.EventWebSocketCreated`, `network.EventWebSocketWillSendHandshakeRequest`, `network.EventWebSocketHandshakeResponseReceived`, `network.EventWebSocketFrameSent`, `network.EventWebSocketFrameReceived`, `network.EventWebSocketFrameError`, `network.EventWebSocketClosed` | Tracks up to 100 connections per tab with bounded sent/received frame ring buffers (500 frames per direction per socket). |
+| **Performance Timeline** | `performancetimeline.EventTimelineEventAdded` | Ring buffers for layout shifts (default 200 entries; computes W3C session-window CLS excluding `had_recent_input` shifts) and LCP (default 50 entries). |
+| **URL Changes** | `page.EventFrameNavigated`, `page.EventNavigatedWithinDocument` | Ring buffer (default 100 entries) used by inline activity observation. |
+| **Dialog** | `page.EventJavascriptDialogOpening`, `page.EventJavascriptDialogClosed` (plus crash/navigation/frame-detach clearing) | Tracks the single active JS modal dialog per tab and broadcasts opening notifications (`OpeningNotify()`) so in-flight actions interrupt cleanly instead of hanging. |
+| **Downloads** | `browser.EventDownloadWillBegin`, `browser.EventDownloadProgress` | Browser-scoped ring buffer (default 200 completed/canceled entries) plus live in-progress tracking and async GUID-to-filename renaming without overwrites. |
 
-Each collector supports two read modes, selected by the required `mode`
-parameter on the corresponding tool:
-- **`mode: "drain"`**: Return and remove only the entries that match the
-  filter (and are within the limit). Non-matching entries and matches
-  beyond the limit are retained, so successive calls paginate.
+Buffer-reading tools support two read modes (`"peek"` and `"drain"`):
+- **`mode: "drain"`**: Return and remove only the entries that match the filter (and are within `limit`). Non-matching entries and matches beyond `limit` are retained so successive calls paginate.
 - **`mode: "peek"`**: Return matching entries without modifying the buffer.
 
-`mode` is required at every call site so the destructive vs.
-non-destructive choice is always explicit. WebSocket connections in
-`get_network_requests` are long-lived and always returned by snapshot
-regardless of `mode`.
-
-Collectors also support filtering at read time (e.g., console level, network status code range).
+`mode` is required on `get_console_logs`, `get_js_errors`, `get_network_requests`, `get_websocket_frames`, and `get_downloads` (and defaults to `"peek"` on `get_performance` because runtime metrics are always live). WebSocket connections in `get_network_requests` are long-lived and always returned by snapshot regardless of `mode`.
 
 ## Tools
 
-All tools return structured output via `CallToolResult`. Tools that produce images return `ImageContent` (PNG/JPEG). Tools that return data return `TextContent` with JSON.
+All tools return structured output with explicit `OutputSchema` via `CallToolResult`. Tools that produce images return `ImageContent` (PNG/JPEG); `pdf` returns `EmbeddedResource` (`application/pdf`) or a saved file path.
 
-Every tool that operates on a tab accepts an optional `tab` parameter (string tab ID). When omitted, the active tab is used.
+Every tab-scoped tool accepts an optional `tab` parameter (string tab ID); when omitted, the active tab of the active browser is used.
 
 ### Navigation
 
 #### `navigate`
 
-Navigate to a URL.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `url` | string | yes | The URL to navigate to |
-| `tab` | string | no | Tab ID |
-| `wait_until` | string | no | Wait condition: `"load"` (default), `"domcontentloaded"`, `"networkidle"` |
-
-Returns: `{url, title, status?}` (final URL after redirects, page title, and HTTP status code when available).
-
-**Implementation note**: `"networkidle"` uses Chrome's built-in `page.EventLifecycleEvent` with `Name == "networkIdle"` (0 in-flight requests for 500ms), not a custom heuristic.
-
-#### `reload`
-
-Reload the current page.
+Navigate a tab: go to a URL, reload, or move through session history. Returns final URL and title (evaluated via JS with non-blocking `Tab.Info()` fallback when a JS dialog interrupts or the context is stale) plus HTTP `status` from CDP network responses on `goto`/`reload`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `bypass_cache` | bool | no | Bypass browser cache (default `false`) |
+| `action` | string | no | `"goto"` (default), `"reload"`, `"back"`, or `"forward"` |
+| `url` | string | no | URL to navigate to (required for `action="goto"`; forbidden for other actions) |
+| `wait_until` | string | no | For `action="goto"`: `"load"` (default), `"domcontentloaded"`, or `"networkidle"` (Chrome's built-in `networkIdle` lifecycle event: 0 in-flight requests for 500ms); forbidden for other actions |
+| `bypass_cache` | bool | no | For `action="reload"`: bypass browser cache (default `false`; forbidden for other actions) |
 
-Returns: `{url, title}`.
-
-#### `go_back` / `go_forward`
-
-Navigate browser history.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
+Returns: `{url, title, status?}`.
 
 #### `wait_for`
 
-Wait for a condition to be met.
+Wait for a single condition to be met. Provide exactly one of `selector`, `text`, `url`, or `expression`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `selector` | string | no | CSS selector to wait for (waits until element is visible) |
-| `expression` | string | no | JS expression to poll until truthy |
-| `timeout` | int | no | Timeout in milliseconds (default 30000) |
+| `selector` | string | no | CSS/`>>>` shadow selector to wait for |
+| `state` | string | no | For `selector`: `"visible"` (default), `"hidden"`, `"attached"`, or `"detached"` (only valid with `selector`) |
+| `text` | string | no | Wait until page/frame visible text contains this substring |
+| `url` | string | no | Wait until tab URL contains this substring (cannot combine with `frame`) |
+| `expression` | string | no | JS expression to poll until truthy (supports Promises) |
+| `frame` | string | no | Optional same-origin frame ID from `list_frames` (valid with `selector`, `text`, or `expression`) |
+| `timeout` | int | no | Timeout in milliseconds (default `30000`) |
 
-Exactly one of `selector` or `expression` must be provided.
-
-The expression is wrapped in `Promise.resolve(EXPR).then(Boolean)`
-server-side before polling. This means:
-
-- A predicate whose terminal value is a non-primitive (e.g. an
-  optional-chained DOM query that returns an element or DOMRect) is
-  coerced to truthy/falsy rather than failing with CDP's "Object
-  reference chain is too long".
-- A predicate that evaluates to a Promise (`fetch(...).then(...)`,
-  `(async () => ...)()`) is awaited; the resolved value drives
-  termination. A bare `Boolean(somePromise)` would always be truthy
-  without awaiting — `Promise.resolve(...).then(Boolean)` defends
-  against that.
-- A trailing line comment in the expression (`// note`) doesn't break
-  the wrap because `EXPR` is sandwiched between newlines.
+Expressions are wrapped in `Promise.resolve(\nEXPR\n).then(Boolean)` server-side before polling so non-primitive DOM returns coerce cleanly, Promises are awaited, and trailing line comments do not break the wrapper.
 
 ### Visual Feedback
 
 #### `screenshot`
 
-Capture a screenshot.
+Capture a screenshot of the viewport, full page, or a specific element.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `selector` | string | no | CSS selector to screenshot a specific element. If omitted, captures the viewport. |
-| `timeout` | int | no | Max time in milliseconds to wait for `selector` to become visible (default `5000`). Only used when `selector` is set; image encoding runs outside the selector timeout. |
-| `full_page` | bool | no | Capture the full scrollable page instead of just the viewport (default `false`). Ignored if `selector` is set. |
+| `ref` | string | no | Snapshot ref of an element to screenshot (mutually exclusive with `selector`/`frame`) |
+| `selector` | string | no | CSS/`>>>` shadow selector of an element to screenshot. If both `ref` and `selector` are omitted, captures the viewport. |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
+| `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`); encoding runs outside the selector timeout |
+| `full_page` | bool | no | Capture the full scrollable page (default `false`; ignored if `ref` or `selector` is set) |
 | `format` | string | no | `"png"` (default) or `"jpeg"` |
-| `quality` | int | no | JPEG quality 1-100 (default 80). Ignored for PNG. |
-| `max_dimension` | int | no | Maximum allowed width or height in physical pixels (accounting for device pixel ratio). If the capture exceeds this in either dimension, it is downscaled proportionally via CDP clip scaling. |
-| `filename` | string | no | Save to disk with this filename (requires `--download-dir`). Omit to return inline only. The image is still returned inline. |
+| `quality` | int | no | JPEG quality `1`–`100` (default `80`; ignored for PNG) |
+| `max_dimension` | int | no | Maximum allowed width or height in physical pixels (accounting for DPR); downscales proportionally via CDP clip scaling |
+| `filename` | string | no | Save atomically (`0o600` temp file + rename) to `--download-dir`. Omit to return inline only; image is still returned inline. |
 
-Returns: `ImageContent` with the screenshot. If `filename` is set and `--download-dir` is configured, also saves to disk and appends a `TextContent` with the file path.
+Returns: `ImageContent` (plus `TextContent` with the saved path when `filename` is set).
 
 #### `pdf`
 
@@ -279,78 +251,72 @@ Generate a PDF of the current page.
 | `tab` | string | no | Tab ID |
 | `landscape` | bool | no | Landscape orientation (default `false`) |
 | `print_background` | bool | no | Include background graphics (default `true`) |
-| `scale` | float | no | Page rendering scale (default 1.0) |
-| `paper_width` | float | no | Paper width in inches (default 8.5) |
-| `paper_height` | float | no | Paper height in inches (default 11) |
-| `page_ranges` | string | no | Page ranges, e.g. `"1-5, 8"`. Defaults to all pages. |
-| `filename` | string | no | Save to disk with this filename (requires `--download-dir`). Omit to return inline only. |
+| `scale` | float | no | Page rendering scale (default `1.0`) |
+| `paper_width` | float | no | Paper width in inches (default `8.5`) |
+| `paper_height` | float | no | Paper height in inches (default `11`) |
+| `page_ranges` | string | no | Page ranges, e.g. `"1-5, 8"` (default all pages) |
+| `filename` | string | no | Save atomically (`0o600` temp file + rename) to `--download-dir`. When set, returns a `TextContent` path instead of the inline blob. |
 
-Returns: `EmbeddedResource` with the PDF as a blob (`application/pdf`). If `filename` is set and `--download-dir` is configured, saves to disk and returns a `TextContent` with the file path instead of the inline blob.
+Returns: `EmbeddedResource` (`application/pdf`), or `TextContent` path when `filename` is set.
 
-#### `set_viewport`
+### DOM & Accessibility Inspection
 
-Set the browser viewport dimensions.
+#### `snapshot`
+
+Capture a compact indented accessibility snapshot of the page (or a same-origin frame/subtree) with short element refs (`[ref=e1]`, `[ref=e2]`, ...) usable across interaction, visual, DOM, JS, and pseudo-state tools. Collapses ignored/unnamed generic wrappers and redundant `StaticText` children, pierces open Shadow DOM, and replaces the tab's active ref table on each call. Fails fast if a JavaScript modal dialog is open.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `width` | int | yes | Viewport width in pixels |
-| `height` | int | yes | Viewport height in pixels |
-| `device_scale_factor` | float | no | Device scale factor (default 1.0) |
-| `mobile` | bool | no | Emulate mobile device (default `false`) |
+| `frame` | string | no | Optional same-origin frame ID from `list_frames` to snapshot instead of the main frame |
+| `selector` | string | no | Optional CSS/`>>>` shadow selector to scope the snapshot to a subtree |
+| `depth` | int | no | Max semantic tree depth (`0` = unlimited) |
+| `interactive_only` | bool | no | Include only interactive/focusable controls (buttons, links, inputs, etc.) |
+| `max_bytes` | int | no | Max UTF-8 bytes for the rendered snapshot text (default `50000`) |
+| `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`) |
 
-### DOM Inspection
+Returns: `{url, title, snapshot, ref_count, truncated?, total_bytes?}`.
 
 #### `query`
 
-Query the DOM and return information about matching elements.
+Query the DOM with a CSS or `>>>` Shadow DOM selector and return matching elements.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
-| `selector` | string | yes | CSS selector |
+| `frame` | string | no | Optional same-origin frame ID from `list_frames` |
+| `selector` | string | yes | CSS/`>>>` shadow selector |
 | `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`) |
-| `limit` | int | no | Max elements to return (default 10) |
+| `limit` | int | no | Max elements to return (default `10`) |
 | `attributes` | bool | no | Include element attributes (default `true`) |
-| `computed_style` | []string | no | List of CSS property names to include computed values for |
+| `computed_style` | []string | no | CSS property names to include computed values for |
 | `outer_html` | bool | no | Include outer HTML (default `false`) |
 | `text` | bool | no | Include text content (default `true`) |
-| `bbox` | bool | no | Include bounding box dimensions (default `false`). Coordinates are relative to the targeted frame's viewport when `frame` is set. |
+| `bbox` | bool | no | Include bounding box dimensions relative to the targeted frame's viewport (default `false`) |
 
 Returns: `{elements, total}` where `elements` is an array of `{index, tag_name, attributes?, text?, outer_html?, computed_style?, bbox?}` objects.
 
-#### `get_html`
+#### `get_dom`
 
-Get the HTML content of the page or a subtree.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
-| `selector` | string | no | CSS selector to scope to a subtree. If omitted, returns the full page. |
-| `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`) |
-| `outer` | bool | no | Return outer HTML (default `true`). If `false`, returns inner HTML. |
-
-Returns: `{html}`.
-
-#### `get_text`
-
-Get the visible text content of the page or an element.
+Get text or HTML content of the page, a frame, or a specific element, bounded by `max_bytes` on valid UTF-8 rune boundaries.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
-| `selector` | string | no | CSS selector. If omitted, returns text of the entire page body. |
+| `format` | string | yes | `"text"` (visible/DOM text) or `"html"` (markup) |
+| `ref` | string | no | Snapshot ref (mutually exclusive with `selector`/`frame`) |
+| `frame` | string | no | Optional same-origin frame ID from `list_frames` |
+| `selector` | string | no | CSS/`>>>` shadow selector (defaults to `"body"` for `text` or `"html"` for `html`) |
+| `outer` | bool | no | For `format="html"`: return outer HTML (default `true`) or inner HTML (`false`) |
+| `hidden` | bool | no | For `format="text"`: include hidden text via `textContent` instead of visible `innerText` (default `false`) |
+| `max_bytes` | int | no | Max UTF-8 bytes to return (default `65536`) |
 | `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`) |
-| `hidden` | bool | no | Include hidden text (`textContent`) instead of visible text (`innerText`, default `false`) |
 
-Returns: `{text}`.
+Returns: `{content, truncated?, total_bytes?}`.
 
 #### `list_frames`
 
-List all frames in a tab, including the main frame, same-origin in-process iframes (`reachable: true`), and known out-of-process cross-origin iframes (`reachable: false`). Same-origin frame IDs can be passed to the optional `frame` parameter on `evaluate`, `query`, `get_html`, and `get_text`; cross-origin OOPIFs return a clear error. Fails fast if a JavaScript modal dialog is open (since `Page.getFrameTree` runs in the renderer). Note: because `Page.getFrameTree` omits OOPIFs and Chrome does not emit `frameDetached(remove)` on this session when an already-swapped OOPIF element is removed directly from the top frame, pre-existing OOPIFs on `browser_connect`-adopted tabs are not visible until navigation, and a directly removed top-level OOPIF persists in `list_frames` until top-frame navigation (descendant OOPIFs of a detached/navigated/swapped subframe are pruned immediately).
+List all frames in a tab, including the main frame, same-origin in-process iframes (`reachable: true`), and known out-of-process cross-origin iframes (`reachable: false`). Same-origin frame IDs can be passed as `frame` on `snapshot`, `query`, `get_dom`, `wait_for`, `screenshot`, `evaluate`, `emulate(action="pseudo_state")`, and interaction tools; cross-origin OOPIFs return a clear error. Fails fast if a JavaScript modal dialog is open. Note: because `Page.getFrameTree` omits OOPIFs and Chrome does not emit `frameDetached(remove)` on this session when an already-swapped OOPIF element is removed directly from the top frame, pre-existing OOPIFs on `browser_connect`-adopted tabs are not visible until navigation, and a directly removed top-level OOPIF persists in `list_frames` until top-frame navigation (descendant OOPIFs of a detached/navigated/swapped subframe are pruned immediately).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -358,21 +324,7 @@ List all frames in a tab, including the main frame, same-origin in-process ifram
 
 Returns: `{frames}` array of `{id, parent_id?, name?, url?, security_origin?, is_main, reachable}` objects.
 
-#### `get_accessibility_tree`
-
-Get the accessibility tree of the page. This is a compact representation of the page structure that is much more token-efficient than raw HTML. Uses CDP's `accessibility.GetFullAXTree` — when scoped to a `selector`, roots the returned subtree at the matched element's `BackendNodeID` (falling back to `GetPartialAXTree` with `fetchRelatives: false` if the node is absent from the full tree) and applies `depth` and `interesting_only` consistently.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | no | CSS selector to scope to a subtree |
-| `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`) |
-| `depth` | int | no | Max tree depth below each root (`depth=1` includes the root and its direct children; `0` = unlimited) |
-| `interesting_only` | bool | no | Filter to only "interesting" nodes — those with a role, name, or value (default `true`) |
-
-Returns: `{tree}` array of accessibility nodes. Each node includes: `role`, `name`, `value`, `description`, `properties` (states like `focused`, `checked`, `expanded`, etc.), and `children`.
-
-### Console & Errors
+### Console & Buffers
 
 #### `get_console_logs`
 
@@ -381,15 +333,15 @@ Get captured console messages.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `level` | string | no | Open string filter matching any CDP console level (e.g. `"log"`, `"warn"`, `"error"`, `"info"`, `"debug"`, `"assert"`, `"trace"`). CDP `"warning"` is normalized to `"warn"`. If omitted, returns all. |
+| `level` | string | no | Open string filter matching any CDP console level (e.g. `"log"`, `"warn"`, `"error"`, `"info"`, `"debug"`, `"assert"`, `"trace"`). CDP `"warning"` is normalized to `"warn"`. |
 | `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume matching entries) |
 | `limit` | int | no | Max entries to return (default all) |
 
-Returns: `{logs}` array of `{level, text, source?, timestamp}` objects (`source` is `url:line:column` from the top stack frame when available).
+Returns: `{logs}` array of `{level, text, source?, timestamp}` objects.
 
 #### `get_js_errors`
 
-Get captured JavaScript exceptions.
+Get captured JavaScript exceptions and unhandled promise rejections.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -399,726 +351,420 @@ Get captured JavaScript exceptions.
 
 Returns: `{errors}` array of `{message, source?, line, column, stack_trace?, timestamp}` objects.
 
-#### `clear_console`
-
-Clear the console and JS error buffers for a tab.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-
 #### `clear_buffers`
 
-Clear one or more event collector buffers. Clears completed/historical buffered entries while preserving live/in-flight state: open WebSockets stay tracked (clearing their frame rings and frame counts and removing closed connections), in-progress downloads remain tracked and still rename on completion, in-flight HTTP requests remain tracked, the URL-change baseline is preserved, and live modal dialog state is untouched. Clearing only `["downloads"]` without `tab` succeeds even with zero open tabs.
+Clear one or more event collector buffers while preserving live/in-flight state: open WebSockets stay tracked (clearing their frame rings and counts and removing closed connections), in-progress downloads and in-flight HTTP requests keep tracking, the URL-change baseline is preserved, and live modal dialog state is untouched. Clearing only `["downloads"]` without `tab` succeeds even with zero open tabs.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID. When provided without `browser`, `downloads` resolves to that tab's owning browser. |
 | `browser` | string | no | Browser ID (defaults to active browser). When provided without `tab`, tab-scoped targets clear that browser's active tab. When both are provided, `tab` ownership is validated. |
-| `targets` | []string | no | Subset of `"console"`, `"errors"`, `"network"`, `"websocket"`, `"performance"`, `"url_changes"`, `"downloads"`, `"all"`. Omit or pass `["all"]` to clear all buffers; an explicit empty array `[]` is rejected. |
+| `targets` | []string | no | Subset of `"console"`, `"errors"`, `"network"`, `"websocket"`, `"performance"`, `"url_changes"`, `"downloads"`, `"all"`. Omit or pass `["all"]` to clear all buffers; explicit `[]` is rejected. |
 
 Returns: `{cleared}` listing the cleared buffer names in canonical order.
 
-### Network Inspection
+### Network Inspection & Control
 
 #### `get_network_requests`
 
-Get captured network requests.
+Get captured network requests (HTTP and WebSocket connections).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `mode` | string | **yes** | `"peek"` (keep entries in HTTP buffer) or `"drain"` (consume matching entries). WebSocket connections are long-lived and always returned by snapshot regardless of mode. |
+| `mode` | string | **yes** | `"peek"` (keep entries in HTTP buffer) or `"drain"` (consume matching entries within `limit`). WebSocket connections are long-lived and always returned by snapshot. |
 | `limit` | int | no | Max entries to return (default all) |
-| `type` | string | no | Filter by resource type: `"document"`, `"stylesheet"`, `"script"`, `"image"`, `"xhr"`, `"fetch"`, `"websocket"`, `"other"` |
+| `type` | string | no | CDP resource type filter: `"document"`, `"stylesheet"`, `"image"`, `"media"`, `"font"`, `"script"`, `"texttrack"`, `"xhr"`, `"fetch"`, `"prefetch"`, `"eventsource"`, `"websocket"`, `"manifest"`, `"signedexchange"`, `"ping"`, `"cspviolationreport"`, `"preflight"`, `"fedcm"`, `"emailverification"`, `"other"` |
 | `status_min` | int | no | Filter by minimum HTTP status code |
 | `status_max` | int | no | Filter by maximum HTTP status code |
 | `url_pattern` | string | no | Filter by URL substring match |
 | `failed_only` | bool | no | Return only failed requests (default `false`) |
-| `fields` | []string | no | Project each entry to this set of JSON keys (e.g. `["id","method","url","status"]`). When omitted or empty, every field is returned. Useful to keep responses tiny when listing many entries. Unknown field names produce an error. |
+| `fields` | []string | no | Project each entry to a subset of JSON field names (enum of all 22 `NetworkEntry` JSON keys, e.g. `["id","method","url","status"]`). Unknown field names produce an error before draining. |
 
-Returns: `{requests}` array of request objects with `{id, url, method, status?, type?, timing?, request_headers?, response_headers?, size?, error?, blocked_reason?, cors_error?, canceled?, failed?, start_time, end_time?, has_request_body?, request_body?, request_body_base64?, request_body_truncated?, frames_sent_count?, frames_received_count?}`. `timing` contains `{dns_lookup_ms?, connect_ms?, tls_ms?, ttfb_ms?, transfer_ms?, total_ms?}`. The frame counts are present only on WebSocket entries; the request-body fields are present only on entries that carried a request body. In `drain` mode, only matching HTTP entries within `limit` are removed so successive calls paginate.
+Returns: `{requests}` array of `{id, url, method, status?, type?, timing?, request_headers?, response_headers?, size?, error?, blocked_reason?, cors_error?, canceled?, failed?, start_time, end_time?, has_request_body?, request_body?, request_body_base64?, request_body_truncated?, frames_sent_count?, frames_received_count?}`.
 
-#### `get_response_body`
+#### `get_network_body`
 
-Get the response body of a specific network request.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `request_id` | string | yes | The request ID from `get_network_requests` |
-| `range_start` | int | no | Inclusive byte offset to start from (default `0`, must be `>= 0`). |
-| `range_end` | int | no | Exclusive byte offset to stop at (default `0` = end of body, must be `0` or `>= range_start`). Past-the-end is clamped. When `base64_encoded=true`, offsets address the decoded binary. |
-
-Returns: `{body, base64_encoded, total_bytes, truncated?}`. `total_bytes` is the full body size so the caller can plan paging; `truncated` is true when the returned body is a strict subset of the full body.
-
-#### `get_request_body`
-
-Get the full POST/PUT/PATCH/DELETE request body of a specific request. Use when `get_network_requests` reports `has_request_body=true` and the inline `request_body` was empty or truncated.
+Get the response or request body of a specific network request with optional byte-range slicing.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `request_id` | string | yes | The request ID from `get_network_requests` |
-| `range_start` | int | no | Inclusive byte offset to start from (default `0`, must be `>= 0`). |
-| `range_end` | int | no | Exclusive byte offset to stop at (default `0` = end of body, must be `0` or `>= range_start`). Past-the-end is clamped. |
+| `request_id` | string | yes | Request ID from `get_network_requests` |
+| `part` | string | no | `"response"` (default) or `"request"` |
+| `range_start` | int | no | Inclusive byte offset to start from (default `0`, must be `>= 0`) |
+| `range_end` | int | no | Exclusive byte offset to stop at (`0` = end of body, must be `0` or `>= range_start`). Clamped past end; when `base64_encoded=true`, offsets address the decoded binary. |
 
 Returns: `{body, base64_encoded, total_bytes, truncated?}`.
 
 #### `get_websocket_frames`
 
-Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with `type=websocket` from `get_network_requests`.
+Get WebSocket frames sent and/or received on a specific connection.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `request_id` | string | yes | The websocket connection's request ID from `get_network_requests` |
+| `request_id` | string | yes | WebSocket connection request ID from `get_network_requests` |
 | `direction` | string | no | `"sent"`, `"received"`, or `"both"` (default `"both"`) |
 | `limit` | int | no | Max frames to return per direction (default all buffered) |
-| `mode` | string | **yes** | `"peek"` (keep frames in the buffer) or `"drain"` (consume them) |
+| `mode` | string | **yes** | `"peek"` (keep frames) or `"drain"` (consume frames) |
 
-Returns: `{sent, received}` arrays of frame objects with `{opcode, mask?, direction, payload?, payload_base64?, payload_truncated?, time}`. Text frames (opcode 1) carry UTF-8 payloads; other opcodes carry base64-encoded binary in `payload`.
+Returns: `{sent, received}` arrays of `{opcode, mask?, direction, payload?, payload_base64?, payload_truncated?, time}`.
+
+#### `intercept`
+
+Manage per-tab network request interception rules using CDP's `Fetch` domain. `Fetch.enable` is toggled lazily when the first rule is added and disabled automatically when the last rule is removed or cleared. Applies to the tab's page target (main frame and same-process iframes, not cross-origin OOPIFs). Rules evaluate in insertion order (first match wins); `clear_buffers` does not clear interception rules.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `action` | string | yes | `"fulfill"` (mock response), `"modify"` (rewrite request), `"fail"` (abort/block request), `"remove"` (remove rule by ID), `"list"` (list active rules), or `"clear"` (remove all rules) |
+| `id` | string | no | Rule ID to remove (required for `action="remove"`) |
+| `url_pattern` | string | no | Glob pattern (`*` matches any chars including `/`, `?` matches one char, `\` escapes). Required for `fulfill`/`modify`/`fail`. |
+| `method` | string | no | Optional case-insensitive HTTP method filter (`fulfill`/`modify`/`fail`) |
+| `resource_type` | string | no | Optional CDP resource type filter (same 20-value lowercase enum as `get_network_requests.type`; Chromium's `Fetch` domain reports `"xhr"` for both `fetch()` and `XMLHttpRequest`) |
+| `status` | int | no | HTTP status code (`100`–`599`, default `200`, `fulfill` only; bodyless statuses `1xx`, `204`, `205`, `304` forbid non-empty `body`) |
+| `body` | string | no | Response body text or base64 (`fulfill` only) |
+| `body_base64` | bool | no | Decode `body` from base64 (`fulfill` only) |
+| `headers` | object | no | Response headers (`fulfill`) or case-insensitive request header overrides (`modify`; setting `""` sends an empty header value). Validated per RFC 9110 (valid token names, no case-colliding duplicates, no CR/LF/NUL in values). |
+| `url` | string | no | Replacement absolute URL (`modify` only) |
+| `override_method` | string | no | Replacement HTTP method token (`modify` only) |
+| `post_data` | string | no | Non-empty replacement request body text or base64 (`modify` only) |
+| `post_data_base64` | bool | no | Decode `post_data` from base64 (`modify` only) |
+| `error_reason` | string | no | CDP `network.ErrorReason` (`fail` only, default `"Failed"`): `"Failed"`, `"Aborted"`, `"TimedOut"`, `"AccessDenied"`, `"ConnectionClosed"`, `"ConnectionReset"`, `"ConnectionRefused"`, `"ConnectionAborted"`, `"ConnectionFailed"`, `"NameNotResolved"`, `"InternetDisconnected"`, `"AddressUnreachable"`, `"BlockedByClient"`, `"BlockedByResponse"` |
+
+Returns: `{id}` for `fulfill`/`modify`/`fail`; `{}` for `remove`; `{rules}` for `list`; `{removed}` for `clear`.
 
 ### JavaScript Execution
 
 #### `evaluate`
 
-Execute JavaScript in the page context. Without `selector`, `expression` is evaluated directly as a JS expression (do not use a top-level `return`). When `selector` is provided, `expression` runs as the body of a function with the first matched element passed as `el` — use `return` to produce a value (e.g. `return el.textContent`).
+Execute JavaScript in the page (or a same-origin frame). Without `ref`/`selector`, `expression` is evaluated directly as a JS expression (no top-level `return`). With `ref` or `selector`, `expression` runs as the body of a function with the matched element as `el` — use `return` to produce a value.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `frame` | string | no | Optional frame ID from `list_frames` to target a same-origin frame (including the main frame) |
-| `expression` | string | yes | JavaScript expression to evaluate (or function body using `el` and `return` when `selector` is set) |
-| `selector` | string | no | CSS selector. If provided, the first matched element is available as `el` in the expression. |
-| `timeout` | int | no | Max time in milliseconds to wait for selector (default 5000). Only used when `selector` is set. |
-| `await_promise` | bool | no | If the expression returns a Promise, wait for it to resolve (default `true`) |
-| `max_result_bytes` | int | no | Cap the serialized result at this many bytes. When the JSON encoding exceeds the cap, `result` is replaced with the truncated prefix as a JSON string and `truncated`/`total_bytes` describe the cut. Default 0 (no cap). |
+| `expression` | string | yes | JS expression (or function body using `el` and `return` when `ref`/`selector` is set) |
+| `ref` | string | no | Snapshot ref available as `el` (mutually exclusive with `selector`/`frame`) |
+| `selector` | string | no | CSS/`>>>` shadow selector; matched element available as `el` |
+| `frame` | string | no | Optional same-origin frame ID from `list_frames` |
+| `timeout` | int | no | Max time in milliseconds to wait for `selector` (default `5000`) |
+| `await_promise` | bool | no | Wait for Promise resolution (default `true`) |
+| `max_result_bytes` | int | no | Cap serialized result at this many bytes (`0` = no cap). When exceeded, `result` becomes a UTF-8-safe truncated JSON string prefix with `truncated: true` and `total_bytes`. |
 
-Returns: `{result, truncated?, total_bytes?}` where `result` is the JSON-encoded value produced by the expression (or — when truncated — a JSON string of the truncated prefix). If the evaluation throws a JS exception, the tool returns an MCP tool error (`IsError: true`).
+Returns: `{result, truncated?, total_bytes?}`. Thrown JS exceptions return an MCP tool error (`IsError: true`).
 
 ### Interaction
 
-The ten action tools in this section — `click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files`, `drag_and_drop` — accept an optional `observe_window_ms` parameter (`get_dialog` and `handle_dialog` do not). When it is greater than zero, the tool observes browser activity across the action and returns the counts in an `observed` object on its result. See [Observation](#observation) for the semantics of that object and why observation is inline rather than a standalone tool. All selector-based interaction tools also accept an optional `timeout` parameter (selector wait timeout in ms, default `5000`).
+All nine tools in this section accept `observe_window_ms` (`0` = off, max `30000`) — on `dialog`, only with `action="accept"` or `action="dismiss"`. Selector-based actions also accept `timeout` (default `5000` ms). `click`, `type`, `select_option`, `press_key`, and `drag_and_drop` run under `runDialogInterruptible` so they return promptly if a synchronous JS modal dialog opens during dispatch instead of hanging on a blocked renderer.
 
 #### `click`
 
-Click an element. Probes the target's interactive state before dispatching:
-- Errors out (no click is sent) when the element has the `disabled` attribute or `aria-disabled="true"`. Both are almost always a bug in the caller's plan.
-- Returns the post-resolution state plus an optional warning when the click was dispatched but likely had no effect (`pointer-events: none`, hidden, zero-size).
+Click an element or viewport coordinates. Probes target state before dispatch: errors before dispatching on `disabled` or `aria-disabled="true"` elements; warns on `pointer-events: none` or `visibility: hidden`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the element to click |
-| `button` | string | no | Mouse button: `"left"` (default), `"right"`, `"middle"` |
-| `click_count` | int | no | Number of clicks (default 1, use 2 for double-click) |
+| `ref` | string | no | Snapshot ref |
+| `selector` | string | no | CSS/`>>>` shadow selector |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
+| `x`, `y` | float | no | Viewport coordinates (both required together; mutually exclusive with `ref`/`selector`/`frame`) |
+| `button` | string | no | `"left"` (default), `"right"`, `"middle"` |
+| `click_count` | int | no | Number of clicks (`1`–`10`, default `1`; use `2` for double-click) |
+| `modifiers` | []string | no | Optional modifier keys: `"ctrl"`, `"shift"`, `"alt"`, `"meta"` |
 | `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after dispatch (default 0 = no observation) |
+| `observe_window_ms` | int | no | Inline activity observation window in ms (`0` = off, max `30000`) |
 
-Returns: `{disabled, aria_disabled, pointer_events, visible, warning?, observed?}`. `warning` is omitted on a clean click and non-empty when the dispatch likely had no effect. `observed` is present only when `observe_window_ms > 0`.
-
-The `warning` and `observed` fields answer different questions and are complementary: `warning` is a *pre-dispatch* prediction from the element's computed state ("this click probably won't do anything"), while `observed` is a *post-dispatch* measurement ("this click in fact did/didn't do anything"). A click can warn and still have an effect, or look clean and silently no-op.
+Returns: `{disabled, aria_disabled, pointer_events, visible, warning?, observed?}`.
 
 #### `type`
 
-Type text into an element matching a selector.
+Type text into an input or contenteditable element.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the input element |
+| `ref` | string | no | Snapshot ref |
+| `selector` | string | no | CSS/`>>>` shadow selector |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
 | `text` | string | yes | Text to type |
-| `mode` | string | **yes** | `"replace"` (clear field first, common case) or `"append"` (type after existing value, e.g. contenteditable mid-composition) |
-| `delay` | int | no | Delay between keystrokes in milliseconds (default 0) |
+| `mode` | string | **yes** | `"replace"` (clear field first, handling controlled inputs and `contenteditable`) or `"append"` (move caret to end and append) |
+| `delay` | int | no | Delay between keystrokes in ms (default `0`; runs outside selector timeout) |
+| `submit` | bool | no | Press Enter after typing (default `false`) |
 | `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after typing (default 0). Catches autocomplete/typeahead requests. |
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-#### `select_option`
-
-Select an option from a `<select>` element.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the `<select>` element |
-| `value` | string | no | Option value to select |
-| `label` | string | no | Option visible text to select |
-| `index` | int | no | Option index to select |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after the `change` event fires (default 0). Catches cascading dropdown loads. |
-
-Exactly one of `value`, `label`, or `index` must be provided. For `<select multiple>` elements, each call adds to the selection (does not deselect existing options).
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-#### `submit_form`
-
-Submit a form. Uses `requestSubmit()`, so the `submit` event fires and JS handlers can intercept it.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the form or an element within the form |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after submit (default 0) |
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-Observation is worth more here than on any other action. A form whose submit handler short-circuits — HTML5 constraint validation, a JS validation guard, a framework interceptor — fires the event and returns cleanly, so the tool reports success while nothing happened. `observed.has_any_effect = false` is the only signal that distinguishes a landed submit from a swallowed one.
-
-#### `scroll`
-
-Scroll the page or an element.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | no | CSS selector to scroll into view. If omitted, scrolls the page. |
-| `x` | int | no | Horizontal scroll offset in pixels (when `selector` is omitted) |
-| `y` | int | no | Vertical scroll offset in pixels (when `selector` is omitted) |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`; only used when `selector` is set) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after scrolling (default 0). Catches lazy-load and infinite-scroll fetches. |
-
-If `selector` is provided, scrolls the element into view. If omitted, scrolls the page by the specified offsets.
-
-Returns: `{scroll_x, scroll_y, observed}`. `observed` is present only when `observe_window_ms > 0`.
-
-#### `hover`
-
-Hover over an element. Moves the CDP mouse cursor to the element's center, which activates both JavaScript event listeners (`mouseover`, `mouseenter`) and the CSS `:hover` pseudo-class.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the element to hover over |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after the hover (default 0). Catches tooltip/menu reveals. |
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-#### `focus`
-
-Focus an element.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the element to focus |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after focusing (default 0). Catches validation reveal and autofill. |
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-#### `press_key`
-
-Press a keyboard key.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `key` | string | yes | Key to press (e.g., `"Enter"`, `"Tab"`, `"Escape"`, `"ArrowDown"`) |
-| `modifiers` | []string | no | Modifier keys: `"ctrl"`, `"shift"`, `"alt"`, `"meta"` |
-| `observe_window_ms` | int | no | Observe activity for this many ms after the key event (default 0). Catches Enter-submit, Escape-dismiss, arrow navigation. |
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-#### `upload_files`
-
-Set files on a file input element. For locally launched browsers (`mode == "launch"`), paths are validated against the local filesystem (must be absolute existing non-directory paths); for connected browsers (`mode == "connect"`), paths are passed directly to Chrome so remote/container filesystems work.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the file input element |
-| `paths` | []string | yes | Non-empty file paths to set (validated as local absolute files on launched browsers) |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Observe activity for this many ms after `input.files` changes (default 0). Catches the upload XHR an `onchange` handler typically fires. |
-
-Returns: `{observed}` — present only when `observe_window_ms > 0`.
-
-#### `get_dialog`
-
-Inspect the currently open JavaScript modal dialog (`alert`, `confirm`, `prompt`, `beforeunload`) on a tab without blocking on the renderer.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-
-Returns: `{open, dialog?}`. When `open` is `false`, `dialog` is omitted. When `open` is `true`, `dialog` contains `{type, message, default_prompt?, url?, has_browser_handler, opened_at}`.
-
-#### `handle_dialog`
-
-Handle a JavaScript dialog (alert, confirm, prompt, beforeunload). Clears the tracked dialog generation synchronously on success so immediate follow-up `get_dialog` or observation calls do not race the async close event (without clobbering a chained subsequent dialog).
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `accept` | bool | yes | Accept or dismiss the dialog |
-| `text` | string | no | Text to enter in a prompt dialog. When accepted, omit `text` to submit the prompt's `default_prompt` value, or pass `""` to submit an empty string. |
-
-#### `drag_and_drop`
-
-Drag an element onto a drop target by CSS selector. Uses CDP `Input.setInterceptDrags` alongside stepped mouse dispatch so both HTML5 native drag-and-drop (`draggable="true"` with `DataTransfer` via `Input.dispatchDragEvent`) and pointer/mouse-based drag interactions work seamlessly.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `source` | string | yes | CSS selector of the element to drag |
-| `target` | string | yes | CSS selector of the drop target element |
-| `steps` | int | no | Number of intermediate mouse move steps (`0`–`100`, default `10`) |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-| `observe_window_ms` | int | no | Inline observation window in ms (default `0`, max `30000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
 
 Returns: `{observed?}`.
 
-### Cookies
+#### `select_option`
 
-#### `get_cookies`
-
-Get browser cookies.
+Select option(s) on a `<select>` element. Provide exactly one of `values`, `labels`, or `indexes`. On `<select multiple>`, replaces the current selection; pass an empty slice `[]` to deselect all options.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `urls` | []string | no | Filter cookies to these URLs. If omitted, returns cookies for the current page URL. |
+| `ref` | string | no | Snapshot ref |
+| `selector` | string | no | CSS/`>>>` shadow selector |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
+| `values` | []string | no | Option values to select (`[]` clears all on multi-select) |
+| `labels` | []string | no | Option visible texts to select (`[]` clears all on multi-select) |
+| `indexes` | []int | no | Option 0-based indexes to select (`[]` clears all on multi-select) |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
 
-Returns: `{cookies}` array of cookie objects with `{name, value, domain, path, expires?, size, http_only, secure, same_site?}`.
+Returns: `{observed?}`.
 
-#### `set_cookie`
+#### `scroll`
 
-Set a browser cookie. When `domain` is omitted, falls back to the target tab's current HTTP(S) URL (returning an error if the tab is not on an HTTP/HTTPS page).
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `name` | string | yes | Cookie name |
-| `value` | string | yes | Cookie value |
-| `domain` | string | no | Cookie domain (defaults to the target tab's current HTTP(S) URL when omitted) |
-| `path` | string | no | Cookie path (default `"/"`) |
-| `expires` | float | no | Cookie expiration as Unix timestamp. If omitted, creates a session cookie. |
-| `http_only` | bool | no | HTTP-only flag (default `false`) |
-| `secure` | bool | no | Secure flag (default `false`) |
-| `same_site` | string | no | SameSite attribute: `"Strict"`, `"Lax"`, `"None"` |
-
-#### `delete_cookies`
-
-Delete cookies by name, domain, and/or path, or clear all browser cookies when all three (`name`, `domain`, `path`) are omitted. When `domain` is omitted alongside a `name` or `path` filter, deletion is scoped to cookies applying to the target tab's current HTTP(S) host (preserving CHIPS partition keys).
+Scroll an element into view (`ref` or `selector` + optional `frame`), or scroll the window (or targeted `frame`) by `(x, y)` pixels.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `name` | string | no | Cookie name to delete. If `name`, `domain`, and `path` are all omitted, clears all browser cookies. |
-| `domain` | string | no | Scope deletion to a domain (leading `.` matches apex and subdomains) |
-| `path` | string | no | Scope deletion to an exact cookie path |
+| `ref` | string | no | Snapshot ref to scroll into view |
+| `selector` | string | no | CSS/`>>>` shadow selector to scroll into view |
+| `frame` | string | no | Optional same-origin frame ID (for `selector`, or to scroll that frame's window) |
+| `x`, `y` | int | no | Horizontal/vertical scroll delta in pixels (when `ref` and `selector` are omitted) |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
 
-### Storage
+Returns: `{scroll_x, scroll_y, observed?}` (reporting the scrolled frame's offsets when targeting a subframe).
 
-#### `get_storage`
+#### `hover`
 
-Read one or all items from localStorage or sessionStorage.
+Move the CDP mouse cursor over an element or viewport `(x, y)` coordinates, firing JS mouse events and CSS `:hover`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
+| `ref` | string | no | Snapshot ref |
+| `selector` | string | no | CSS/`>>>` shadow selector |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
+| `x`, `y` | float | no | Viewport coordinates (both required together) |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
+
+Returns: `{observed?}`.
+
+#### `press_key`
+
+Press a keyboard key (with optional modifiers), optionally focusing a target element first. Suppresses literal character insertion when `ctrl`/`meta`/`alt` modifiers are held.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `key` | string | yes | Key name (e.g. `"Enter"`, `"Tab"`, `"Escape"`, `"ArrowDown"`, `"Space"`, `"Insert"`, `"a"`) |
+| `modifiers` | []string | no | Optional modifier keys: `"ctrl"`, `"shift"`, `"alt"`, `"meta"` |
+| `ref` | string | no | Optional snapshot ref to focus before pressing the key |
+| `selector` | string | no | Optional CSS/`>>>` shadow selector to focus before pressing the key |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
+
+Returns: `{observed?}`.
+
+#### `upload_files`
+
+Set files on a file input element. Rejects empty `paths` or empty path entries. For locally launched browsers (`ModeLaunch`), validates absolute existing non-directory local paths; for connected browsers (`ModeConnect`), passes paths directly to Chrome for remote/container filesystems.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `ref` | string | no | Snapshot ref |
+| `selector` | string | no | CSS/`>>>` shadow selector |
+| `frame` | string | no | Optional same-origin frame ID for `selector` |
+| `paths` | []string | yes | Non-empty list of file paths to set |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
+
+Returns: `{observed?}`.
+
+#### `drag_and_drop`
+
+Drag from a source onto a drop target using `ref`, CSS/`>>>` selector (+ optional `frame`), or viewport `(x, y)` coordinates independently for source and target. Uses CDP `Input.setInterceptDrags` alongside stepped mouse dispatch so both HTML5 native drag-and-drop (`DataTransfer`) and pointer-based drags work seamlessly.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `source_ref` / `source_selector` / `source_frame` / `source_x` / `source_y` | string / float | yes (one mode) | Source element or viewport coordinates |
+| `target_ref` / `target_selector` / `target_frame` / `target_x` / `target_y` | string / float | yes (one mode) | Drop target element or viewport coordinates |
+| `steps` | int | no | Intermediate mouse move steps (`0`–`100`, default `10`) |
+| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
+| `observe_window_ms` | int | no | Inline observation window in ms (`0` = off, max `30000`) |
+
+Returns: `{observed?}`.
+
+#### `dialog`
+
+Inspect or handle a JavaScript modal dialog (`alert`, `confirm`, `prompt`, `beforeunload`) without blocking on the renderer. Synchronously clears the handled dialog generation via `ClearIfSeq` and re-reads current dialog state after any `observe_window_ms` so chained dialogs are reflected immediately.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `action` | string | yes | `"get"`, `"accept"`, or `"dismiss"` |
+| `text` | string | no | For `action="accept"` on a prompt: text to submit (omit to keep `default_prompt`; pass `""` for empty string; forbidden for `get`/`dismiss`) |
+| `observe_window_ms` | int | no | For `action="accept"`/`"dismiss"`: inline observation window in ms (`0` = off, max `30000`; forbidden for `get`) |
+
+Returns: `{open, dialog?, observed?}` where `dialog` contains `{type, message, default_prompt?, url?, has_browser_handler, opened_at}`.
+
+### Cookies & Storage
+
+#### `cookies`
+
+Get, set, or delete browser cookies.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `action` | string | yes | `"get"`, `"set"`, or `"delete"` |
+| `urls` | []string | no | For `action="get"`: filter to these URLs (defaults to current page URL) |
+| `limit` | int | no | For `action="get"`: max cookies to return (default `100`) |
+| `name` | string | no | Cookie name (required for `set`; optional filter for `delete`) |
+| `value` | string | no | Cookie value (required for `set`; empty string allowed) |
+| `domain` | string | no | Cookie domain (defaults to current HTTP(S) URL for `set`; optional scope for `delete` — leading `.` matches apex and subdomains; when omitted with `name`/`path`, scopes to current HTTP(S) host) |
+| `path` | string | no | Cookie path (default `"/"` for `set`; optional exact filter for `delete`) |
+| `expires` | float | no | For `action="set"`: Unix timestamp expiration (omit for session cookie) |
+| `http_only` | bool | no | For `action="set"`: HTTP-only flag (default `false`) |
+| `secure` | bool | no | For `action="set"`: Secure flag (default `false`) |
+| `same_site` | string | no | For `action="set"`: `"Strict"`, `"Lax"`, or `"None"` |
+
+Deleting with `name`, `domain`, and `path` all omitted clears all browser cookies.
+Returns: `{cookies, total, truncated?}` for `get`; `{}` for `set`/`delete`.
+
+#### `storage`
+
+Read, write, or delete items in `localStorage` or `sessionStorage`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tab` | string | no | Tab ID |
+| `action` | string | yes | `"get"`, `"set"`, or `"delete"` |
 | `type` | string | no | `"local"` (default) or `"session"` |
-| `key` | string | no | Key to retrieve. If omitted, returns all key-value pairs. |
+| `key` | string | no | Key to read, write (required for `set`), or delete (omit on `delete` to clear all items) |
+| `value` | string | no | Value to write (required for `set`; empty string allowed) |
+| `keys_only` | bool | no | For `action="get"`: list `{key, size}` pairs without values (cannot combine with `key` or `max_bytes`) |
+| `limit` | int | no | For `action="get"` (without `key`): max keys/entries to return (default all) |
+| `max_bytes` | int | no | For `action="get"` (`keys_only=false`): max UTF-8 bytes of returned data (value bytes for single-key, key+value sum for all-entries; default `65536`) |
 
-Returns: `{"value": "..."}` or `{"value": null}` in single-key mode (omitting `entries`), or `{"entries": {...}}` (including `{}` when empty, omitting `value`) when `key` is omitted.
+Returns:
+- `get` single-key: `{value, total_bytes?, truncated?}` (`value` is `null` if absent).
+- `get` `keys_only=true`: `{keys, total, truncated?}` sorted deterministically by key.
+- `get` all-entries: `{entries, total, truncated?}` (sorted deterministically; `total` always reports total stored key count).
+- `set`/`delete`: `{}`.
 
-#### `set_storage`
+#### `indexeddb`
 
-Write a key-value pair to localStorage or sessionStorage.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `type` | string | no | `"local"` (default) or `"session"` |
-| `key` | string | yes | Key to set |
-| `value` | string | yes | Value to set |
-
-#### `delete_storage`
-
-Delete one or all items from localStorage or sessionStorage.
+Inspect or delete IndexedDB data on the current page's origin via CDP `IndexedDB` domain (rejects opaque origins such as `about:blank`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `type` | string | no | `"local"` (default) or `"session"` |
-| `key` | string | no | Key to delete. If omitted, clears all items. |
+| `action` | string | yes | `"get"` or `"delete"` |
+| `database` | string | no | Database name (required for `delete`; omit on `get` to list all database names) |
+| `store` | string | no | Object store name (requires `database`). On `get`, reads paginated records; on `delete`, clears that store instead of deleting the database. |
+| `index` | string | no | For `action="get"`: optional index name within `store` (requires `store`) |
+| `skip` | int | no | For `action="get"`: records to skip (default `0`, requires `store`) |
+| `limit` | int | no | For `action="get"`: max records to return (default `50`, requires `store`) |
 
-#### `get_storage_keys`
+Returns: `{databases}` (list DBs), `{database, version, stores}` (inspect schema), or `{database, store, index?, entries, has_more}` (read records) for `get`; `{}` for `delete`.
 
-List all keys in localStorage or sessionStorage with value sizes. Useful for discovering stored data without retrieving potentially large values.
+#### `cache_storage`
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `type` | string | no | `"local"` (default) or `"session"` |
-| `limit` | int | no | Max keys to return (default all) |
-
-Returns: `{keys}` array of `{key, size}` objects where `size` is the UTF-8 byte length of the value.
-
-#### `get_indexeddb`
-
-Inspect IndexedDB on the current page's origin via CDP `IndexedDB` domain (rejects opaque origins such as `about:blank`).
+Inspect or delete Cache Storage (`window.caches`) on the current page's origin via CDP `CacheStorage` domain (rejects opaque origins).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `database` | string | no | Database name. Omit to list all database names on the origin. |
-| `store` | string | no | Object store name (requires `database`). Omit to inspect database schema (version, object stores, indexes); set to read paginated records. |
-| `index` | string | no | Optional index name within `store` to read records through (requires `store`). |
-| `skip` | int | no | Records to skip for pagination (default `0`, requires `store`). |
-| `limit` | int | no | Max records to return (default `50`, requires `store`). |
+| `action` | string | yes | `"get"` or `"delete"` |
+| `cache_name` | string | no | Cache name (required for `delete`; omit on `get` to list all caches) |
+| `request_url` | string | no | Exact request URL (requires `cache_name`). On `get`, reads the cached response body; on `delete`, deletes only that entry. |
+| `path_filter` | string | no | For `action="get"`: case-insensitive URL path filter when listing entries (cannot combine with `request_url`) |
+| `skip` | int | no | For `action="get"`: entries to skip when listing (default `0`, cannot combine with `request_url`) |
+| `limit` | int | no | For `action="get"`: max entries when listing (default `50`, cannot combine with `request_url`) |
+| `range_start` | int | no | For `action="get"`: byte offset start for response body slicing (default `0`, requires `request_url`) |
+| `range_end` | int | no | For `action="get"`: exclusive byte offset end (`0` = end, requires `request_url`) |
 
-Returns: `{databases}` in list mode; `{database, version, stores}` in inspect-database mode; `{database, store, index?, entries, has_more}` in read-records mode (values are materialized JSON).
+Returns: `{caches}`, `{cache_name, entries, total, has_more}`, or `{cache_name, request_url, status, status_text?, response_type?, response_headers?, body, base64_encoded, total_bytes, truncated}` for `get`; `{}` for `delete`.
 
-#### `delete_indexeddb`
+### Performance
 
-Delete an IndexedDB database or clear all records in one of its object stores.
+#### `get_performance`
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `database` | string | yes | Database name |
-| `store` | string | no | Object store name. If provided, clears that object store; if omitted, deletes the entire database. |
-
-#### `get_cache_storage`
-
-Inspect Cache Storage (`window.caches`) on the current page's origin via CDP `CacheStorage` domain (rejects opaque origins).
+Get Chrome runtime performance metrics (`JSHeapUsedSize`, `Nodes`, `LayoutCount`, `ScriptDuration`, etc.), buffered layout shifts with W3C session-window CLS (max 5s window / 1s gap, excluding `had_recent_input` shifts), and Largest Contentful Paint (LCP) timeline entries. Serializes ephemeral `Performance.enable`/`getMetrics`/`disable` per tab via `perfOpMu` and fails fast (without draining buffered shifts/LCP) if a JavaScript modal dialog is open.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `tab` | string | no | Tab ID |
-| `cache_name` | string | no | Cache name. Omit to list caches on the origin. |
-| `request_url` | string | no | Exact request URL to read a cached response body (requires `cache_name`; cannot be combined with `path_filter`/`skip`/`limit`). |
-| `path_filter` | string | no | Optional case-insensitive substring filter on entry URL paths when listing entries (requires `cache_name`). |
-| `skip` | int | no | Entries to skip when listing (default `0`, requires `cache_name`). |
-| `limit` | int | no | Max entries to return when listing (default `50`, requires `cache_name`). |
-| `range_start` | int | no | Byte offset to start slicing the response body (default `0`, requires `request_url`). |
-| `range_end` | int | no | Byte offset (exclusive) to end slicing the response body (`0` = end, requires `request_url`). |
+| `mode` | string | no | `"peek"` (default, keep buffered shifts/LCP) or `"drain"` (consume buffered shifts/LCP) |
+| `limit` | int | no | Max `lcp` entries to return (default all; `layout_shifts` stays unbounded so CLS is exact) |
 
-Returns: `{caches}` in list-caches mode; `{cache_name, entries, total, has_more}` in list-entries mode; `{cache_name, request_url, status, status_text?, response_type?, response_headers?, body, base64_encoded, total_bytes, truncated}` in read-response mode.
-
-#### `delete_cache_storage`
-
-Delete an entire Cache Storage cache or a single cached request entry.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `cache_name` | string | yes | Cache name |
-| `request_url` | string | no | Exact request URL to remove from the cache. Omit to delete the entire cache. |
-
-### Performance & Diagnostics
-
-#### `get_performance_metrics`
-
-Get Chrome runtime performance metrics.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-
-Returns: `{metrics}` array of `{name, value}` objects including `JSHeapUsedSize`, `JSHeapTotalSize`, `Documents`, `Nodes`, `LayoutCount`, `RecalcStyleCount`, `LayoutDuration`, `ScriptDuration`, `TaskDuration`, etc.
-
-#### `get_layout_shifts`
-
-Get Cumulative Layout Shift (CLS) data.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume entries) |
-
-Returns: `{shifts, cumulative_ls}` where `shifts` is an array of `{value, had_recent_input?, sources?, timestamp}` entries and `cumulative_ls` sums shifts excluding those with `had_recent_input: true`.
-
-#### `get_lcp`
-
-Get Largest Contentful Paint (LCP) timeline entries captured for a tab.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `mode` | string | **yes** | `"peek"` (keep entries) or `"drain"` (consume returned entries) |
-| `limit` | int | no | Max entries to return (default all) |
-
-Returns: `{entries}` array of `{render_time?, load_time?, size, url?, timestamp}` objects.
-
-#### `get_coverage`
-
-Get CSS and JavaScript code coverage data.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `type` | string | no | `"css"`, `"js"`, or `"all"` (default `"all"`) |
-
-Returns: `{entries}` array of per-file `{url, total_bytes, used_bytes, percentage}` objects.
+Returns: `{metrics, layout_shifts, cls, lcp}` (all arrays non-null `[]` when empty).
 
 ### Downloads
 
-When `--download-dir` is configured, Chrome automatically saves downloaded files. Downloads are tracked via CDP events and files are renamed from their internal GUID names to their suggested filenames on completion.
+When `--download-dir` is configured, Chrome automatically saves downloaded files, tracks them via a single browser-level CDP listener, and renames GUID files to non-overwriting suggested filenames asynchronously. When `--download-dir` is empty, `get_downloads` is not registered.
 
 #### `get_downloads`
 
-Get tracked file downloads with their status, progress, and file paths. Shows both completed and in-progress downloads. Downloads are browser-scoped (not per-tab).
+Get tracked file downloads with status, progress, and file paths. Downloads are browser-scoped (not per-tab).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `browser` | string | no | Browser ID. Defaults to active browser. |
-| `mode` | string | **yes** | `"peek"` (keep completed downloads in buffer) or `"drain"` (consume them). The in-progress list is always returned by snapshot. |
-| `limit` | int | no | Max entries to return (default all) |
-
-Returns: `{downloads, in_progress}` where each array holds `{guid, url, suggested_filename, state, received_bytes, total_bytes, path?, start_time, end_time?}` objects (`downloads` = completed/canceled entries; `in_progress` = currently downloading).
-
-### Configuration & Emulation
-
-#### `add_script`
-
-Inject JavaScript to run on every new document before any page scripts. Useful for test fixtures, polyfills, disabling animations, or intercepting APIs.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `source` | string | yes | JavaScript source code to evaluate on every new document |
-| `evaluate_now` | bool | **yes** | If `true`, also runs the script once on the currently loaded document. If `false`, only future navigations install it. Use `evaluate` for one-shot execution on the current document only. |
-
-Returns: `{identifier, warning?}`. `identifier` removes the new-document registration via `remove_script`; current-document side effects from `evaluate_now=true` cannot be undone via `remove_script`. `warning` is non-empty when `evaluate_now=true` was requested but the current-document evaluation failed (the new-document registration stays committed).
-
-#### `remove_script`
-
-Remove an injected script by its identifier.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `identifier` | string | yes | Script identifier returned by `add_script` |
-
-#### `set_extra_headers`
-
-Inject custom HTTP headers into all requests from a tab. Useful for auth tokens, feature flags, API keys.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `headers` | object | yes | Map of header name to value. Pass `{}` to clear. |
-
-#### `set_permission`
-
-Grant, deny, or reset a browser permission.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `name` | string | yes | Permission name: `geolocation`, `notifications`, `camera`, `microphone`, `clipboard-read`, `clipboard-write`, etc. |
-| `setting` | string | yes | `"granted"`, `"denied"`, or `"prompt"` |
-| `origin` | string | no | Scope to a specific origin. If omitted applies to all origins. |
-
-#### `set_emulated_media`
-
-Override CSS media type and features. Use to test dark mode, reduced motion, or print styles.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `media` | string | no | Media type: `"screen"`, `"print"`. Empty to reset. |
-| `features` | array | no | Media features to override. Each entry has `name` and `value`. |
-
-Common features: `prefers-color-scheme` (`dark`/`light`), `prefers-reduced-motion` (`reduce`/`no-preference`).
-
-#### `set_ignore_certificate_errors`
-
-Ignore or enforce TLS certificate errors. Enable to test against local dev servers with self-signed certificates.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `ignore` | bool | yes | If true, all certificate errors will be ignored. |
-
-### Emulation
-
-#### `set_geolocation`
-
-Override device geolocation. Omit all coordinate fields to reset. Requires geolocation permission to be granted via `set_permission`.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `latitude` | float | no | Mock latitude (-90 to 90). Omit all fields to reset. |
-| `longitude` | float | no | Mock longitude (-180 to 180). Omit all fields to reset. |
-| `accuracy` | float | no | Mock accuracy in meters (default 1 when coordinates are set). |
-
-#### `set_timezone`
-
-Override timezone. Uses IANA timezone IDs.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `timezone_id` | string | yes | IANA timezone ID (e.g. `"America/New_York"`, `"Europe/London"`, `"Asia/Tokyo"`). Empty string resets to default. |
-
-#### `set_locale`
-
-Override browser locale. Affects `Intl` APIs (number/date formatting).
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `locale` | string | yes | ICU locale (e.g. `"en_US"`, `"fr_FR"`, `"ja_JP"`). Empty string resets to default. |
-
-#### `set_user_agent`
-
-Override the browser user agent string.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `user_agent` | string | yes | User agent string to use. |
-| `accept_language` | string | no | Browser language to emulate (e.g. `"en-US"`, `"fr-FR"`). |
-| `platform` | string | no | Platform `navigator.platform` should return (e.g. `"Win32"`, `"MacIntel"`). |
-
-#### `set_cpu_throttling`
-
-Throttle CPU to simulate slow devices.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `rate` | float | yes | Throttling rate (1 = no throttle, 2 = 2x slowdown, 4 = 4x slowdown). Set to 1 to disable. |
-
-#### `set_vision_deficiency`
-
-Simulate vision deficiencies for accessibility testing.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `type` | string | yes | `"none"`, `"blurredVision"`, `"reducedContrast"`, `"achromatopsia"`, `"deuteranopia"`, `"protanopia"`, `"tritanopia"` |
-
-#### `force_pseudo_state`
-
-Force CSS pseudo-classes on an element via CDP `CSS.forcePseudoState` for style or screenshot inspection. Keeps the `CSS` domain enabled while any element on the tab has forced states, disables it automatically when all forced states are cleared or on main-frame cross-document navigation, and coordinates with `get_coverage` so CSS coverage still sees stylesheets and preserves active forced states afterward.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `selector` | string | yes | CSS selector of the target element |
-| `states` | []string | no | Pseudo-classes to force (`"active"`, `"focus"`, `"hover"`, `"visited"`, `"focus-within"`, `"focus-visible"`, `"target"`). Omit or pass `[]` to clear forced states on this element. |
-| `timeout` | int | no | Selector wait timeout in ms (default `5000`) |
-
-Returns: `{states}` array of active forced pseudo-classes applied to the element.
-
-#### `emulate_device`
-
-Emulate a mobile or tablet device preset (viewport, device scale factor, mobile flag, screen orientation, touch emulation, and user agent), or reset overrides back to desktop defaults.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `device` | string | yes | Preset name (`"iPhone SE"`, `"iPhone 13"`, `"iPhone 14"`, `"iPhone 14 Pro"`, `"iPhone 15"`, `"iPhone 15 Pro"`, `"iPhone 15 Pro Max"`, `"iPhone 16"`, `"iPhone 16 Pro"`, `"iPhone 16 Pro Max"`, `"iPad"`, `"iPad Mini"`, `"iPad Pro 11"`, `"Pixel 5"`, `"Galaxy S9+"`, `"Galaxy Tab S4"`), or `"reset"` |
-| `landscape` | bool | no | Emulate landscape orientation (default `false`; forbidden when `device="reset"`) |
-
-Returns: `{device, width?, height?, device_scale_factor?, mobile?, touch?, landscape?, user_agent?}`.
-
-### Network Control
-
-#### `emulate_network`
-
-Emulate network conditions (offline, latency, throttled bandwidth). Call with all defaults to reset.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `offline` | bool | no | Simulate offline mode (default `false`) |
-| `latency` | float | no | Minimum latency in milliseconds (0 to disable) |
-| `download_throughput` | float | no | Maximum download throughput in bytes/sec (-1 = disabled) |
-| `upload_throughput` | float | no | Maximum upload throughput in bytes/sec (-1 = disabled) |
-
-#### `block_urls`
-
-Block URLs matching patterns using CDP's `Network.setBlockedURLs` (`urlPatterns`). Accepts absolute WHATWG `URLPattern` strings (e.g. `https://example.com/*`, `*://*:*/*.css`) as well as common `*` wildcards (e.g. `*.png`, `*/api/*`, `*.example.com`, `ads.example.com/pixel.gif`), which are normalized to absolute `URLPattern` form.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `patterns` | []string | yes | Non-empty URL patterns to block. Pass empty array to clear. |
-
-#### `add_intercept_rule`
-
-Add a per-tab network request interception rule using CDP's `Fetch` domain (`Fetch.enable` is toggled lazily when the first rule is added and disabled when the last rule is removed or cleared). Interception applies to the tab's page target (main frame and same-process iframes, not cross-origin OOPIFs). Rules are evaluated in insertion order (first match wins); non-matching requests pass through untouched. `clear_buffers` does not clear interception rules.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `url_pattern` | string | yes | Glob pattern matching request URLs (`*` = any characters including `/`, `?` = single character, `\` = escape) |
-| `method` | string | no | Optional case-insensitive HTTP method filter |
-| `resource_type` | string | no | Optional case-insensitive CDP resource type filter (e.g. `XHR`, `Document`, `Script`, `Image`, `Stylesheet`; Chromium's `Fetch` domain reports `XHR` for both `fetch()` and `XMLHttpRequest`) |
-| `action` | string | yes | `"fulfill"`, `"modify"`, or `"fail"` |
-| `status` | int | no | HTTP status code (`100`–`599`, default `200`, `fulfill` only; bodyless statuses `1xx`, `204`, `205`, `304` forbid non-empty `body`) |
-| `body` | string | no | Response body text or base64 (`fulfill` only) |
-| `body_base64` | bool | no | Decode `body` from base64 (`fulfill` only) |
-| `headers` | object | no | Response headers (`fulfill`), or case-insensitive request header overrides merged onto original headers (`modify`; setting `""` sends an empty header value rather than deleting the header). Header names must be valid RFC 9110 tokens without case-colliding duplicates; values must not contain CR/LF/NUL. |
-| `url` | string | no | Replacement absolute URL (`modify` only) |
-| `override_method` | string | no | Replacement HTTP method token (`modify` only) |
-| `post_data` | string | no | Non-empty replacement request body text or base64 (`modify` only; CDP omits empty `postData`) |
-| `post_data_base64` | bool | no | Decode `post_data` from base64 (`modify` only; requires non-empty payload) |
-| `error_reason` | string | no | CDP `network.ErrorReason` (`fail` only, default `"Failed"`) |
-
-Returns: `{id}`.
-
-#### `remove_intercept_rule`
-
-Remove an interception rule by ID. Disables CDP `Fetch` interception automatically when the last rule is removed.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-| `id` | string | yes | Rule ID returned by `add_intercept_rule` |
-
-#### `list_intercept_rules`
-
-List active interception rules on a tab in evaluation order, including match counts.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-
-Returns: `{rules}` array of rule summaries with `{id, url_pattern, method?, resource_type?, action, status?, url?, override_method?, headers?, error_reason?, matches}`.
-
-#### `clear_intercept_rules`
-
-Remove all interception rules on a tab and disable CDP `Fetch` interception.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `tab` | string | no | Tab ID |
-
-Returns: `{removed}`.
+| `browser` | string | no | Browser ID (defaults to active browser) |
+| `mode` | string | **yes** | `"peek"` (keep completed downloads) or `"drain"` (consume completed downloads). `in_progress` is always returned by snapshot. |
+| `limit` | int | no | Max completed entries to return (default all) |
+
+Returns: `{downloads, in_progress}`.
+
+### Emulation & Page Configuration
+
+#### `emulate`
+
+Emulate browser/device environment settings on a tab. Parameters from other actions are rejected cleanly so callers get immediate feedback on typos.
+
+| Parameter | Type | Action | Description |
+|-----------|------|--------|-------------|
+| `tab` | string | all | Tab ID (optional) |
+| `action` | string | all (required) | `"viewport"`, `"device"`, `"network"`, `"geolocation"`, `"timezone"`, `"locale"`, `"user_agent"`, `"cpu_throttling"`, `"vision_deficiency"`, `"media"`, or `"pseudo_state"` |
+| `width`, `height`, `device_scale_factor`, `mobile` | int / float / bool | `viewport` | Viewport `width` and `height` (required, `> 0`), scale factor (default `1.0`), mobile flag |
+| `device`, `landscape` | string / bool | `device` | Preset name (required: `"iPhone SE"`, `"iPhone 13"`, `"iPhone 14"`, `"iPhone 14 Pro"`, `"iPhone 15"`, `"iPhone 15 Pro"`, `"iPhone 15 Pro Max"`, `"iPhone 16"`, `"iPhone 16 Pro"`, `"iPhone 16 Pro Max"`, `"iPad"`, `"iPad Mini"`, `"iPad Pro 11"`, `"Pixel 5"`, `"Galaxy S9+"`, `"Galaxy Tab S4"`, or `"reset"`) and optional `landscape` (forbidden with `"reset"`) |
+| `offline`, `latency`, `download_throughput`, `upload_throughput` | bool / float | `network` | Network conditions (`-1` or `0` disables throughput cap; defaults reset) |
+| `latitude`, `longitude`, `accuracy` | float | `geolocation` | Mock coordinates (`-90..90`, `-180..180`, accuracy default `1`m); omit all three to reset |
+| `timezone_id` | string | `timezone` | IANA timezone ID (e.g. `"America/New_York"`; empty resets) |
+| `locale` | string | `locale` | ICU locale ID (e.g. `"en_US"`; empty resets) |
+| `user_agent`, `accept_language`, `platform` | string | `user_agent` | `user_agent` string (required; empty resets), optional `accept_language` and `platform` |
+| `rate` | float | `cpu_throttling` | Slowdown factor (required; `1` = disabled, values in `[0, 1)` clamp to `1`, `< 0` rejected) |
+| `type` | string | `vision_deficiency` | Deficiency type (required): `"none"`, `"blurredVision"`, `"reducedContrast"`, `"achromatopsia"`, `"deuteranopia"`, `"protanopia"`, `"tritanopia"` |
+| `media`, `features` | string / array | `media` | CSS media type (`"screen"`, `"print"`, or `""` to reset) and `{name, value}` media features (e.g. `prefers-color-scheme: dark`, `prefers-reduced-motion: reduce`) |
+| `ref`, `selector`, `frame`, `states`, `timeout` | string / []string / int | `pseudo_state` | Target element (required: `ref`, or CSS/`>>>` `selector` + optional `frame`), `states` (`"active"`, `"focus"`, `"hover"`, `"visited"`, `"focus-within"`, `"focus-visible"`, `"target"`; omit or `[]` to clear), and optional selector `timeout` (default `5000` ms). Keeps `CSS` domain enabled only while forced states are active and disables automatically when cleared or on cross-document navigation. |
+
+Returns: `{device?, width?, height?, device_scale_factor?, mobile?, touch?, landscape?, user_agent?, states?}` (`device` returns applied metrics; `pseudo_state` returns `states`; other actions return `{}`).
+
+#### `configure_page`
+
+Configure tab-level page behavior. Parameters from other actions are rejected cleanly.
+
+| Parameter | Type | Action | Description |
+|-----------|------|--------|-------------|
+| `tab` | string | all | Tab ID (optional) |
+| `action` | string | all (required) | `"add_script"`, `"remove_script"`, `"set_headers"`, `"set_permission"`, or `"set_ignore_cert_errors"` |
+| `source`, `evaluate_now` | string / bool | `add_script` | `source` JS code (required) evaluated on every new document; `evaluate_now` (required) also runs once on the current document. Returns `{identifier, warning?}` (`warning` set if `evaluate_now` failed while registration succeeded). |
+| `identifier` | string | `remove_script` | Script identifier returned by `add_script` (required) |
+| `headers` | object | `set_headers` | Map of custom HTTP headers injected into all requests (required; pass `{}` to clear). Validated per RFC 9110 (valid token names, no case-colliding duplicates, no CR/LF/NUL in values). |
+| `name`, `setting`, `origin` | string | `set_permission` | Permission `name` (required, e.g. `geolocation`, `notifications`, `clipboard-read`), `setting` (required: `"granted"`, `"denied"`, `"prompt"`), and optional `origin` |
+| `ignore` | bool | `set_ignore_cert_errors` | Required boolean toggling TLS certificate error ignoring |
+
+Returns: `{identifier?, warning?}` for `add_script`; `{}` for other actions.
 
 ### Observation
 
-Observation detects a **silent no-op**: an action that dispatches cleanly and reports success while the page does nothing. A click lands on a live element whose handler early-returns; a form submit is swallowed by a validation guard. The tool result looks identical in both cases, so without observation the caller can only find out by polling afterwards and guessing.
-
-Observation is **not a standalone tool**. It is an `observe_window_ms` parameter on each action tool in [Interaction](#interaction), measured inline inside that tool's handler. This is the load-bearing design decision, and it is forced by latency: an LLM-driven caller has 1–10 seconds of dead time between consecutive tool calls (model thinking, token streaming, MCP transit). A separate `observe` call therefore always arrives *after* the interesting window has closed, and no amount of lookback tuning fixes it — the caller cannot know how long its own turnaround took. Observing inline sidesteps the problem: the handler timestamps the window immediately before it dispatches, so there is no gap to compensate for.
+Observation detects a **silent no-op**: an action that dispatches cleanly and reports success while the page does nothing. Observation is **not a standalone tool** — it is an `observe_window_ms` parameter on all nine action tools (`click`, `type`, `select_option`, `scroll`, `hover`, `press_key`, `upload_files`, `drag_and_drop`, and `dialog` on `accept`/`dismiss`), measured inline inside the handler so LLM round-trip latency never misses short-lived effects.
 
 #### Window boundaries
 
-The window **opens after the tool has waited for its target element, immediately before the dispatch**, and closes `observe_window_ms` after the dispatch returns. The two halves of that sentence are both load-bearing:
+The window **opens after the tool has waited for its target element, immediately before dispatch**, and closes `observe_window_ms` after dispatch returns (capped at `30000` ms). `window_ms` reports the real elapsed span (dispatch + wait), captured immediately after the timer completes before reading collector buffers and frame mutations.
 
-- **After the element wait.** Every selector-based action waits for its target to exist (bounded by `timeout`, 5s by default). That wait must stay *outside* the window. A page that is still bootstrapping fires requests while the element materializes, and counting them would attribute activity to an action that had not been dispatched yet — a false positive on the one signal the feature exists to provide, on precisely the slow, async pages it is for.
-- **Before the dispatch.** Synchronous handler effects and microtasks fire during the dispatch itself, so a window that opened afterwards would miss them.
-
-`window_ms` reports the true elapsed span (dispatch duration + the requested wait), not the requested wait echoed back — that is what lets a caller tell "nothing happened" apart from "I didn't wait long enough".
-
-The DOM-mutation half of the window is anchored in **the page's own clock** (`performance.now()`, read before dispatch), not in a Go-side elapsed time. A Go-side threshold would land one CDP round trip late — the same round trip the dispatch itself costs — and would drop the synchronous mutations of single-round-trip dispatches like `select_option` and `submit_form` roughly half the time. The anchor is taken per frame, and each is pinned to that frame's execution context by CDP's *system-unique* context ID. Since those IDs are never reused, a navigation destroys the context and the stale anchor becomes unusable rather than silently wrong: the read fails instead of applying the old document's threshold to the new document's clock (which resets to zero) and sweeping up its parser-driven mutations.
-
-`observe_window_ms` is capped at **30000**. The window is a blocking wait inside the handler, so an unbounded value would let one call pin an MCP request open indefinitely. Suggested values: **200 ms** catches synchronous handlers and microtasks; **500–1000 ms** catches most network responses.
-
-Observation always waits its full window and never returns early on first activity. For predicate-style "block until X is true" semantics, use `wait_for`.
+DOM mutations are anchored in each frame's own `performance.now()` clock pinned by CDP's unique execution context ID, watching `childList` mutations across all reachable frames. In-flight HTTP requests and newly opened WebSocket connections started within the window are counted even if they complete after the window closes.
 
 #### The `observed` object
 
@@ -1127,31 +773,13 @@ Observation always waits its full window and never returns early on first activi
  has_any_effect, truncated?, dom_mutations_unavailable?, dom_mutations_partial?}
 ```
 
-Present on an action's result only when that action was called with `observe_window_ms > 0`; omitted entirely otherwise, so callers that don't want observation pay no schema cost.
-
-`has_any_effect` is the disjunction of `network_requests > 0 || url_changed || console_messages > 0 || js_errors > 0` — the signals that are unambiguous.
-
-**DOM mutations are intentionally excluded from that disjunction**, though the count is still reported. Real pages produce ambient `childList` mutations constantly (parser-driven on fresh navigations, framework re-renders on SPAs, async resource insertion), so folding them in would make `has_any_effect` true almost everywhere and destroy its value as a no-op signal. The caller gets `dom_mutations` as a count and compares it against expectation instead of treating any non-zero value as proof the action worked.
-
-The MutationObserver behind that count watches `childList` (added/removed nodes) only — not `attributes` or `characterData`, which are far noisier still: focus-state changes, CSS-driven attribute toggles, and framework re-renders fire dozens of irrelevant mutations on an otherwise quiescent page.
-
-`dom_mutations` counts **every frame we can reach**, iframes included. The observer script is injected into each document, so each frame accumulates its own buffer in its own `window`; observation evaluates in each frame's own JavaScript execution context and sums. Reading only the top frame would report a confident `0` for an action whose entire effect landed inside an iframe.
-
-Some frames cannot be reached. A **cross-origin iframe is out-of-process**: its JavaScript runs on a separate CDP session that this server is not attached to, so its mutation buffer is simply unreachable. That covers most third-party ads, embeds, and payment frames. We can still *see that such a frame exists* — it announces itself with a `frameAttached` before it swaps out of our process (`Page.getFrameTree` does **not** list it afterwards) — so rather than pretend its mutations are zero, the count is flagged as a lower bound via `dom_mutations_partial`. The same flag covers a frame born during the window (never anchored) and a subframe replaced mid-window (its buffer died with it).
-
-Only the **top** frame being replaced makes the whole count meaningless, since that means the page itself is gone; that is `dom_mutations_unavailable`. A replaced *subframe* is not that: the page is intact and every other frame still counts honestly, so the count stands and is marked partial.
-
-Network counts include requests that are still **in flight**. A request that starts inside the window but completes after it closes is counted, because the alternative — counting only requests the collector has seen finish — would report zero for exactly the case observation exists to catch: an action that fires a slow XHR.
-
-Observation never turns a successful action into an error: the action has already succeeded by the time the window closes, and failing the call because a *measurement* came back partial would hand the caller an error it cannot act on. Partial measurements are reported instead, via three flags:
+Present only when `observe_window_ms > 0`. `has_any_effect` is `network_requests > 0 || url_changed || console_messages > 0 || js_errors > 0` (`dom_mutations` is intentionally excluded because ambient `childList` churn is noisy).
 
 | Flag | Meaning |
 |------|---------|
-| `truncated` | The window was cut short: the tab closed, or the client disconnected, before it elapsed. (A navigation does *not* truncate — it leaves the tab's context live.) The counts are partial, and **a false `has_any_effect` is not evidence the action did nothing**. |
-| `dom_mutations_unavailable` | The mutation count could not be attributed to the action, because the **top-frame** document was replaced during the window, a JavaScript modal dialog is open (blocking renderer evaluation; observation short-circuits immediately via the tab's Dialog state), or the page could not be read. `dom_mutations` is 0 and carries no information; use `url_changed` or `get_dialog` instead. |
-| `dom_mutations_partial` | `dom_mutations` is a **lower bound**: some frame's mutations could not be seen — a cross-origin (out-of-process) iframe, a frame created during the window, or a subframe replaced mid-window. The count is honest for the frames we could see. A zero here does **not** mean the DOM did not change. |
-
-All are omitted when false. `dom_mutations_unavailable` exists because the mutation buffer is per-document: when the page navigates, the buffer the window anchored against is gone, and the new document's parser-driven mutations are not the action's doing.
+| `truncated` | Tab closed or client disconnected before the window elapsed; counts are partial and `has_any_effect: false` proves nothing. |
+| `dom_mutations_unavailable` | Top-frame document navigated mid-window, a JS modal dialog blocked renderer evaluation (fast short-circuit via `Tab.Dialog`), or the page could not be read. Use `url_changed` or `dialog(action="get")`. |
+| `dom_mutations_partial` | `dom_mutations` is a lower bound because an out-of-process cross-origin iframe, newly created frame, or navigated subframe could not be observed. |
 
 ## Internal Architecture
 
@@ -1166,132 +794,93 @@ chromedp-mcp/
     id/
       id.go             # Short random identifier generation for browsers, tabs, and rules
     browser/
-      browser.go        # Browser type: launch/connect lifecycle, target adoption, download collector
-      manager.go        # BrowserManager: registry of browsers, active browser tracking
+      browser.go        # Browser type: launch/connect lifecycle, popup & target adoption, download collector
+      manager.go        # browser.Manager: registry of browsers, MRU active browser tracking
     tab/
-      tab.go            # Tab type: wraps a chromedp target context, owns collectors and per-tab operation locks
-      manager.go        # TabManager: per-browser tab registry, MRU active tab tracking
+      tab.go            # Tab type: target context, collectors, dialog/crash/nav listeners, LinkContext
+      manager.go        # tab.Manager: per-browser tab registry, MRU active tab tracking, BringToFront
+      emulation.go      # Per-tab CSS forced pseudo-state lifecycle and navigation cleanup
+      intercept.go      # Lazy Fetch domain toggle and async request interception dispatch
+      performance.go    # Serialized Performance.enable/getMetrics/disable with dialog interruption
+      snapshot.go       # Per-tab accessibility snapshot ref store and navigation invalidation
     profile/
-      profile.go        # Chrome profile discovery from Local State, platform-specific user data dir detection
+      profile.go        # Chrome profile discovery from Local State, platform user data dir detection
     collector/
-      collector.go      # Generic RingBuffer[T] with drain/peek/filter
+      collector.go      # Generic RingBuffer[T] with filtered drain/peek/clear and shared UTF-8 helpers
       console.go        # Console log collector (runtime.EventConsoleAPICalled)
-      dialog.go         # Active JavaScript modal dialog state per tab
-      download.go       # Browser-scoped download tracking and async GUID-to-filename renaming
+      dialog.go         # Active JS modal dialog state and OpeningNotify() channel per tab
+      download.go       # Browser-scoped download tracking and async non-overwriting renaming
       errors.go         # JS error collector (runtime.EventExceptionThrown)
-      execcontext.go    # Per-frame main-world JS execution contexts and frame hierarchy (observation & frame targeting)
-      intercept.go      # Ordered per-tab network request interception rules and glob/header helpers
-      network.go        # Network request/response collector (request lifecycle events)
-      performance.go    # Performance timeline collector (LCP, layout shifts)
+      execcontext.go    # Per-frame main-world JS execution contexts and frame hierarchy
+      intercept.go      # Ordered per-tab interception rules, glob matching, and header merging
+      network.go        # Network request/response collector (redirects, timing, headers)
+      performance.go    # Performance timeline collector (LCP, layout shifts, W3C session-window CLS)
       time.go           # CDP timestamp conversion helpers
-      urlchange.go      # Main-frame navigation and SPA URL-change collector (activity observation)
+      urlchange.go      # Main-frame navigation and SPA URL-change collector
       websocket.go      # WebSocket connection and per-direction frame ring collector
     tools/
-      tools.go          # Tool registration, shared input/output types, schema enum helpers, annotations
+      tools.go          # Exported Options/Register, immutable resolvedOptions, shared helpers, schema builder
+      target.go         # Unified ref / CSS+>>> Shadow DOM / frame / (x, y) element resolver & dialog interruption
       browser.go        # browser_launch, browser_connect, browser_activate, browser_close, browser_list
       profile.go        # browser_list_profiles
       tabs.go           # tab_new, tab_list, tab_activate, tab_close
-      navigation.go     # navigate, reload, go_back, go_forward, wait_for
-      visual.go         # screenshot, pdf, set_viewport
-      dom.go            # query, get_html, get_text, get_accessibility_tree
-      frames.go         # list_frames and same-origin iframe evaluation/wait helpers
-      console.go        # get_console_logs, get_js_errors, clear_console
+      navigation.go     # navigate, wait_for
+      visual.go         # screenshot, pdf, atomic writeDownloadFile
+      snapshot.go       # snapshot (compact AX tree outline + ref generation)
+      dom.go            # query, get_dom
+      frames.go         # list_frames and same-origin iframe helpers
+      console.go        # get_console_logs, get_js_errors
       buffers.go        # clear_buffers
-      network.go        # get_network_requests, get_response_body, get_request_body, get_websocket_frames
-      intercept.go      # add_intercept_rule, remove_intercept_rule, list_intercept_rules, clear_intercept_rules
-      js.go             # evaluate (with optional selector)
-      interaction.go    # click, type, select_option, submit_form, scroll, hover, focus, press_key, upload_files, get_dialog, handle_dialog, drag_and_drop
-      observation.go    # Inline activity observation window helpers (DOM mutations, network, URL, console, errors)
-      cookies.go        # get_cookies, set_cookie, delete_cookies
-      storage.go        # get_storage, set_storage, delete_storage, get_storage_keys
-      indexeddb.go      # get_indexeddb, delete_indexeddb
-      cachestorage.go   # get_cache_storage, delete_cache_storage
-      performance.go    # get_performance_metrics, get_layout_shifts, get_lcp, get_coverage
+      network.go        # get_network_requests, get_network_body, get_websocket_frames
+      intercept.go      # intercept tool and shared RFC 9110 HTTP header validation
+      js.go             # evaluate
+      interaction.go    # click, type, select_option, scroll, hover, press_key, upload_files
+      drag.go           # drag_and_drop
+      dialog.go         # dialog
+      observation.go    # Inline activity observation window helpers
+      cookies.go        # cookies
+      storage.go        # storage
+      indexeddb.go      # indexeddb
+      cachestorage.go   # cache_storage
+      performance.go    # get_performance
       downloads.go      # get_downloads
-      config.go         # add_script, remove_script, set_extra_headers, set_permission, set_emulated_media, set_ignore_certificate_errors
-      emulation.go      # set_geolocation, set_timezone, set_locale, set_user_agent, set_cpu_throttling, set_vision_deficiency, force_pseudo_state, emulate_device, emulate_network, block_urls
+      config.go         # configure_page
+      emulation.go      # emulate
 ```
 
-### Key Components
+The `internal/tools` package exports only `Options` and `Register`; all tool input/output types and helpers are package-private, and `Register` copies `Options` into an immutable `resolvedOptions` value without mutating the caller's struct.
 
-- **`browser.Browser`** — Manages a single Chrome instance (in `ModeLaunch` or `ModeConnect`), its allocator and browser CDP contexts, its `tab.Manager`, and its browser-scoped `collector.Download`.
-- **`browser.Manager`** — Thread-safe (`sync.Mutex`) registry of managed browsers with MRU active-browser fallback and dead-browser pruning on access.
-- **`tab.Tab`** — Wraps a `chromedp` target `context.Context`, owns the per-tab event collectors (`Console`, `JSErrors`, `Network`, `WebSocket`, `Performance`, `URLChanges`, `ExecContexts`, `Dialog`, `Intercept`), and provides per-tab operation locks (`interceptOpMu`, `cssOpMu`/`cssStateMu`, `dragOpMu`) for stateful multi-step CDP flows.
-- **`tab.Manager`** — Thread-safe (`sync.RWMutex`) per-browser tab registry with MRU active-tab tracking and external target-close pruning.
-- **`collector.RingBuffer[T]`** — Generic bounded mutex-protected buffer supporting filtered `Drain` (removing only returned matches within `limit`), `Peek`, and `Clear`.
+### Key Components & Concurrency
 
-### Lifecycle
+- **`browser.Browser`** — Manages one Chrome instance (`ModeLaunch` or `ModeConnect`), its allocator and browser CDP contexts, its `tab.Manager`, its browser-scoped `collector.Download`, and browser-level `Target.targetCreated` popup auto-adoption.
+- **`browser.Manager`** — Thread-safe (`sync.Mutex`) MRU registry of managed browsers with dead-browser pruning on access and lock-free teardown.
+- **`tab.Tab`** — Wraps a `chromedp` target `context.Context`, owns all per-tab collectors, and provides fine-grained per-tab operation locks (`interceptOpMu`, `cssOpMu`/`cssStateMu`, `perfOpMu`, `snapshotMu`, `dragOpMu`) so stateful multi-step CDP flows serialize cleanly without blocking independent tabs.
+- **`tab.Manager`** — Thread-safe (`sync.RWMutex`) MRU per-browser tab registry with external target-close pruning and `Page.bringToFront` on activation.
+- **`collector.RingBuffer[T]`** — Generic bounded mutex-protected buffer supporting filtered `Drain` (consuming only returned matches within `limit`), `Peek`, and zeroing `Clear`.
 
-1. **Startup**: Create `browser.Manager` (empty — no browser yet). Create MCP `Server`. Register all tools. Run `server.Run(ctx, StdioTransport)`.
-2. **First tool call**: If no browser exists, the tool returns an error telling the LLM to call `browser_launch` or `browser_connect`. If a browser has zero open tabs, tab-scoped tools return an error telling the LLM to call `tab_new`.
-3. **Browser creation**: `browser_launch` calls `chromedp.NewExecAllocator` + `chromedp.NewContext` and starts Chrome at the browser CDP level via `chromedp.Targets`, attaching Chrome's initial default page target(s) into `tab.Manager` (falling back to `NewTab` if none attach). `browser_connect` resolves `/json/version` when needed, calls `remote.NewAllocator` + `chromedp.NewContext`, queries `chromedp.Targets`, and adopts existing open page targets into `tab.Manager` without spawning a blank tab.
-4. **Tab creation**: `tab.Manager.NewTab()` calls `chromedp.NewContext(browserCtx, chromedp.WithListener(...))`, creates collectors, attaches CDP event listeners before target startup, and returns the tab ID.
-5. **Tool execution**: Tool handler resolves the target tab (explicit ID → active tab, erroring if none exist), executes chromedp actions on the tab's context, reads from collectors as needed, returns the result.
-6. **Shutdown**: Server context is cancelled. Attached tabs detach cleanly (leaving user tabs open in connected browsers) while server-created tabs close; all browser contexts are cancelled (killing launched Chromes, disconnecting from connected ones).
+### Lifecycle & Error Handling
 
-### Error Handling
-
-- No browser exists: return tool error instructing the caller to call `browser_launch` or `browser_connect`.
-- Invalid browser/tab ID: return tool error stating the ID was not found.
-- Selector not found: return tool error with the selector.
-- Navigation timeout: return tool error with the URL and timeout duration.
-- Chrome crash: detect via context cancellation, return tool error, and prune/close dead browsers on subsequent access.
-- All errors are returned as MCP tool errors (`IsError: true`), not protocol errors, so the LLM can reason about them and retry.
-
-### Concurrency
-
-- Each tab has its own `chromedp` target `context.Context` and collectors. Tools targeting different tabs can run concurrently.
-- Collectors use `sync.Mutex` for thread-safe access.
-- `browser.Manager` uses `sync.Mutex` (since reads also prune dead browsers), and `tab.Manager` uses `sync.RWMutex` for concurrent lookups with exclusive creation/deletion.
-- `chromedp` multiplexes concurrent CDP commands on a single target, so stateful multi-step per-tab sequences (Fetch interception lifecycle, CSS forced pseudo-states and coverage, and `drag_and_drop` interception) are explicitly serialized via per-tab mutexes on `tab.Tab`.
+1. **Startup**: Parse flags, trap `SIGINT`/`SIGTERM`, create empty `browser.Manager`, register tools on MCP `Server`, and run `StdioTransport`.
+2. **Tool execution**: Validate parameters before tab resolution, resolve target browser/tab (explicit ID → active), link MCP request cancellation onto the tab context (`tab.LinkContext`), execute CDP actions, and return structured results. All recoverable errors return MCP tool errors (`IsError: true`) rather than protocol errors so the LLM can reason and retry.
+3. **Shutdown**: Signal cancellation terminates `srv.Run` cleanly (exit 0) and triggers `defer mgr.CloseAll()` — detaching adopted user tabs in connected browsers while closing server-created tabs and killing launched Chrome processes.
 
 ## Tool Annotations
 
-All tools include explicit MCP `ToolAnnotations` (including non-nil `destructiveHint`) for client-side behavior hints:
+All registered tools carry explicit MCP `ToolAnnotations` (including non-nil `destructiveHint`):
 
-| Tool Category | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
-|---------------|----------------|-------------------|------------------|
-| Browser (`browser_launch`, `browser_connect`) | false | false | false |
-| Browser (`browser_activate`) | false | false | true |
-| Browser (`browser_list`, `browser_list_profiles`) | true | false | true |
-| Browser (`browser_close`) | false | true | false |
-| Tab (`tab_new`) | false | false | false |
-| Tab (`tab_list`) | true | false | true |
-| Tab (`tab_activate`) | false | false | true |
-| Tab (`tab_close`) | false | true | false |
-| Navigation (`navigate`, `reload`, `go_back`, `go_forward`) | false | false | false |
-| Waiting (`wait_for`) | true | false | true |
-| Visual (`screenshot`, `pdf`) — without `--download-dir` | true | false | true |
-| Visual (`screenshot`, `pdf`) — with `--download-dir` | false | false | true |
-| Visual (`set_viewport`) | false | false | true |
-| DOM Inspection (`query`, `get_html`, `get_text`, `get_accessibility_tree`, `list_frames`) | true | false | true |
-| Console/Errors (`get_console_logs`, `get_js_errors`) | false | false | false |
-| Console/Buffers (`clear_console`, `clear_buffers`) | false | false | true |
-| Network (`get_network_requests`, `get_websocket_frames`) | false | false | false |
-| Network (`get_response_body`, `get_request_body`, `list_intercept_rules`) | true | false | true |
-| Network (`add_intercept_rule`) | false | false | false |
-| Network (`remove_intercept_rule`) | false | true | false |
-| Network (`emulate_network`, `block_urls`, `clear_intercept_rules`) | false | false | true |
-| Downloads (`get_downloads`) | false | false | false |
-| JS Execution (`evaluate`) | false | false | false |
-| Interaction (`get_dialog`) | true | false | true |
-| Interaction (`click`, `type`, `select_option`, `submit_form`, `scroll`, `hover`, `focus`, `press_key`, `upload_files`, `handle_dialog`, `drag_and_drop`) | false | false | false |
-| Cookies (`get_cookies`) | true | false | true |
-| Cookies (`set_cookie`) | false | false | true |
-| Cookies (`delete_cookies`) | false | true | false |
-| Storage (`get_storage`, `get_storage_keys`, `get_indexeddb`, `get_cache_storage`) | true | false | true |
-| Storage (`set_storage`) | false | false | true |
-| Storage (`delete_storage`, `delete_indexeddb`, `delete_cache_storage`) | false | true | false |
-| Performance (`get_performance_metrics`, `get_coverage`) | true | false | true |
-| Performance (`get_layout_shifts`, `get_lcp`) | false | false | false |
-| Config (`add_script`) | false | false | false |
-| Config (`remove_script`) | false | true | false |
-| Config (`set_extra_headers`, `set_permission`, `set_emulated_media`, `set_ignore_certificate_errors`) | false | false | true |
-| Emulation (`set_geolocation`, `set_timezone`, `set_locale`, `set_user_agent`, `set_cpu_throttling`, `set_vision_deficiency`, `force_pseudo_state`, `emulate_device`) | false | false | true |
+| Tool(s) | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+|---------|----------------|-------------------|------------------|
+| `browser_list`, `browser_list_profiles`, `tab_list`, `wait_for`, `snapshot`, `query`, `get_dom`, `list_frames`, `get_network_body` | true | false | true |
+| `screenshot`, `pdf` (without `--download-dir`) | true | false | true |
+| `screenshot`, `pdf` (with `--download-dir`) | false | false | true |
+| `get_console_logs`, `get_js_errors`, `get_network_requests`, `get_websocket_frames`, `get_performance`, `get_downloads` | false | false | false |
+| `browser_launch`, `browser_connect`, `tab_new`, `navigate`, `evaluate`, `click`, `type`, `select_option`, `scroll`, `hover`, `press_key`, `upload_files`, `drag_and_drop`, `dialog` | false | false | false |
+| `browser_activate`, `tab_activate`, `clear_buffers`, `emulate` | false | false | true |
+| `browser_close`, `tab_close`, `intercept`, `cookies`, `storage`, `indexeddb`, `cache_storage`, `configure_page` | false | true | false |
+
+Multi-action tools that include destructive delete/remove actions (`intercept`, `cookies`, `storage`, `indexeddb`, `cache_storage`, `configure_page`) advertise `destructiveHint: true` per MCP's additive-only contract for `destructiveHint: false`.
 
 ## Configuration
-
-All browser configuration is done via tools at runtime. The server accepts optional flags:
 
 ```
 chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>] [--user-data-dir <path>]
@@ -1299,63 +888,25 @@ chromedp-mcp [--download-dir <path>] [--allowed-profiles <names>] [--user-data-d
 
 | Flag | Description |
 |------|-------------|
-| `--download-dir` | Directory for saving screenshots, PDFs, and downloads (supports `~` expansion). When set, `screenshot` and `pdf` tools accept a `filename` parameter to save output to disk, and Chrome downloads are enabled with automatic file saving and event tracking via `get_downloads`. Path traversal is blocked — filenames must not contain directory separators. The directory is created automatically if it doesn't exist. |
-| `--allowed-profiles` | Comma-separated list of Chrome profile display names the LLM may use (e.g. `"Work,Personal"`). When set, registers the `browser_list_profiles` tool and enables the `profile` parameter on `browser_launch`. Profiles not in this list are never exposed to the LLM. The Chrome/Chromium user data directory is auto-detected from platform defaults unless `--user-data-dir` is specified. |
-| `--user-data-dir` | Override the Chrome/Chromium user data directory used for profile discovery. When omitted, the default platform location is auto-detected (e.g. `~/.config/google-chrome` on Linux, `~/Library/Application Support/Google/Chrome` on macOS). Only relevant when `--allowed-profiles` is set. Supports `~` expansion. |
+| `--download-dir` | Directory for saving screenshots, PDFs, and downloads (supports `~` expansion). When set, registers `get_downloads`, enables Chrome file downloads with tracking/renaming, and allows `screenshot`/`pdf` `filename` writes (atomic `0o600` writes with path-traversal rejection). |
+| `--allowed-profiles` | Comma-separated list of Chrome profile display names (e.g. `"Work,Personal"`). Registers `browser_list_profiles` and exposes `profile` on `browser_launch`. |
+| `--user-data-dir` | Overrides the auto-detected Chrome/Chromium user data directory for profile discovery (supports `~` expansion; only relevant when `--allowed-profiles` is set). |
 
-When `--download-dir` is not set, the tools return binary data inline only and requesting a `filename` returns an error.
+When `--download-dir` is omitted, `get_downloads` is not registered, `screenshot`/`pdf` advertise `readOnlyHint: true` and return binary data inline only, and passing `filename` returns an error.
 
 ### User Profile Security
 
-> **Warning:** Enabling `--allowed-profiles` gives the LLM access to real Chrome profiles, including saved cookies, active sessions, localStorage, and extension data. The LLM can act as the user on any site they are logged into in that profile. Only expose profiles you understand the implications of, and never expose profiles containing sensitive credentials to untrusted LLM providers.
+> **Warning:** Enabling `--allowed-profiles` gives the LLM access to real Chrome profiles, including saved cookies, active sessions, `localStorage`, and extension data. Only expose profiles you understand the implications of, and never expose profiles containing sensitive credentials to untrusted LLM providers.
 
-Profile access is disabled by default. The `--allowed-profiles` flag is the explicit opt-in gate. When not set, the `browser_list_profiles` tool is not registered and the `profile` parameter on `browser_launch` is rejected. Each launched browser gets a fresh temporary profile that is discarded on close.
-
-Profile discovery works by reading Chrome's `Local State` JSON file, which maps profile directory names (`Default`, `Profile 1`, `Profile 2`, etc.) to user-chosen display names. The `--allowed-profiles` flag accepts display names, and only matching profiles are returned by `browser_list_profiles` or accepted by `browser_launch`. The `--user-data-dir` flag overrides the auto-detected user data directory, which is useful for pointing at a different Chrome/Chromium installation.
-
-Note that Chrome enforces a singleton lock on user data directories. Only one Chrome process can use a given user data directory at a time. If the user's Chrome is already running, launching a browser with a profile from the same user data directory will fail.
+Profile access is disabled by default. When `--allowed-profiles` is omitted, `browser_list_profiles` is not registered, `browser_launch` omits `profile` from its schema and rejects it at runtime, and every launched browser uses an ephemeral temporary profile discarded on close. Note that Chrome enforces a singleton lock on user data directories, so Chrome must not already be running against the same `--user-data-dir`.
 
 ## Future Features
 
-Features not in the initial scope but supported by CDP and worth adding later.
+Capabilities supported by CDP and candidates for future additions:
 
-### Network Control
-
-- **Certificate Inspection** — Get site certificate details via `network.GetCertificate`.
-
-### Security & Auth
-
-- **WebAuthn** — Create virtual authenticators, add/manage credentials, simulate user verification via `webauthn` domain. Enables testing passkey and FIDO2 flows without physical hardware.
-
-### Media
-
-- **Media Inspection** — Monitor audio/video playback, codecs, errors, and buffering via `media` domain. Useful for debugging streaming and video player issues.
-- **Web Audio** — Inspect Web Audio graph and real-time processing data via `webaudio` domain.
-
-### Debugging
-
-- **CSS Manipulation** — Add CSS rules and modify stylesheets via `css` domain (`force_pseudo_state` is already implemented).
-- **DOM Manipulation** — Modify the DOM tree directly (set attributes, set outer HTML, remove nodes) via `dom` domain.
-- **DOM Snapshots** — Capture full DOM snapshots including styles and layout via `domsnapshot` domain. Useful for visual regression testing.
-- **MHTML Snapshots** — Capture a complete page as a single MHTML file via `page.CaptureSnapshot`.
-
-### Service Workers & PWA
-
-- **Service Worker Management** — List, start, stop, unregister service workers. Simulate push messages and sync events via `serviceworker` domain.
-- **PWA Inspection** — Inspect Progressive Web App manifest and installation state via `pwa` domain.
-
-### Profiling
-
-- **JavaScript CPU Profile** — Start/stop CPU profiling and analyze time spent in functions via `profiler` domain.
-- **Heap Snapshot** — Take heap snapshots for memory leak analysis via `heapprofiler` domain.
-- **Tracing** — Record Chrome trace events (categories: rendering, scripting, painting, loading) via `tracing` domain. Provides detailed performance flame charts.
-
-### Browser
-
-- **Window Management** — Get/set browser window position and size via `browser.GetWindowBounds` / `browser.SetWindowBounds`.
-
-### Other
-
-- **Touch Gestures** — Simulate multi-touch, pinch, and swipe gestures via `input.DispatchTouchEvent` and `input.SynthesizePinchGesture` / `SynthesizeScrollGesture`.
-- **Animations** — Inspect and control CSS animations via `animation` domain. Pause, seek, change playback rate.
-- **Layer Tree** — Inspect compositing layers for debugging rendering performance and GPU usage via `layertree` domain.
+- **Certificate Inspection** — Site certificate details via `network.GetCertificate`.
+- **WebAuthn** — Virtual authenticators and FIDO2/passkey testing via `webauthn` domain.
+- **Media & Web Audio Inspection** — Playback/codec/buffer diagnostics via `media` and `webaudio` domains.
+- **Service Workers & PWA** — Service worker lifecycle and web app manifest inspection via `serviceworker` and `pwa` domains.
+- **Deep Profiling & Tracing** — CPU profiles (`profiler`), heap snapshots (`heapprofiler`), and Chrome trace events (`tracing`).
+- **Out-of-Process Iframe (OOPIF) Attachment** — Auto-attaching to cross-origin iframe CDP sessions for full DOM observation and targeting.
