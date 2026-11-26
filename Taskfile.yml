@@ -11,10 +11,49 @@ tasks:
     cmds:
       - go build -o ~/.local/bin/chromedp-mcp ./cmd/chromedp-mcp/
 
+  fmt:
+    desc: Format Go files with gofmt
+    cmds:
+      - gofmt -w .
+
+  fmt:check:
+    desc: Check Go formatting
+    cmds:
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "Unformatted Go files:"
+          echo "$unformatted"
+          exit 1
+        fi
+
+  vet:
+    desc: Run go vet across Linux, Windows, and macOS
+    cmds:
+      - GOOS=linux go vet ./...
+      - GOOS=windows go vet ./...
+      - GOOS=darwin go vet ./...
+
+  cross-compile:
+    desc: Cross-compile packages and tests for Windows and macOS
+    cmds:
+      - GOOS=windows go build ./...
+      - GOOS=windows go test -exec=true ./...
+      - GOOS=darwin go build ./...
+      - GOOS=darwin go test -exec=true ./...
+
   test:
     desc: Run all tests with race detector
     cmds:
       - go test -p=1 -race -count=1 -timeout 300s ./...
+
+  check:
+    desc: Run formatting check, vet, cross-compile, and full race test suite
+    cmds:
+      - task: fmt:check
+      - task: vet
+      - task: cross-compile
+      - task: test
 
   test:short:
     desc: Run a quick subset of tests

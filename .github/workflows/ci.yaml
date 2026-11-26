@@ -6,8 +6,7 @@ on:
       - main
   pull_request:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,6 +16,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
 
@@ -38,11 +39,14 @@ jobs:
         run: |
           go vet ./...
           GOOS=windows go vet ./...
+          GOOS=darwin go vet ./...
 
-      - name: Cross-compile Windows
+      - name: Cross-compile Windows and macOS
         run: |
           GOOS=windows go build ./...
           GOOS=windows go test -exec=true ./...
+          GOOS=darwin go build ./...
+          GOOS=darwin go test -exec=true ./...
 
       - name: Configure Chrome
         run: |
@@ -70,3 +74,31 @@ jobs:
         # packages do not starve software rendering (SwiftShader) under -race
         # on 4-vCPU runners.
         run: go test -p=1 -race -count=1 -timeout 600s ./...
+
+  release:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'greatliontech/chromedp-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.GLT_RELEASER_APP_ID }}
+          private-key: ${{ secrets.GLT_RELEASER_APP_KEY }}
+
+      - uses: greatliontech/semrel@main
+        env:
+          # Pin the release tag to the exact tested commit SHA instead of the
+          # moving "main" ref so a later push cannot be tagged while CI runs.
+          SEMREL_BRANCH: ${{ github.sha }}
+        with:
+          release: true
+          releaseToken: ${{ steps.app-token.outputs.token }}
