@@ -91,7 +91,10 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 
 	allocOpts := chromedp.DefaultExecAllocatorOptions[:]
 	if opts.Headless {
-		allocOpts = append(allocOpts, chromedp.Headless)
+		// Disable hardware GPU compositing in headless mode (with SwiftShader
+		// fallback for Chromium 139+) so Page.captureScreenshot stays reliable
+		// on GPU-less Linux VMs and containers.
+		allocOpts = append(allocOpts, chromedp.Headless, chromedp.DisableGPU)
 	} else {
 		// DefaultExecAllocatorOptions includes Headless which sets
 		// the "headless" flag to true. Override it to false. Since
