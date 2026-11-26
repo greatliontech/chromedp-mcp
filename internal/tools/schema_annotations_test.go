@@ -85,9 +85,6 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"browser_connect":    {false, false, false},
 		"tab_new":            {false, false, false},
 		"navigate":           {false, false, false},
-		"reload":             {false, false, false},
-		"go_back":            {false, false, false},
-		"go_forward":         {false, false, false},
 		"evaluate":           {false, false, false},
 		"add_script":         {false, false, false},
 		"add_intercept_rule": {false, false, false},
@@ -190,7 +187,9 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		want    []string
 	}
 	checks := []enumCheck{
+		{"navigate", "action", false, navigateActionValues},
 		{"navigate", "wait_until", false, navigateWaitUntilValues},
+		{"wait_for", "state", false, waitForStateValues},
 		{"screenshot", "format", false, screenshotFormatValues},
 		{"get_dom", "format", false, []string{DOMFormatText, DOMFormatHTML}},
 		{"get_console_logs", "mode", false, []string{ModePeek, ModeDrain}},
@@ -524,6 +523,14 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"dialog", map[string]any{"action": "get", "text": "x"}, "accept"},
 		{"dialog", map[string]any{"action": "get", "observe_window_ms": 100}, "observe_window_ms"},
 		{"dialog", map[string]any{"action": "dismiss", "text": "x"}, "accept"},
+		{"navigate", map[string]any{"action": "reload", "url": "https://example.com"}, "url is only valid"},
+		{"navigate", map[string]any{"action": "back", "bypass_cache": true}, "bypass_cache"},
+		{"navigate", map[string]any{"action": "goto", "url": "https://example.com", "bypass_cache": true}, "bypass_cache"},
+		{"wait_for", map[string]any{"text": "hi", "state": "visible"}, "state is only valid"},
+		{"wait_for", map[string]any{"url": "/a", "frame": "f1"}, "frame cannot be combined"},
+		{"wait_for", map[string]any{"selector": "#a", "text": "hi"}, "exactly one"},
+		{"screenshot", map[string]any{"frame": "f1"}, "frame requires selector"},
+		{"screenshot", map[string]any{"ref": "e1", "selector": "#a"}, "mutually exclusive"},
 	}
 	for _, tc := range cases {
 		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})

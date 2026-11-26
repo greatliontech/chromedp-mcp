@@ -5,6 +5,8 @@ import (
 	"image"
 	_ "image/png" // register PNG decoder for image.Decode
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1153,4 +1155,169 @@ func TestScreenshotElementJPEGWithMaxDim(t *testing.T) {
 		}
 	}
 	t.Error("no ImageContent in result")
+}
+
+func TestScreenshotRefShadowFrameAndAtomicWrite(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/frame.html", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body style="margin:0;background:#fff;">
+			<button id="if-red" style="position:absolute;left:20px;top:15px;width:80px;height:40px;border:0;background:rgb(255,0,0);color:rgb(255,0,0);">Frame Red</button>
+			<div style="height:500px;"></div>
+			<button id="if-far-green" style="width:80px;height:40px;border:0;background:rgb(0,200,0);color:rgb(0,200,0);">Far Green</button>
+		</body></html>`))
+	})
+	mux.HandleFunc("/scaled.html", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body style="margin:0;background:#fff;">
+			<div id="sc-purple" style="margin:20px;width:120px;height:80px;background:rgb(180,0,220);"></div>
+		</body></html>`))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body style="margin:0;background:#fff;">
+			<div id="s-host" style="margin:10px;"></div>
+			<iframe id="f" src="/frame.html" style="margin-left:50px;margin-top:30px;border:4px solid #000;padding:6px;width:200px;height:120px;"></iframe>
+			<iframe id="f-scaled" src="/scaled.html" style="position:absolute;left:320px;top:40px;width:200px;height:140px;border:0;transform:scale(0.5);transform-origin:0 0;"></iframe>
+			<script>
+				const sr = document.getElementById('s-host').attachShadow({mode: 'open'});
+				sr.innerHTML = '<button id="s-blue" style="width:90px;height:36px;border:0;background:rgb(0,0,255);color:rgb(0,0,255);">Shadow Blue</button>';
+			</script>
+		</body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": `document.getElementById('f').contentDocument?.getElementById('if-red') && document.getElementById('f-scaled').contentDocument?.getElementById('sc-purple')`,
+	})
+
+	decodePNG := func(res *mcp.CallToolResult) image.Image {
+		t.Helper()
+		if res.IsError {
+			t.Fatalf("screenshot failed: %s", contentText(res))
+		}
+		for _, c := range res.Content {
+			if img, ok := c.(*mcp.ImageContent); ok {
+				decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+				if err != nil {
+					t.Fatalf("decode PNG: %v", err)
+				}
+				return decoded
+			}
+		}
+		t.Fatal("screenshot returned no ImageContent")
+		return nil
+	}
+
+	// 1. Screenshot inside open Shadow DOM via '>>>'.
+	imgShadow := decodePNG(callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#s-host >>> #s-blue",
+	}))
+	r, g, b, _ := imgShadow.At(imgShadow.Bounds().Dx()/2, imgShadow.Bounds().Dy()/2).RGBA()
+	if b < 0xC000 || r > 0x4000 || g > 0x4000 {
+		t.Errorf("shadow screenshot center pixel = (%#x,%#x,%#x), want blue", r, g, b)
+	}
+
+	// 2. Screenshot via snapshot ref of the Shadow DOM button.
+	snap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
+	blueRef := findSnapshotRef(t, snap.Snapshot, `"Shadow Blue"`)
+	imgRef := decodePNG(callToolRaw(t, "screenshot", map[string]any{
+		"tab": tabID,
+		"ref": blueRef,
+	}))
+	r, g, b, _ = imgRef.At(imgRef.Bounds().Dx()/2, imgRef.Bounds().Dy()/2).RGBA()
+	if b < 0xC000 || r > 0x4000 || g > 0x4000 {
+		t.Errorf("ref screenshot center pixel = (%#x,%#x,%#x), want blue", r, g, b)
+	}
+
+	// 3. Screenshot of elements inside same-origin iframes (border/padding,
+	//    offscreen-inside-iframe scroll-into-view, and CSS scale(0.5)).
+	frames := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+	var childID, scaledID string
+	for _, fr := range frames.Frames {
+		if strings.HasSuffix(fr.URL, "/frame.html") {
+			childID = fr.ID
+		} else if strings.HasSuffix(fr.URL, "/scaled.html") {
+			scaledID = fr.ID
+		}
+	}
+	if childID == "" || scaledID == "" {
+		t.Fatalf("expected child and scaled frames in %+v", frames.Frames)
+	}
+	imgFrame := decodePNG(callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"frame":    childID,
+		"selector": "#if-red",
+	}))
+	r, g, b, _ = imgFrame.At(imgFrame.Bounds().Dx()/2, imgFrame.Bounds().Dy()/2).RGBA()
+	if r < 0xC000 || g > 0x4000 || b > 0x4000 {
+		t.Errorf("iframe screenshot center pixel = (%#x,%#x,%#x), want red (bounds=%v)", r, g, b, imgFrame.Bounds())
+	}
+
+	fSnap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "frame": childID})
+	redRef := findSnapshotRef(t, fSnap.Snapshot, `"Frame Red"`)
+	imgFrameRef := decodePNG(callToolRaw(t, "screenshot", map[string]any{
+		"tab": tabID,
+		"ref": redRef,
+	}))
+	r, g, b, _ = imgFrameRef.At(imgFrameRef.Bounds().Dx()/2, imgFrameRef.Bounds().Dy()/2).RGBA()
+	if r < 0xC000 || g > 0x4000 || b > 0x4000 {
+		t.Errorf("iframe ref screenshot center pixel = (%#x,%#x,%#x), want red", r, g, b)
+	}
+
+	// Offscreen element inside iframe scrolls into iframe viewport and captures green.
+	imgFarGreen := decodePNG(callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"frame":    childID,
+		"selector": "#if-far-green",
+	}))
+	r, g, b, _ = imgFarGreen.At(imgFarGreen.Bounds().Dx()/2, imgFarGreen.Bounds().Dy()/2).RGBA()
+	if g < 0xA000 || r > 0x4000 || b > 0x4000 {
+		t.Errorf("offscreen iframe screenshot center pixel = (%#x,%#x,%#x), want green (bounds=%v)", r, g, b, imgFarGreen.Bounds())
+	}
+
+	// Scaled iframe (transform: scale(0.5)) projects clip coordinates and size accurately.
+	imgScaled := decodePNG(callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"frame":    scaledID,
+		"selector": "#sc-purple",
+	}))
+	r, g, b, _ = imgScaled.At(imgScaled.Bounds().Dx()/2, imgScaled.Bounds().Dy()/2).RGBA()
+	if r < 0x8000 || b < 0xA000 || g > 0x4000 {
+		t.Errorf("scaled iframe screenshot center pixel = (%#x,%#x,%#x), want purple (bounds=%v)", r, g, b, imgScaled.Bounds())
+	}
+	if imgScaled.Bounds().Dx() > 70 || imgScaled.Bounds().Dy() > 50 {
+		t.Errorf("scaled iframe screenshot bounds = %v, want ~60x40 (scaled 0.5)", imgScaled.Bounds())
+	}
+
+	// 4. Atomic writeDownloadFile overwrites cleanly and leaves zero temp files behind.
+	dir := t.TempDir()
+	p1, err := writeDownloadFile(dir, "shot.png", []byte("first"))
+	if err != nil {
+		t.Fatalf("writeDownloadFile #1: %v", err)
+	}
+	p2, err := writeDownloadFile(dir, "shot.png", []byte("second-payload"))
+	if err != nil {
+		t.Fatalf("writeDownloadFile #2: %v", err)
+	}
+	if p1 != p2 {
+		t.Errorf("paths differ: %q vs %q", p1, p2)
+	}
+	got, err := os.ReadFile(p2)
+	if err != nil || string(got) != "second-payload" {
+		t.Errorf("read overwritten file = %q err=%v, want 'second-payload'", got, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "shot.png" {
+		t.Errorf("unexpected leftover files in download dir: %+v", entries)
+	}
 }

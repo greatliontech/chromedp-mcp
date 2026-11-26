@@ -13,7 +13,7 @@ func TestReloadReturnsOutput(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ReloadOutput](t, "reload", map[string]any{"tab": tabID})
+	out := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
 	if out.URL == "" {
 		t.Error("reload output URL should not be empty")
 	}
@@ -38,8 +38,9 @@ func TestReloadBypassCacheWaitsForLoad(t *testing.T) {
 
 	// Reload with bypass_cache. The tool should wait for the page to
 	// fully load before returning — no sleep should be needed.
-	out := callTool[ReloadOutput](t, "reload", map[string]any{
+	out := callTool[NavigateOutput](t, "navigate", map[string]any{
 		"tab":          tabID,
+		"action":       "reload",
 		"bypass_cache": true,
 	})
 
@@ -70,8 +71,9 @@ func TestReloadNormalWaitsForLoad(t *testing.T) {
 	})
 
 	// Normal reload should also wait and return correct output.
-	out := callTool[ReloadOutput](t, "reload", map[string]any{
-		"tab": tabID,
+	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+		"tab":    tabID,
+		"action": "reload",
 	})
 
 	if out.Title == "before-reload" {
@@ -91,7 +93,7 @@ func TestReloadDOMUsableImmediately(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Reload.
-	callTool[ReloadOutput](t, "reload", map[string]any{"tab": tabID})
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
 
 	// Immediately query the DOM — should work without errors because
 	// reload waited for the page to load.

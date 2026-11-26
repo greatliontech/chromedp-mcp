@@ -160,71 +160,139 @@ func waitForSelector(sctx, tctx context.Context, t *tab.Tab, uniqueCtxID, frameI
 		return "", err
 	}
 	checkJS := fmt.Sprintf(`(%s) !== null`, findExpr)
+	return pollFrameEval(sctx, tctx, t, uniqueCtxID, frameID, checkJS, false, 50*time.Millisecond,
+		func(found bool) bool { return found },
+		func(_ bool, _ bool) error {
+			if frameID != "" {
+				return fmt.Errorf("selector %q not found in frame %q: %w", selector, frameID, sctx.Err())
+			}
+			return fmt.Errorf("element %q not found in the DOM (timed out waiting for it to appear)", selector)
+		},
+		fmt.Sprintf("selector %q", selector),
+	)
+}
+
+// pollFrameEval polls jsExpr in frameID (or the main frame when frameID == "")
+// until done(val) returns true or sctx expires. It handles stale execution
+// contexts across navigations/frame reloads and fails fast on JavaScript
+// exceptions (e.g. invalid CSS syntax or rejected Promises). Returns the last
+// live UniqueContextID when frameID != "".
+func pollFrameEval[T any](
+	sctx, tctx context.Context,
+	t *tab.Tab,
+	uniqueCtxID, frameID, jsExpr string,
+	awaitPromise bool,
+	interval time.Duration,
+	done func(T) bool,
+	timeoutErr func(lastVal T, hasVal bool) error,
+	label string,
+) (string, error) {
 	curCtxID := uniqueCtxID
 	deadCtxIDs := make(map[string]bool)
-	ticker := time.NewTicker(50 * time.Millisecond)
+	var (
+		lastVal T
+		hasVal  bool
+	)
+	refreshFrameCtx := func() (retryNow bool, err error) {
+		ec, reachable, known, swapped := t.ExecContexts.ContextForFrame(frameID)
+		if !known {
+			return false, fmt.Errorf("frame %q detached while waiting for %s", frameID, label)
+		}
+		if swapped {
+			return false, fmt.Errorf("frame %q became out-of-process (cross-origin) while waiting for %s", frameID, label)
+		}
+		if reachable && !deadCtxIDs[ec.UniqueID] {
+			curCtxID = ec.UniqueID
+			return true, nil
+		}
+		curCtxID = ""
+		return false, nil
+	}
+	onTimeout := func() error {
+		if frameID != "" && curCtxID == "" {
+			if _, reachable, known, _ := t.ExecContexts.ContextForFrame(frameID); known && !reachable {
+				return fmt.Errorf("frame %q has no reachable execution context while waiting for %s: %w", frameID, label, sctx.Err())
+			}
+		}
+		return timeoutErr(lastVal, hasVal)
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		if frameID == "" || curCtxID != "" {
-			var evalOpts []chromedp.EvaluateOption
-			if curCtxID != "" {
-				evalOpts = append(evalOpts, evalInUniqueContext(curCtxID))
+			var (
+				val     T
+				excText string
+			)
+			err := chromedp.Do(sctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				params := runtime.EvaluateParams{
+					Expression:    jsExpr,
+					ReturnByValue: new(true),
+					AwaitPromise:  new(awaitPromise),
+				}
+				if curCtxID != "" {
+					params.UniqueContextID = curCtxID
+				}
+				res, err := cdp.Call(ctx, tgt, runtime.Evaluate, params)
+				if err != nil {
+					return err
+				}
+				if res.ExceptionDetails != nil {
+					releaseEvalException(tctx, tgt, res.Result, res.ExceptionDetails)
+					excText = formatExceptionDetails(res.ExceptionDetails)
+					return nil
+				}
+				if res.Result != nil && len(res.Result.Value) > 0 {
+					if err := json.Unmarshal(res.Result.Value, &val); err != nil {
+						return err
+					}
+				}
+				return nil
+			}))
+			if excText != "" {
+				if frameID != "" {
+					return "", fmt.Errorf("%s in frame %q: %s", label, frameID, excText)
+				}
+				return "", fmt.Errorf("%s: %s", label, excText)
 			}
-			found, err := chromedp.Run(sctx, chromedp.Evaluate[bool](checkJS, evalOpts...))
 			if err == nil {
-				if found {
+				lastVal = val
+				hasVal = true
+				if done(val) {
 					return curCtxID, nil
 				}
 			} else {
 				if tctx.Err() != nil {
-					return "", err
+					return "", tctx.Err()
 				}
 				if errors.Is(sctx.Err(), context.DeadlineExceeded) {
-					if frameID != "" {
-						return "", fmt.Errorf("selector %q not found in frame %q: %w", selector, frameID, sctx.Err())
-					}
-					return "", fmt.Errorf("element %q not found in the DOM (timed out waiting for it to appear)", selector)
-				}
-				var exc *chromedp.ExceptionError
-				if errors.As(err, &exc) {
-					if frameID != "" {
-						return "", fmt.Errorf("selector %q in frame %q: %w", selector, frameID, err)
-					}
-					return "", fmt.Errorf("selector %q: %w", selector, err)
+					return "", onTimeout()
 				}
 				if isStaleContextError(err) {
 					if frameID != "" {
 						deadCtxIDs[curCtxID] = true
-						ec, reachable, known, swapped := t.ExecContexts.ContextForFrame(frameID)
-						if !known {
-							return "", fmt.Errorf("frame %q detached while waiting for selector %q", frameID, selector)
+						retryNow, rerr := refreshFrameCtx()
+						if rerr != nil {
+							return "", rerr
 						}
-						if swapped {
-							return "", fmt.Errorf("frame %q became out-of-process (cross-origin) while waiting for selector %q", frameID, selector)
-						}
-						if reachable && !deadCtxIDs[ec.UniqueID] {
-							curCtxID = ec.UniqueID
+						if retryNow {
 							continue
 						}
-						curCtxID = ""
 					}
-					// For main-frame shadow selectors, retry until the incoming
+					// For main-frame evaluations, retry until the incoming
 					// document finishes navigating or sctx expires.
 				} else {
 					return "", err
 				}
 			}
 		} else {
-			ec, reachable, known, swapped := t.ExecContexts.ContextForFrame(frameID)
-			if !known {
-				return "", fmt.Errorf("frame %q detached while waiting for selector %q", frameID, selector)
+			retryNow, rerr := refreshFrameCtx()
+			if rerr != nil {
+				return "", rerr
 			}
-			if swapped {
-				return "", fmt.Errorf("frame %q became out-of-process (cross-origin) while waiting for selector %q", frameID, selector)
-			}
-			if reachable && !deadCtxIDs[ec.UniqueID] {
-				curCtxID = ec.UniqueID
+			if retryNow {
 				continue
 			}
 		}
@@ -233,15 +301,7 @@ func waitForSelector(sctx, tctx context.Context, t *tab.Tab, uniqueCtxID, frameI
 		case <-tctx.Done():
 			return "", tctx.Err()
 		case <-sctx.Done():
-			if frameID != "" {
-				if curCtxID == "" {
-					if _, reachable, known, _ := t.ExecContexts.ContextForFrame(frameID); known && !reachable {
-						return "", fmt.Errorf("frame %q has no reachable execution context while waiting for selector %q: %w", frameID, selector, sctx.Err())
-					}
-				}
-				return "", fmt.Errorf("selector %q not found in frame %q: %w", selector, frameID, sctx.Err())
-			}
-			return "", fmt.Errorf("element %q not found in the DOM (timed out waiting for it to appear)", selector)
+			return "", onTimeout()
 		case <-ticker.C:
 		}
 	}
@@ -291,6 +351,17 @@ func releaseExceptionObject(ctx context.Context, tgt *chromedp.Target, ex *runti
 		return
 	}
 	releaseRemoteObject(ctx, tgt, ex.Exception.ObjectID)
+}
+
+// releaseEvalException releases any V8 RemoteObjectIDs carried on a failed
+// Runtime.evaluate result and its ExceptionDetails.
+func releaseEvalException(ctx context.Context, tgt *chromedp.Target, res *runtime.RemoteObject, ex *runtime.ExceptionDetails) {
+	var resOID runtime.RemoteObjectID
+	if res != nil && res.ObjectID != "" {
+		resOID = res.ObjectID
+		releaseRemoteObject(ctx, tgt, resOID)
+	}
+	releaseExceptionObject(ctx, tgt, ex, resOID)
 }
 
 // validateElementTarget checks mutual exclusion between ref, selector, and frame.
@@ -390,12 +461,7 @@ func resolveElementObject(
 		return nil, err
 	}
 	if evalRes.ExceptionDetails != nil {
-		var resOID runtime.RemoteObjectID
-		if evalRes.Result != nil && evalRes.Result.ObjectID != "" {
-			resOID = evalRes.Result.ObjectID
-			releaseRemoteObject(tctx, tgt, resOID)
-		}
-		releaseExceptionObject(tctx, tgt, evalRes.ExceptionDetails, resOID)
+		releaseEvalException(tctx, tgt, evalRes.Result, evalRes.ExceptionDetails)
 		return nil, fmt.Errorf("selector %q: %s", selector, formatExceptionDetails(evalRes.ExceptionDetails))
 	}
 	if evalRes.Result == nil || evalRes.Result.ObjectID == "" {

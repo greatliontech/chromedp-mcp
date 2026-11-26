@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,13 +15,34 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/tab"
+)
+
+const (
+	navActionGoto    = "goto"
+	navActionReload  = "reload"
+	navActionBack    = "back"
+	navActionForward = "forward"
+
+	waitStateVisible  = "visible"
+	waitStateHidden   = "hidden"
+	waitStateAttached = "attached"
+	waitStateDetached = "detached"
+)
+
+var (
+	navigateActionValues    = []string{navActionGoto, navActionReload, navActionBack, navActionForward}
+	navigateWaitUntilValues = []string{"load", "domcontentloaded", "networkidle"}
+	waitForStateValues      = []string{waitStateVisible, waitStateHidden, waitStateAttached, waitStateDetached}
 )
 
 // NavigateInput is the input for navigate.
 type NavigateInput struct {
 	TabInput
-	URL       string `json:"url" jsonschema:"The URL to navigate to"`
-	WaitUntil string `json:"wait_until,omitempty" jsonschema:"Wait condition: load (default) domcontentloaded or networkidle"`
+	Action      string `json:"action,omitempty" jsonschema:"Navigation action: 'goto' (default), 'reload', 'back', or 'forward'."`
+	URL         string `json:"url,omitempty" jsonschema:"URL to navigate to (required for action='goto')."`
+	WaitUntil   string `json:"wait_until,omitempty" jsonschema:"For action='goto': wait condition 'load' (default), 'domcontentloaded', or 'networkidle'."`
+	BypassCache bool   `json:"bypass_cache,omitempty" jsonschema:"For action='reload': bypass browser cache (default false)."`
 }
 
 // NavigateOutput is the output for navigate.
@@ -30,56 +52,49 @@ type NavigateOutput struct {
 	Status int64  `json:"status,omitempty"`
 }
 
-// ReloadInput is the input for reload.
-type ReloadInput struct {
-	TabInput
-	BypassCache bool `json:"bypass_cache,omitempty" jsonschema:"Bypass browser cache (default false)"`
-}
-
-// ReloadOutput is the output for reload.
-type ReloadOutput struct {
-	URL   string `json:"url"`
-	Title string `json:"title"`
-}
-
-// GoBackInput is the input for go_back.
-type GoBackInput struct {
-	TabInput
-}
-
-// GoForwardInput is the input for go_forward.
-type GoForwardInput struct {
-	TabInput
-}
-
 // WaitForInput is the input for wait_for.
 type WaitForInput struct {
 	TabInput
-	Selector   string `json:"selector,omitempty" jsonschema:"CSS selector to wait for (waits until visible)"`
-	Expression string `json:"expression,omitempty" jsonschema:"JS expression to poll until truthy"`
-	Timeout    int    `json:"timeout,omitempty" jsonschema:"Timeout in milliseconds (default 30000)"`
+	Selector   string `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector to wait for."`
+	Frame      string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID for selector, text, or expression."`
+	State      string `json:"state,omitempty" jsonschema:"For selector: 'visible' (default), 'hidden', 'attached', or 'detached'."`
+	Text       string `json:"text,omitempty" jsonschema:"Wait until page/frame visible text contains this substring."`
+	URL        string `json:"url,omitempty" jsonschema:"Wait until tab URL contains this substring."`
+	Expression string `json:"expression,omitempty" jsonschema:"JS expression to poll until truthy (supports Promises)."`
+	Timeout    int    `json:"timeout,omitempty" jsonschema:"Timeout in milliseconds (default 30000)."`
 }
-
-var navigateWaitUntilValues = []string{"load", "domcontentloaded", "networkidle"}
 
 func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "navigate",
-		Description: "Navigate a tab to a URL. Returns the final URL (after redirects), page title, and HTTP status code.",
+		Description: "Navigate a tab: go to a URL ('goto', default), reload ('reload'), or move in history ('back'/'forward'). Returns final URL, page title, and HTTP status (for goto/reload when available).",
 		InputSchema: schemaWithEnums[NavigateInput](map[string][]string{
+			"action":     navigateActionValues,
 			"wait_until": navigateWaitUntilValues,
 		}),
 		Annotations: mutatingAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input NavigateInput) (*mcp.CallToolResult, NavigateOutput, error) {
-		if input.URL == "" {
-			return nil, NavigateOutput{}, fmt.Errorf("url is required")
+		if err := validateEnum("action", input.Action, true, navigateActionValues); err != nil {
+			return nil, NavigateOutput{}, err
 		}
 		if err := validateEnum("wait_until", input.WaitUntil, true, navigateWaitUntilValues); err != nil {
 			return nil, NavigateOutput{}, err
 		}
-		waitEvent := input.WaitUntil
-		if waitEvent == "" {
-			waitEvent = "load"
+		action := input.Action
+		if action == "" {
+			action = navActionGoto
+		}
+		if action == navActionGoto && input.URL == "" {
+			return nil, NavigateOutput{}, fmt.Errorf("url is required for action='goto'")
+		}
+		if action != navActionGoto && input.URL != "" {
+			return nil, NavigateOutput{}, fmt.Errorf("url is only valid when action is 'goto'")
+		}
+		if action != navActionGoto && input.WaitUntil != "" {
+			return nil, NavigateOutput{}, fmt.Errorf("wait_until is only valid when action is 'goto'")
+		}
+		if action != navActionReload && input.BypassCache {
+			return nil, NavigateOutput{}, fmt.Errorf("bypass_cache is only valid when action is 'reload'")
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -92,27 +107,48 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		navCtx, navCancel := context.WithTimeout(tctx, defaultLifecycleTimeout)
 		defer navCancel()
 
-		navOp := fmt.Sprintf("navigate to %q (wait_until=%s)", input.URL, waitEvent)
-		var resp *network.Response
-		switch waitEvent {
-		case "domcontentloaded", "networkidle":
-			resp, err = navigateUntilLifecycle(navCtx, tctx, input.URL, waitEvent)
-		default:
-			resp, err = chromedp.Run(navCtx, chromedp.NavigateResponse(input.URL))
+		var (
+			resp  *network.Response
+			navOp string
+		)
+		switch action {
+		case navActionGoto:
+			waitEvent := input.WaitUntil
+			if waitEvent == "" {
+				waitEvent = "load"
+			}
+			navOp = fmt.Sprintf("navigate to %q (wait_until=%s)", input.URL, waitEvent)
+			switch waitEvent {
+			case "domcontentloaded", "networkidle":
+				resp, err = navigateUntilLifecycle(navCtx, tctx, input.URL, waitEvent)
+			default:
+				resp, err = chromedp.Run(navCtx, chromedp.NavigateResponse(input.URL))
+			}
+		case navActionReload:
+			navOp = "reload"
+			reloadParams := page.ReloadParams{}
+			if input.BypassCache {
+				reloadParams.IgnoreCache = new(true)
+			}
+			resp, err = chromedp.RunResponse(navCtx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				_, err := cdp.Call(ctx, tgt, page.Reload, reloadParams)
+				return err
+			}))
+		case navActionBack:
+			navOp = "navigate back"
+			err = chromedp.Do(navCtx, navigateHistory(-1))
+		case navActionForward:
+			navOp = "navigate forward"
+			err = chromedp.Do(navCtx, navigateHistory(+1))
 		}
 		if err != nil {
 			return nil, NavigateOutput{}, wrapNavTimeout(err, tctx.Err(), navOp)
 		}
 
-		url, err := chromedp.Run(navCtx, chromedp.Location())
+		url, title, err := tabURLAndTitle(navCtx, t)
 		if err != nil {
-			return nil, NavigateOutput{}, wrapNavTimeout(err, tctx.Err(), navOp)
+			return nil, NavigateOutput{}, fmt.Errorf("reading tab info after %s: %w", navOp, err)
 		}
-		title, err := chromedp.Run(navCtx, chromedp.Title())
-		if err != nil {
-			return nil, NavigateOutput{}, wrapNavTimeout(err, tctx.Err(), navOp)
-		}
-
 		out := NavigateOutput{URL: url, Title: title}
 		if resp != nil {
 			out.Status = resp.Status
@@ -121,98 +157,45 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "reload",
-		Description: "Reload the current page. Returns the final URL and page title after reload.",
-		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReloadInput) (*mcp.CallToolResult, ReloadOutput, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, ReloadOutput{}, err
-		}
-		tctx, tcancel := tabContext(ctx, t.Context())
-		defer tcancel()
-		navCtx, navCancel := context.WithTimeout(tctx, defaultLifecycleTimeout)
-		defer navCancel()
-		if input.BypassCache {
-			// chromedp.Reload() doesn't expose the IgnoreCache
-			// option, but it wraps page.Reload in responseAction
-			// which waits for the page load event. We need the
-			// same wait behaviour here, so we use RunResponse with
-			// an action that sends the bypass-cache variant.
-			if _, err := chromedp.RunResponse(navCtx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-				_, err := cdp.Call(ctx, tgt, page.Reload, page.ReloadParams{IgnoreCache: new(true)})
-				return err
-			})); err != nil {
-				return nil, ReloadOutput{}, wrapNavTimeout(err, tctx.Err(), "reload")
-			}
-		} else {
-			if err := chromedp.Do(navCtx, chromedp.Reload()); err != nil {
-				return nil, ReloadOutput{}, wrapNavTimeout(err, tctx.Err(), "reload")
-			}
-		}
-
-		url, err := chromedp.Run(navCtx, chromedp.Location())
-		if err != nil {
-			return nil, ReloadOutput{}, wrapNavTimeout(err, tctx.Err(), "reload")
-		}
-		title, err := chromedp.Run(navCtx, chromedp.Title())
-		if err != nil {
-			return nil, ReloadOutput{}, wrapNavTimeout(err, tctx.Err(), "reload")
-		}
-		return nil, ReloadOutput{URL: url, Title: title}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "go_back",
-		Description: "Navigate back in browser history.",
-		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GoBackInput) (*mcp.CallToolResult, struct{}, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		tctx, tcancel := tabContext(ctx, t.Context())
-		defer tcancel()
-		navCtx, navCancel := context.WithTimeout(tctx, defaultLifecycleTimeout)
-		defer navCancel()
-		if err := chromedp.Do(navCtx, navigateHistory(-1)); err != nil {
-			return nil, struct{}{}, wrapNavTimeout(err, tctx.Err(), "go_back")
-		}
-		return nil, struct{}{}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "go_forward",
-		Description: "Navigate forward in browser history.",
-		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GoForwardInput) (*mcp.CallToolResult, struct{}, error) {
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		tctx, tcancel := tabContext(ctx, t.Context())
-		defer tcancel()
-		navCtx, navCancel := context.WithTimeout(tctx, defaultLifecycleTimeout)
-		defer navCancel()
-		if err := chromedp.Do(navCtx, navigateHistory(+1)); err != nil {
-			return nil, struct{}{}, wrapNavTimeout(err, tctx.Err(), "go_forward")
-		}
-		return nil, struct{}{}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wait_for",
-		Description: "Wait for a CSS selector to become visible or a JS expression to become truthy. Exactly one of selector or expression must be provided.",
+		Description: "Wait for a selector state ('visible'|'hidden'|'attached'|'detached'), visible page text, tab URL substring, or truthy JS expression (supports Promises). Provide exactly one condition.",
+		InputSchema: schemaWithEnums[WaitForInput](map[string][]string{
+			"state": waitForStateValues,
+		}),
 		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input WaitForInput) (*mcp.CallToolResult, struct{}, error) {
-		if input.Selector == "" && input.Expression == "" {
-			return nil, struct{}{}, fmt.Errorf("exactly one of selector or expression must be provided")
+		if err := validateEnum("state", input.State, true, waitForStateValues); err != nil {
+			return nil, struct{}{}, err
 		}
-		if input.Selector != "" && input.Expression != "" {
-			return nil, struct{}{}, fmt.Errorf("exactly one of selector or expression must be provided, not both")
+		if err := validateSelectorTimeout(input.Timeout); err != nil {
+			return nil, struct{}{}, err
 		}
-		if input.Timeout < 0 {
-			return nil, struct{}{}, fmt.Errorf("timeout must be >= 0, got %d", input.Timeout)
+		conditions := 0
+		if input.Selector != "" {
+			conditions++
+		}
+		if input.Text != "" {
+			conditions++
+		}
+		if input.URL != "" {
+			conditions++
+		}
+		if input.Expression != "" {
+			conditions++
+		}
+		if conditions != 1 {
+			return nil, struct{}{}, fmt.Errorf("exactly one of selector, text, url, or expression must be provided")
+		}
+		if input.State != "" && input.Selector == "" {
+			return nil, struct{}{}, fmt.Errorf("state is only valid with selector")
+		}
+		if input.Frame != "" && input.URL != "" {
+			return nil, struct{}{}, fmt.Errorf("frame cannot be combined with url")
+		}
+		if input.Selector != "" {
+			if _, _, err := parseShadowSelector(input.Selector); err != nil {
+				return nil, struct{}{}, err
+			}
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -227,43 +210,180 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 		if input.Timeout > 0 {
 			timeout = time.Duration(input.Timeout) * time.Millisecond
 		}
-
 		wctx, cancel := context.WithTimeout(tctx, timeout)
 		defer cancel()
 
-		if input.Selector != "" {
-			err = chromedp.Do(wctx, chromedp.WaitVisible(chromedp.CSS(input.Selector)))
-			if err != nil {
-				return nil, struct{}{}, selectorError(tctx, input.Selector, err)
+		switch {
+		case input.URL != "":
+			var lastURL string
+			ticker := time.NewTicker(25 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				curURL, _, err := t.Info(wctx)
+				if err == nil {
+					lastURL = curURL
+					if strings.Contains(curURL, input.URL) {
+						return nil, struct{}{}, nil
+					}
+				} else {
+					if tctx.Err() != nil {
+						return nil, struct{}{}, tctx.Err()
+					}
+					if wctx.Err() != nil {
+						return nil, struct{}{}, fmt.Errorf("timed out waiting for URL containing %q (last URL: %q)", input.URL, lastURL)
+					}
+					// Non-context error (e.g. target detached): fail fast.
+					return nil, struct{}{}, err
+				}
+				select {
+				case <-tctx.Done():
+					return nil, struct{}{}, tctx.Err()
+				case <-wctx.Done():
+					return nil, struct{}{}, fmt.Errorf("timed out waiting for URL containing %q (last URL: %q)", input.URL, lastURL)
+				case <-ticker.C:
+				}
 			}
-		} else {
-			// Coerce the predicate to a Promise<boolean> before sending
-			// to CDP. Without this, expressions that evaluate to a
-			// non-primitive (e.g. an optional-chained DOM query whose
-			// intermediate returns a complex object) fail with CDP
-			// error "Object reference chain is too long" because Poll
-			// tries to serialize the result via returnByValue.
-			//
-			// The wrap is `Promise.resolve(EXPR).then(Boolean)`, not a
-			// bare `Boolean(EXPR)`, because chromedp.Poll's predicate
-			// JS does `await predicate(...)` — a bare `Boolean(somePromise)`
-			// returns true synchronously without awaiting the Promise,
-			// silently breaking async predicates like
-			// `fetch('/x').then(r => r.ok)`. `Promise.resolve` is
-			// idempotent on Promises and lifts plain values, so both
-			// sync and async expressions are handled uniformly.
-			//
-			// EXPR is wrapped between newlines so a trailing line
-			// comment in the user's expression doesn't swallow the
-			// closing `).then(Boolean)`.
-			coerced := "Promise.resolve(\n" + input.Expression + "\n).then(Boolean)"
-			_, err = chromedp.Run(wctx, chromedp.Poll[any](coerced, chromedp.WithPollingTimeout(timeout)))
+
+		case input.Selector != "":
+			state := input.State
+			if state == "" {
+				state = waitStateVisible
+			}
+			uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
 			if err != nil {
 				return nil, struct{}{}, err
 			}
+			findExpr, err := queryOneElementJS(input.Selector)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			probeJS := fmt.Sprintf(`(function() {
+				const el = %s;
+				if (!el) return "detached";
+				const win = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+				const cs = win.getComputedStyle(el);
+				const hasBox = Boolean(el.offsetWidth || el.offsetHeight ||
+					(typeof el.getClientRects === "function" && el.getClientRects().length > 0));
+				if (!hasBox || cs.visibility === "hidden" || cs.visibility === "collapse") return "hidden";
+				return "visible";
+			})()`, findExpr)
+
+			matchState := func(cur string) bool {
+				switch state {
+				case waitStateAttached:
+					return cur == "visible" || cur == "hidden"
+				case waitStateDetached:
+					return cur == "detached"
+				case waitStateHidden:
+					return cur == "hidden" || cur == "detached"
+				default:
+					return cur == "visible"
+				}
+			}
+			_, err = pollFrameEval(wctx, tctx, t, uniqueCtxID, input.Frame, probeJS, false, 25*time.Millisecond,
+				matchState,
+				func(lastState string, hasVal bool) error {
+					if !hasVal {
+						return fmt.Errorf("timed out waiting for selector %q (state=%s): evaluation did not complete", input.Selector, state)
+					}
+					switch state {
+					case waitStateVisible:
+						if lastState == "hidden" {
+							return fmt.Errorf("timed out waiting for selector %q (state=visible): element exists but is not visible", input.Selector)
+						}
+						return fmt.Errorf("timed out waiting for selector %q (state=visible): not found in the DOM", input.Selector)
+					case waitStateAttached:
+						return fmt.Errorf("timed out waiting for selector %q (state=attached): not found in the DOM", input.Selector)
+					case waitStateDetached:
+						return fmt.Errorf("timed out waiting for selector %q (state=detached): element is still attached to the DOM", input.Selector)
+					default:
+						return fmt.Errorf("timed out waiting for selector %q (state=hidden): element is still visible", input.Selector)
+					}
+				},
+				fmt.Sprintf("selector %q", input.Selector),
+			)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			return nil, struct{}{}, nil
+
+		case input.Text != "":
+			uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			textJS := fmt.Sprintf(`(function() {
+				const root = document.body || document.documentElement;
+				if (!root) return false;
+				const t = typeof root.innerText === "string" ? root.innerText : (root.textContent || "");
+				return t.includes(%s);
+			})()`, jsQuote(input.Text))
+			_, err = pollFrameEval(wctx, tctx, t, uniqueCtxID, input.Frame, textJS, false, 25*time.Millisecond,
+				func(found bool) bool { return found },
+				func(_ bool, _ bool) error {
+					return fmt.Errorf("timed out waiting for text %q", input.Text)
+				},
+				fmt.Sprintf("text %q", input.Text),
+			)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			return nil, struct{}{}, nil
+
+		default:
+			uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			// Coerce the predicate to Promise<boolean> so non-primitives (e.g.
+			// DOM nodes) never fail serialization and Promises are awaited.
+			// Newlines defend against trailing // line comments in Expression.
+			coerced := "Promise.resolve(\n" + input.Expression + "\n).then(Boolean)"
+			_, err = pollFrameEval(wctx, tctx, t, uniqueCtxID, input.Frame, coerced, true, 25*time.Millisecond,
+				func(ok bool) bool { return ok },
+				func(_ bool, _ bool) error {
+					return fmt.Errorf("timed out waiting for expression to become truthy")
+				},
+				"expression",
+			)
+			if err != nil {
+				return nil, struct{}{}, err
+			}
+			return nil, struct{}{}, nil
 		}
-		return nil, struct{}{}, nil
 	})
+}
+
+// tabURLAndTitle returns the tab's current URL and document.title in one CDP
+// round trip, falling back to non-blocking browser-process Tab.Info whenever
+// a JavaScript modal dialog blocks the renderer.
+func tabURLAndTitle(ctx context.Context, t *tab.Tab) (url, title string, err error) {
+	if t.Dialog != nil && t.Dialog.Open() {
+		return t.Info(ctx)
+	}
+	type pageMeta struct {
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	var (
+		meta    pageMeta
+		gotMeta bool
+	)
+	evalErr := runDialogInterruptible(ctx, t.Dialog, func(dctx context.Context) error {
+		m, e := chromedp.Run(dctx, chromedp.Evaluate[pageMeta](`({url: window.location.href, title: document.title})`))
+		if e == nil {
+			meta = m
+			gotMeta = true
+		}
+		return e
+	})
+	if evalErr == nil && gotMeta {
+		return meta.URL, meta.Title, nil
+	}
+	if (t.Dialog != nil && t.Dialog.Open()) || (evalErr == nil && !gotMeta) || isStaleContextError(evalErr) {
+		return t.Info(ctx)
+	}
+	return "", "", evalErr
 }
 
 // wrapNavTimeout annotates a lifecycle timeout (navCtx expired while parent
@@ -530,6 +650,13 @@ func navigateHistory(delta int) chromedp.Action[chromedp.Void] {
 			result historyNavResult
 		}
 		ch := make(chan navEvent, 1)
+		loadDoneCh := make(chan struct{})
+		markLoadDone := sync.OnceFunc(func() { close(loadDoneCh) })
+		var (
+			mu            sync.Mutex
+			crossLoaderID cdp.LoaderID
+			loadedLoaders = make(map[cdp.LoaderID]bool)
+		)
 		lctx, lcancel := context.WithCancel(ctx)
 		defer lcancel()
 
@@ -539,8 +666,6 @@ func navigateHistory(delta int) chromedp.Action[chromedp.Void] {
 				if topFrameID != "" && e.FrameID != topFrameID {
 					return // Ignore subframe same-document navigations
 				}
-				// SPA pushState / history API — same document,
-				// DOM is already correct.
 				select {
 				case ch <- navEvent{historyNavSameDocument}:
 				default:
@@ -552,10 +677,40 @@ func navigateHistory(delta int) chromedp.Action[chromedp.Void] {
 				result := historyNavCrossDocument
 				if e.Type == page.NavigationTypeBackForwardCacheRestore {
 					result = historyNavBFCache
+				} else {
+					mu.Lock()
+					crossLoaderID = e.Frame.LoaderID
+					if crossLoaderID != "" && loadedLoaders[crossLoaderID] {
+						markLoadDone()
+					}
+					mu.Unlock()
 				}
 				select {
 				case ch <- navEvent{result}:
 				default:
+				}
+			case *page.EventLifecycleEvent:
+				if (topFrameID == "" || e.FrameID == topFrameID) && e.Name == "load" && e.LoaderID != "" {
+					mu.Lock()
+					loadedLoaders[e.LoaderID] = true
+					if crossLoaderID != "" && e.LoaderID == crossLoaderID {
+						markLoadDone()
+					}
+					mu.Unlock()
+				}
+			case *page.EventLoadEventFired:
+				mu.Lock()
+				if crossLoaderID != "" {
+					markLoadDone()
+				}
+				mu.Unlock()
+			case *page.EventFrameStoppedLoading:
+				if topFrameID == "" || e.FrameID == topFrameID {
+					mu.Lock()
+					if crossLoaderID != "" {
+						markLoadDone()
+					}
+					mu.Unlock()
 				}
 			}
 		}); err != nil {
@@ -575,17 +730,24 @@ func navigateHistory(delta int) chromedp.Action[chromedp.Void] {
 			return ctx.Err()
 		}
 
-		if nav.result == historyNavBFCache {
+		switch nav.result {
+		case historyNavBFCache:
 			// Reload to force a fresh document load. This triggers
 			// dom.EventDocumentUpdated, which resyncs chromedp's
 			// DOM cache. Without this, bfcache restores leave the
 			// cache stale and all selector-based queries time out.
 			_, err := chromedp.Reload()(ctx, tgt)
 			return err
+		case historyNavCrossDocument:
+			// Wait for the committed cross-document history entry to finish
+			// loading so document.title and DOM queries see the parsed document.
+			select {
+			case <-loadDoneCh:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
-		// Same-document and normal cross-document navigations don't
-		// need a reload — the DOM is already in a consistent state.
 		return nil
 	})
 }

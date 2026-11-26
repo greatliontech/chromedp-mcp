@@ -937,14 +937,14 @@ func TestObserveWindowCrossOriginFramePartialSurvivesBackForward(t *testing.T) {
 	callTool[NavigateOutput](t, "navigate", map[string]any{
 		"tab": tabID, "url": harness.httpSrv.URL + "/page2.html",
 	})
-	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 	time.Sleep(700 * time.Millisecond)
 
 	back := callTool[ClickOutput](t, "click", map[string]any{
 		"tab": tabID, "selector": "#b", "observe_window_ms": 300,
 	})
 	if back.Observed == nil {
-		t.Fatal("Observed = nil after go_back")
+		t.Fatal("Observed = nil after navigate(back)")
 	}
 	if !back.Observed.DOMMutationsPartial {
 		t.Errorf("DOMMutationsPartial = false after going BACK to the cross-origin-iframe page — a bfcache restore re-commits the document without re-attaching its frames, so losing the frame here reports a confident complete count for a page we cannot fully see. got %+v", back.Observed)
@@ -954,14 +954,14 @@ func TestObserveWindowCrossOriginFramePartialSurvivesBackForward(t *testing.T) {
 	// back put page2 in the cache too, so this is a restore as well — and
 	// page2 genuinely has no frames, so the count must NOT claim to be
 	// partial. A flag that fires here is a flag callers learn to ignore.
-	callTool[struct{}](t, "go_forward", map[string]any{"tab": tabID})
+	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 	time.Sleep(700 * time.Millisecond)
 
 	fwd := callTool[ClickOutput](t, "click", map[string]any{
 		"tab": tabID, "selector": "body", "observe_window_ms": 200,
 	})
 	if fwd.Observed == nil {
-		t.Fatal("Observed = nil after go_forward")
+		t.Fatal("Observed = nil after navigate(forward)")
 	}
 	if fwd.Observed.DOMMutationsPartial {
 		t.Errorf("DOMMutationsPartial = true after going FORWARD to a page with NO frames — its frame set must have been stashed when we left it via the back button, or the restore reports 'frame set unknown' and the flag fires on an ordinary frameless page. got %+v", fwd.Observed)

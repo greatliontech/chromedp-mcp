@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -10,10 +9,8 @@ import (
 	"strings"
 
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -23,12 +20,14 @@ import (
 // ScreenshotInput is the input for screenshot.
 type ScreenshotInput struct {
 	SelectorInput
-	Selector     string `json:"selector,omitempty" jsonschema:"CSS selector to screenshot a specific element. If omitted captures the viewport."`
-	FullPage     bool   `json:"full_page,omitempty" jsonschema:"Capture the full scrollable page (default false). Ignored if selector is set."`
-	Format       string `json:"format,omitempty" jsonschema:"Image format: png (default) or jpeg"`
+	Ref          string `json:"ref,omitempty" jsonschema:"Element ref from snapshot to screenshot (mutually exclusive with selector/frame)."`
+	Frame        string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID for selector."`
+	Selector     string `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector to screenshot a specific element. If both ref and selector are omitted, captures the viewport."`
+	FullPage     bool   `json:"full_page,omitempty" jsonschema:"Capture the full scrollable page (default false). Ignored if ref or selector is set."`
+	Format       string `json:"format,omitempty" jsonschema:"Image format: png (default) or jpeg."`
 	Quality      int    `json:"quality,omitempty" jsonschema:"JPEG quality 1-100 (default 80). Ignored for PNG."`
 	Filename     string `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Omit to return inline only. The image is still returned inline."`
-	MaxDimension int    `json:"max_dimension,omitempty" jsonschema:"Maximum allowed width or height in physical pixels. If the screenshot exceeds this in either dimension it is downscaled proportionally. Useful to stay within API image-size limits (e.g. 8000 for Anthropic)."`
+	MaxDimension int    `json:"max_dimension,omitempty" jsonschema:"Maximum allowed width or height in physical pixels (downscaled proportionally if exceeded)."`
 }
 
 // PDFInput is the input for pdf.
@@ -66,12 +65,18 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "screenshot",
-		Description: "Capture a screenshot of the viewport, full page, or a specific element.",
+		Description: "Capture a screenshot of the viewport, full page, or a specific element (by snapshot ref or CSS/shadow selector).",
 		InputSchema: schemaWithEnums[ScreenshotInput](map[string][]string{
 			"format": screenshotFormatValues,
 		}),
 		Annotations: captureAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ScreenshotInput) (*mcp.CallToolResult, struct{}, error) {
+		if err := validateElementTarget(input.Ref, input.Selector, input.Frame, false); err != nil {
+			return nil, struct{}{}, err
+		}
+		if input.Frame != "" && input.Selector == "" {
+			return nil, struct{}{}, fmt.Errorf("frame requires selector")
+		}
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
 			return nil, struct{}{}, err
 		}
@@ -116,19 +121,20 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
 
-		if input.Selector != "" {
-			// Bound only the visibility wait with selectorContext so slow
-			// image encoding cannot produce a false "not visible" error.
-			sctx, scancel := selectorContext(tctx, input.Timeout)
-			nodes, waitErr := chromedp.Run(sctx, chromedp.Nodes(chromedp.CSS(input.Selector), chromedp.NodeVisible))
-			scancel()
-			if waitErr != nil {
-				return nil, struct{}{}, selectorError(tctx, input.Selector, waitErr)
-			}
-			if len(nodes) == 0 {
-				return nil, struct{}{}, fmt.Errorf("selector %q did not return any nodes", input.Selector)
-			}
-			buf, err = chromedp.Run(tctx, captureElementNode(input.Selector, nodes[0].BackendNodeID, format, jpegQuality, input.MaxDimension))
+		if input.Ref != "" || input.Selector != "" {
+			err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				el, err := resolveElementObject(ctx, tgt, t, input.Ref, input.Selector, input.Frame, input.Timeout, false)
+				if err != nil {
+					return err
+				}
+				defer el.Release(ctx, tgt)
+
+				if err := waitForElementLayoutBox(ctx, tgt, el, input.Timeout); err != nil {
+					return err
+				}
+				buf, err = captureElementObject(ctx, tgt, el, format, jpegQuality, input.MaxDimension)
+				return err
+			}))
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -330,15 +336,35 @@ func validateSaveFilename(dir, filename, defaultExt string) (string, error) {
 	return filename, nil
 }
 
-// writeDownloadFile writes data to a validated filename inside dir.
+// writeDownloadFile atomically writes data to a validated filename inside dir
+// via a same-directory temp file and rename so readers never observe partial files.
 func writeDownloadFile(dir, filename string, data []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating download dir: %w", err)
 	}
-	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".chromedp-mcp-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return "", fmt.Errorf("writing file: %w", err)
 	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("closing temp file: %w", err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return "", fmt.Errorf("renaming file: %w", err)
+	}
+	cleanup = false
 	return path, nil
 }
 
@@ -414,105 +440,121 @@ func captureClip(ctx context.Context, tgt *chromedp.Target, fullPage bool, maxDi
 	}, scale, nil
 }
 
-// captureElementNode captures a screenshot of a resolved DOM backend node with
-// the given format, quality, and optional maxDim physical-pixel cap. It uses
-// viewport bounding coordinates plus window.scrollX/scrollY (matching Chrome's
-// document-canvas clip origin even when <html> has margin, border, or transform)
-// and factors window.devicePixelRatio into scale.
-func captureElementNode(selector string, backendNodeID cdp.BackendNodeID, format page.CaptureScreenshotFormat, quality int64, maxDim int) chromedp.Action[[]byte] {
-	return func(ctx context.Context, tgt *chromedp.Target) ([]byte, error) {
-		objRes, err := cdp.Call(ctx, tgt, dom.ResolveNode, dom.ResolveNodeParams{
-			BackendNodeID: backendNodeID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("resolving element %q: %w", selector, err)
+// captureElementObject captures a screenshot of a resolved DOM element
+// (main frame, open Shadow DOM, or same-origin iframe) with the given format,
+// quality, and optional maxDim physical-pixel cap. For elements inside
+// same-origin iframes, scrolls the target into its iframe's viewport, clips
+// against each ancestor iframe's visible content area (accounting for border,
+// padding, and CSS scale/zoom), and fails clearly if completely clipped rather
+// than silently capturing unrelated parent-page pixels.
+func captureElementObject(ctx context.Context, tgt *chromedp.Target, el *resolvedElement, format page.CaptureScreenshotFormat, quality int64, maxDim int) ([]byte, error) {
+	const rectFn = `function() {
+		let w = (this.ownerDocument && this.ownerDocument.defaultView) || window;
+		if (w && w.frameElement && typeof this.scrollIntoView === 'function') {
+			this.scrollIntoView({block: 'nearest', inline: 'nearest'});
 		}
-		if objRes.Object == nil || objRes.Object.ObjectID == "" {
-			return nil, fmt.Errorf("resolving element %q: empty remote object", selector)
+		const r = this.getBoundingClientRect();
+		if (r.width <= 0 || r.height <= 0) {
+			return {width: r.width, height: r.height};
 		}
-		defer func() {
-			cleanCtx, cancel := cleanupContext(ctx)
-			defer cancel()
-			_, _ = cdp.Call(cleanCtx, tgt, runtime.ReleaseObject, runtime.ReleaseObjectParams{
-				ObjectID: objRes.Object.ObjectID,
-			})
-		}()
+		let x = r.left;
+		let y = r.top;
+		let width = r.width;
+		let height = r.height;
+		while (w && w.frameElement) {
+			const de = w.document && w.document.compatMode === 'CSS1Compat' ? w.document.documentElement : null;
+			const vw = (de && de.clientWidth) || w.innerWidth;
+			const vh = (de && de.clientHeight) || w.innerHeight;
+			const ix0 = Math.max(0, x);
+			const iy0 = Math.max(0, y);
+			const ix1 = Math.min(vw, x + width);
+			const iy1 = Math.min(vh, y + height);
+			if (ix1 <= ix0 || iy1 <= iy0) {
+				return {clipped: true};
+			}
+			x = ix0;
+			y = iy0;
+			width = ix1 - ix0;
+			height = iy1 - iy0;
 
-		const rectFn = `function() {
-			const e = this.getBoundingClientRect();
-			return {
-				x: e.left + window.scrollX,
-				y: e.top + window.scrollY,
-				width: e.width,
-				height: e.height,
-				dpr: window.devicePixelRatio || 1
-			};
-		}`
-		callRes, err := cdp.Call(ctx, tgt, runtime.CallFunctionOn, runtime.CallFunctionOnParams{
-			FunctionDeclaration: rectFn,
-			ObjectID:            objRes.Object.ObjectID,
-			ReturnByValue:       new(true),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("measuring element %q: %w", selector, err)
+			const fe = w.frameElement;
+			const fr = fe.getBoundingClientRect();
+			const pw = (fe.ownerDocument && fe.ownerDocument.defaultView) || w.parent;
+			const cs = pw.getComputedStyle(fe);
+			const bl = parseFloat(cs.borderLeftWidth) || 0;
+			const bt = parseFloat(cs.borderTopWidth) || 0;
+			const pl = parseFloat(cs.paddingLeft) || 0;
+			const pt = parseFloat(cs.paddingTop) || 0;
+			const sx = fe.offsetWidth > 0 ? fr.width / fe.offsetWidth : 1;
+			const sy = fe.offsetHeight > 0 ? fr.height / fe.offsetHeight : 1;
+			x = fr.left + (bl + pl + x) * sx;
+			y = fr.top + (bt + pt + y) * sy;
+			width *= sx;
+			height *= sy;
+			w = pw;
 		}
-		if callRes.ExceptionDetails != nil {
-			return nil, fmt.Errorf("measuring element %q: %s", selector, callRes.ExceptionDetails.Text)
-		}
-		if callRes.Result == nil || len(callRes.Result.Value) == 0 {
-			return nil, fmt.Errorf("measuring element %q: empty bounding rect", selector)
-		}
+		return {
+			x: x + (w ? w.scrollX : 0),
+			y: y + (w ? w.scrollY : 0),
+			width: width,
+			height: height,
+			dpr: (w && w.devicePixelRatio) || 1
+		};
+	}`
 
-		var rect struct {
-			X      float64 `json:"x"`
-			Y      float64 `json:"y"`
-			Width  float64 `json:"width"`
-			Height float64 `json:"height"`
-			DPR    float64 `json:"dpr"`
-		}
-		if err := json.Unmarshal(callRes.Result.Value, &rect); err != nil {
-			return nil, fmt.Errorf("decoding bounding rect for %q: %w", selector, err)
-		}
-		if rect.Width <= 0 || rect.Height <= 0 {
-			return nil, fmt.Errorf("element %q has zero dimensions (%.0fx%.0f)", selector, rect.Width, rect.Height)
-		}
-		if rect.DPR <= 0 || math.IsNaN(rect.DPR) || math.IsInf(rect.DPR, 0) {
-			rect.DPR = 1.0
-		}
-
-		// Round coordinates the same way Puppeteer and chromedp do to
-		// handle fractional dimensions properly.
-		x, y := math.Round(rect.X), math.Round(rect.Y)
-		w := math.Round(rect.Width + rect.X - x)
-		h := math.Round(rect.Height + rect.Y - y)
-		if w <= 0 || h <= 0 {
-			return nil, fmt.Errorf("element %q rounded to zero dimensions", selector)
-		}
-
-		scale := downscaleFactor(w, h, rect.DPR, maxDim)
-
-		clip := &page.Viewport{
-			X:      x,
-			Y:      y,
-			Width:  w,
-			Height: h,
-			Scale:  scale,
-		}
-
-		params := page.CaptureScreenshotParams{
-			Format:                format,
-			CaptureBeyondViewport: new(true),
-			FromSurface:           new(true),
-			Clip:                  clip,
-		}
-		if quality > 0 {
-			params.Quality = new(quality)
-		}
-
-		res, err := cdp.Call(ctx, tgt, page.CaptureScreenshot, params)
-		if err != nil {
-			return nil, err
-		}
-		return res.Data, nil
+	type elemRect struct {
+		X       float64 `json:"x"`
+		Y       float64 `json:"y"`
+		Width   float64 `json:"width"`
+		Height  float64 `json:"height"`
+		DPR     float64 `json:"dpr"`
+		Clipped bool    `json:"clipped"`
 	}
+	rect, err := callOnElement[elemRect](ctx, tgt, el.ObjectID, rectFn, false)
+	if err != nil {
+		return nil, fmt.Errorf("measuring %s: %w", el.Label, err)
+	}
+	if rect.Clipped {
+		return nil, fmt.Errorf("element %s is outside its iframe viewport and cannot be captured", el.Label)
+	}
+	if rect.Width <= 0 || rect.Height <= 0 {
+		return nil, fmt.Errorf("element %s has zero dimensions (%.0fx%.0f)", el.Label, rect.Width, rect.Height)
+	}
+	if rect.DPR <= 0 || math.IsNaN(rect.DPR) || math.IsInf(rect.DPR, 0) {
+		rect.DPR = 1.0
+	}
+
+	// Round coordinates the same way Puppeteer and chromedp do to
+	// handle fractional dimensions properly.
+	x, y := math.Round(rect.X), math.Round(rect.Y)
+	w := math.Round(rect.Width + rect.X - x)
+	h := math.Round(rect.Height + rect.Y - y)
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("element %s rounded to zero dimensions", el.Label)
+	}
+
+	scale := downscaleFactor(w, h, rect.DPR, maxDim)
+	clip := &page.Viewport{
+		X:      x,
+		Y:      y,
+		Width:  w,
+		Height: h,
+		Scale:  scale,
+	}
+
+	params := page.CaptureScreenshotParams{
+		Format:                format,
+		CaptureBeyondViewport: new(true),
+		FromSurface:           new(true),
+		Clip:                  clip,
+	}
+	if quality > 0 {
+		params.Quality = new(quality)
+	}
+
+	res, err := cdp.Call(ctx, tgt, page.CaptureScreenshot, params)
+	if err != nil {
+		return nil, err
+	}
+	return res.Data, nil
 }

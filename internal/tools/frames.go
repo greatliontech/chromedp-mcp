@@ -45,7 +45,7 @@ type ListFramesOutput struct {
 func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_frames",
-		Description: "List all frames in a tab, including the main frame, same-origin in-process iframes (reachable=true), and known out-of-process cross-origin iframes (reachable=false). Pass a reachable frame's id as the optional 'frame' parameter on snapshot, query, get_dom, evaluate, or interaction tools.",
+		Description: "List all frames in a tab, including the main frame, same-origin in-process iframes (reachable=true), and known out-of-process cross-origin iframes (reachable=false). Pass a reachable frame's id as the optional 'frame' parameter on snapshot, query, get_dom, wait_for, screenshot, evaluate, or interaction tools.",
 		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListFramesInput) (*mcp.CallToolResult, ListFramesOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
