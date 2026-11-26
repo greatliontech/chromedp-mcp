@@ -857,7 +857,7 @@ func TestSnapshotRefsAndNavigationInvalidation(t *testing.T) {
 		t.Fatalf("ResolveRef before first snapshot = %v, want no active snapshot error", err)
 	}
 
-	gen := tb.SnapshotGeneration()
+	gen := tb.SnapshotGeneration("")
 	if !tb.SetSnapshotRefs(gen, map[string]SnapshotRef{
 		"e1": {BackendNodeID: cdp.BackendNodeID(42), FrameID: cdp.FrameID("main"), Role: "button", Name: "Go"},
 		"e2": {BackendNodeID: cdp.BackendNodeID(43), FrameID: cdp.FrameID("child-1"), Role: "link", Name: "Sub"},
@@ -872,13 +872,17 @@ func TestSnapshotRefsAndNavigationInvalidation(t *testing.T) {
 		t.Fatalf("ResolveRef(e99) = %v, want not found in current snapshot", err)
 	}
 
-	// Subframe invalidation removes only that frame's refs without wiping main-frame refs.
+	// Subframe invalidation removes only that frame's refs and blocks stale subframe commits.
+	subGen := tb.SnapshotGeneration(cdp.FrameID("child-1"))
 	tb.InvalidateFrameSnapshotRefs(cdp.FrameID("child-1"))
 	if _, err := tb.ResolveRef("e2"); err == nil {
 		t.Fatal("expected child frame ref e2 to be pruned")
 	}
 	if _, err := tb.ResolveRef("e1"); err != nil {
 		t.Fatalf("main-frame ref e1 unexpectedly invalidated by subframe prune: %v", err)
+	}
+	if tb.SetSnapshotRefs(subGen, map[string]SnapshotRef{"e4": {BackendNodeID: 44, FrameID: cdp.FrameID("child-1")}}) {
+		t.Fatal("SetSnapshotRefs with stale subframe generation unexpectedly succeeded")
 	}
 
 	// Main-frame navigation must invalidate snapshot refs with a stale reason AND

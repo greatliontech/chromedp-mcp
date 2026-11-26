@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -201,49 +202,54 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 		t.Errorf("invalid selector in frame took %v (err=%q), want fast failure", elapsed, errText)
 	}
 
-	// get_html inside child frame: full default, outer=true, outer=false.
-	fullHTML := callTool[GetHTMLOutput](t, "get_html", map[string]any{
-		"tab":   tabID,
-		"frame": childF.ID,
+	// get_dom(format=html) inside child frame: full default, outer=true, outer=false.
+	fullHTML := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+		"tab":    tabID,
+		"format": "html",
+		"frame":  childF.ID,
 	})
-	if !strings.Contains(fullHTML.HTML, "Child Heading") || strings.Contains(fullHTML.HTML, "Top Heading") {
-		t.Errorf("child full get_html = %q", fullHTML.HTML)
+	if !strings.Contains(fullHTML.Content, "Child Heading") || strings.Contains(fullHTML.Content, "Top Heading") {
+		t.Errorf("child full get_dom(html) = %q", fullHTML.Content)
 	}
-	outerHTML := callTool[GetHTMLOutput](t, "get_html", map[string]any{
+	outerHTML := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "html",
 		"frame":    childF.ID,
 		"selector": "#heading",
 		"outer":    true,
 	})
-	if !strings.HasPrefix(outerHTML.HTML, `<h1 id="heading"`) || !strings.HasSuffix(outerHTML.HTML, `>Child Heading</h1>`) {
-		t.Errorf("child outer get_html = %q", outerHTML.HTML)
+	if !strings.HasPrefix(outerHTML.Content, `<h1 id="heading"`) || !strings.HasSuffix(outerHTML.Content, `>Child Heading</h1>`) {
+		t.Errorf("child outer get_dom(html) = %q", outerHTML.Content)
 	}
-	innerHTML := callTool[GetHTMLOutput](t, "get_html", map[string]any{
+	innerHTML := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "html",
 		"frame":    childF.ID,
 		"selector": "#heading",
 		"outer":    false,
 	})
-	if innerHTML.HTML != "Child Heading" {
-		t.Errorf("child inner get_html = %q, want %q", innerHTML.HTML, "Child Heading")
+	if innerHTML.Content != "Child Heading" {
+		t.Errorf("child inner get_dom(html) = %q, want %q", innerHTML.Content, "Child Heading")
 	}
-	// get_html isolation: #top-only does not exist in child frame.
-	if errText := callToolExpectErr(t, "get_html", map[string]any{
+	// get_dom(html) isolation: #top-only does not exist in child frame.
+	if errText := callToolExpectErr(t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "html",
 		"frame":    childF.ID,
 		"selector": "#top-only",
 		"timeout":  150,
 	}); !strings.Contains(errText, childF.ID) {
-		t.Errorf("expected frame-scoped get_html timeout error, got %q", errText)
+		t.Errorf("expected frame-scoped get_dom(html) timeout error, got %q", errText)
 	}
 
-	// get_text inside child frame: body default, display:none, display:none ancestor, visibility:hidden.
-	bodyText := callTool[GetTextOutput](t, "get_text", map[string]any{
-		"tab":   tabID,
-		"frame": childF.ID,
+	// get_dom(format=text) inside child frame: body default, display:none, display:none ancestor, visibility:hidden.
+	bodyText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+		"tab":    tabID,
+		"format": "text",
+		"frame":  childF.ID,
 	})
-	if !strings.Contains(bodyText.Text, "Child Heading") || strings.Contains(bodyText.Text, "Top Heading") || strings.Contains(bodyText.Text, "Hidden Child") {
-		t.Errorf("child body get_text = %q", bodyText.Text)
+	if !strings.Contains(bodyText.Content, "Child Heading") || strings.Contains(bodyText.Content, "Top Heading") || strings.Contains(bodyText.Content, "Hidden Child") {
+		t.Errorf("child body get_dom(text) = %q", bodyText.Content)
 	}
 	for _, tc := range []struct {
 		selector string
@@ -254,43 +260,84 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 		{"#hidden-ancestor", "", "Inside Hidden"},
 		{"#vis-hidden", "", "Invisible Text"},
 	} {
-		off := callTool[GetTextOutput](t, "get_text", map[string]any{
-			"tab": tabID, "frame": childF.ID, "selector": tc.selector, "hidden": false,
+		off := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+			"tab": tabID, "format": "text", "frame": childF.ID, "selector": tc.selector, "hidden": false,
 		})
-		if strings.TrimSpace(off.Text) != tc.wantOff {
-			t.Errorf("child get_text(%s, hidden=false) = %q, want %q", tc.selector, off.Text, tc.wantOff)
+		if strings.TrimSpace(off.Content) != tc.wantOff {
+			t.Errorf("child get_dom(text, %s, hidden=false) = %q, want %q", tc.selector, off.Content, tc.wantOff)
 		}
-		on := callTool[GetTextOutput](t, "get_text", map[string]any{
-			"tab": tabID, "frame": childF.ID, "selector": tc.selector, "hidden": true,
+		on := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+			"tab": tabID, "format": "text", "frame": childF.ID, "selector": tc.selector, "hidden": true,
 		})
-		if on.Text != tc.wantOn {
-			t.Errorf("child get_text(%s, hidden=true) = %q, want %q", tc.selector, on.Text, tc.wantOn)
+		if on.Content != tc.wantOn {
+			t.Errorf("child get_dom(text, %s, hidden=true) = %q, want %q", tc.selector, on.Content, tc.wantOn)
 		}
 	}
-	// get_text isolation: #top-only does not exist in child frame.
-	if errText := callToolExpectErr(t, "get_text", map[string]any{
+	// get_dom(text) isolation: #top-only does not exist in child frame.
+	if errText := callToolExpectErr(t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"frame":    childF.ID,
 		"selector": "#top-only",
 		"timeout":  150,
 	}); !strings.Contains(errText, childF.ID) {
-		t.Errorf("expected frame-scoped get_text timeout error, got %q", errText)
+		t.Errorf("expected frame-scoped get_dom(text) timeout error, got %q", errText)
+	}
+
+	// snapshot(frame=childF.ID) captures child frame's AX tree with working refs
+	// usable in get_dom(ref) and evaluate(ref).
+	childSnap := callTool[SnapshotOutput](t, "snapshot", map[string]any{
+		"tab":   tabID,
+		"frame": childF.ID,
+	})
+	if !strings.Contains(childSnap.Snapshot, "Child Heading") || childSnap.RefCount == 0 {
+		t.Fatalf("child frame snapshot = %+v, want Child Heading and refs", childSnap)
+	}
+	reChildRef := regexp.MustCompile(`heading "Child Heading" \[ref=(e\d+)\]`)
+	childMatch := reChildRef.FindStringSubmatch(childSnap.Snapshot)
+	if len(childMatch) != 2 {
+		t.Fatalf("child frame snapshot missing heading ref:\n%s", childSnap.Snapshot)
+	}
+	childRef := childMatch[1]
+	childRefText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+		"tab":    tabID,
+		"format": "text",
+		"ref":    childRef,
+	})
+	if strings.TrimSpace(childRefText.Content) != "Child Heading" {
+		t.Errorf("get_dom(child ref=%s) = %q, want Child Heading", childRef, childRefText.Content)
+	}
+	childRefEval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"ref":        childRef,
+		"expression": `return el.id + ':' + window.name`,
+	})
+	if string(childRefEval.Result) != `"heading:child-frame"` {
+		t.Errorf("evaluate(child ref=%s) = %s, want \"heading:child-frame\"", childRef, childRefEval.Result)
 	}
 
 	// Dynamic same-origin iframe navigation: frame ID persists, grandchild disappears,
-	// and waitForSelector resolves #after-nav in the navigated child frame.
+	// childRef is invalidated as stale, and waitForSelector resolves #after-nav.
 	callTool[EvaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.querySelector('iframe[name="child-frame"]').src = '/child2.html'; true`,
 	})
-	navText := callTool[GetTextOutput](t, "get_text", map[string]any{
+	navText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"frame":    childF.ID,
 		"selector": "#after-nav",
 		"timeout":  3000,
 	})
-	if navText.Text != "Navigated Child" {
-		t.Errorf("post-nav child get_text = %q, want %q", navText.Text, "Navigated Child")
+	if navText.Content != "Navigated Child" {
+		t.Errorf("post-nav child get_dom(text) = %q, want %q", navText.Content, "Navigated Child")
+	}
+	if errText := callToolExpectErr(t, "get_dom", map[string]any{
+		"tab":    tabID,
+		"format": "text",
+		"ref":    childRef,
+	}); !strings.Contains(errText, "stale") {
+		t.Errorf("get_dom(navigated child ref) err = %q, want mention of stale", errText)
 	}
 	afterNavFrames := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 	if len(afterNavFrames.Frames) != 2 {
@@ -358,8 +405,9 @@ func TestListFramesOOPIFAndUnknownFrameErrors(t *testing.T) {
 	}{
 		{"evaluate", func(f string) map[string]any { return map[string]any{"tab": tabID, "frame": f, "expression": "1+1"} }},
 		{"query", func(f string) map[string]any { return map[string]any{"tab": tabID, "frame": f, "selector": "body"} }},
-		{"get_html", func(f string) map[string]any { return map[string]any{"tab": tabID, "frame": f} }},
-		{"get_text", func(f string) map[string]any { return map[string]any{"tab": tabID, "frame": f} }},
+		{"get_dom", func(f string) map[string]any { return map[string]any{"tab": tabID, "format": "html", "frame": f} }},
+		{"get_dom", func(f string) map[string]any { return map[string]any{"tab": tabID, "format": "text", "frame": f} }},
+		{"snapshot", func(f string) map[string]any { return map[string]any{"tab": tabID, "frame": f} }},
 	}
 	for _, tc := range toolCalls {
 		errOOPIF := callToolExpectErr(t, tc.name, tc.args(oopifID))

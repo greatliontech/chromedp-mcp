@@ -374,15 +374,13 @@ func TestSetEmulatedMediaDarkMode(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Default should be light.
-	type textResult struct {
-		Text string `json:"text"`
-	}
-	result := callTool[textResult](t, "get_text", map[string]any{
+	result := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "#color-scheme",
 	})
-	if result.Text != "light" {
-		t.Fatalf("expected default light, got %q", result.Text)
+	if result.Content != "light" {
+		t.Fatalf("expected default light, got %q", result.Content)
 	}
 
 	// Switch to dark mode.

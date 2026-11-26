@@ -19,23 +19,37 @@ type SnapshotRef struct {
 	Name          string
 }
 
-// SnapshotGeneration returns the tab's current document generation counter for
-// snapshot commits. Callers capture this before querying Chrome's accessibility
-// tree and pass it to SetSnapshotRefs so a main-frame navigation or crash
-// mid-snapshot cannot commit stale refs.
-func (t *Tab) SnapshotGeneration() uint64 {
-	t.snapshotMu.RLock()
-	defer t.snapshotMu.RUnlock()
-	return t.snapshotGen
+// SnapshotGenToken captures the document generation state before a snapshot
+// fetch so SetSnapshotRefs can reject commits raced by a main-frame or target
+// subframe navigation/detach.
+type SnapshotGenToken struct {
+	mainGen  uint64
+	frameID  cdp.FrameID
+	frameGen uint64
 }
 
-// SetSnapshotRefs replaces the tab's active snapshot reference table if the
-// tab's document generation still matches gen. Returns false without modifying
-// state when a main-frame navigation or crash occurred after gen was captured.
-func (t *Tab) SetSnapshotRefs(gen uint64, refs map[string]SnapshotRef) bool {
+// SnapshotGeneration captures the current generation token for main-frame
+// (frameID == "") or subframe (frameID != "") snapshot commits.
+func (t *Tab) SnapshotGeneration(frameID cdp.FrameID) SnapshotGenToken {
+	t.snapshotMu.RLock()
+	defer t.snapshotMu.RUnlock()
+	return SnapshotGenToken{
+		mainGen:  t.snapshotGen,
+		frameID:  frameID,
+		frameGen: t.snapshotFrameGen[frameID],
+	}
+}
+
+// SetSnapshotRefs replaces the tab's active snapshot reference table if no
+// invalidating main-frame or target-subframe navigation/crash occurred since
+// tok was captured.
+func (t *Tab) SetSnapshotRefs(tok SnapshotGenToken, refs map[string]SnapshotRef) bool {
 	t.snapshotMu.Lock()
 	defer t.snapshotMu.Unlock()
-	if t.snapshotGen != gen {
+	if t.snapshotGen != tok.mainGen {
+		return false
+	}
+	if tok.frameID != "" && t.snapshotFrameGen[tok.frameID] != tok.frameGen {
 		return false
 	}
 	if len(refs) == 0 {
@@ -68,30 +82,42 @@ func (t *Tab) ResolveRef(ref string) (SnapshotRef, error) {
 	return SnapshotRef{}, fmt.Errorf("ref %q not found in current snapshot — call snapshot to inspect available refs", ref)
 }
 
-// InvalidateSnapshotRefs advances the document generation (blocking any
+// InvalidateSnapshotRefs advances the main document generation (blocking any
 // in-flight snapshot commit), clears the active snapshot ref table, and
 // records the staleness reason when a snapshot was previously taken.
 func (t *Tab) InvalidateSnapshotRefs(reason string) {
 	t.snapshotMu.Lock()
 	defer t.snapshotMu.Unlock()
 	t.snapshotGen++
+	clear(t.snapshotFrameGen)
 	t.snapshotRefs = nil
 	if t.snapshotHasEverSet {
 		t.snapshotStaleReason = reason
 	}
 }
 
-// InvalidateFrameSnapshotRefs prunes refs belonging to frameID without
-// invalidating refs in other frames (e.g. main frame).
+// InvalidateFrameSnapshotRefs advances frameID's generation (blocking in-flight
+// subframe snapshot commits) and prunes refs belonging to frameID without
+// invalidating refs in other frames. If all active refs belonged to frameID,
+// marks the snapshot stale with a clear frame-specific reason.
 func (t *Tab) InvalidateFrameSnapshotRefs(frameID cdp.FrameID) {
 	if frameID == "" {
 		return
 	}
 	t.snapshotMu.Lock()
 	defer t.snapshotMu.Unlock()
+	if t.snapshotFrameGen == nil {
+		t.snapshotFrameGen = make(map[cdp.FrameID]uint64)
+	}
+	t.snapshotFrameGen[frameID]++
+	removed := 0
 	for k, r := range t.snapshotRefs {
 		if r.FrameID == frameID {
 			delete(t.snapshotRefs, k)
+			removed++
 		}
+	}
+	if removed > 0 && len(t.snapshotRefs) == 0 {
+		t.snapshotStaleReason = "frame navigated or detached"
 	}
 }

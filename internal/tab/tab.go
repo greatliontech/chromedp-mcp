@@ -125,6 +125,7 @@ type Tab struct {
 	// never held across CDP I/O).
 	snapshotMu          sync.RWMutex
 	snapshotGen         uint64
+	snapshotFrameGen    map[cdp.FrameID]uint64
 	snapshotRefs        map[string]SnapshotRef
 	snapshotHasEverSet  bool
 	snapshotStaleReason string

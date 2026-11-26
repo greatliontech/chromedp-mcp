@@ -51,6 +51,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerTabTools(s, mgr)
 	registerNavigationTools(s, mgr)
 	registerVisualTools(s, mgr, opts)
+	registerSnapshotTools(s, mgr)
 	registerDOMTools(s, mgr)
 	registerFrameTools(s, mgr)
 	registerConsoleTools(s, mgr)

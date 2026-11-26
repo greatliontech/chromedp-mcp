@@ -68,12 +68,13 @@ func TestMultiBrowserTabRoutingAndActivate(t *testing.T) {
 	_ = t2
 
 	// b2 is currently active, but explicit tab=t1 must still reach t1 in b1.
-	txt := callTool[GetTextOutput](t, "get_text", map[string]any{
+	txt := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      t1.TabID,
+		"format":   "text",
 		"selector": "#title",
 	})
-	if strings.TrimSpace(txt.Text) != "Hello World" {
-		t.Fatalf("get_text(tab=t1) = %q, want Hello World", txt.Text)
+	if strings.TrimSpace(txt.Content) != "Hello World" {
+		t.Fatalf("get_dom(tab=t1) = %q, want Hello World", txt.Content)
 	}
 
 	// Activating t1 must also switch the active browser to b1 so default-tab
@@ -310,10 +311,10 @@ func TestActiveTabDefault(t *testing.T) {
 	})
 	defer closeTab(t, tabOut.TabID)
 
-	// Call get_text WITHOUT the tab parameter — should use the active tab.
-	out := callTool[GetTextOutput](t, "get_text", map[string]any{})
-	if !strings.Contains(out.Text, "Page Two") {
-		t.Errorf("get_text without tab param = %q, want to contain 'Page Two'", out.Text)
+	// Call get_dom WITHOUT the tab parameter — should use the active tab.
+	out := callTool[GetDOMOutput](t, "get_dom", map[string]any{"format": "text"})
+	if !strings.Contains(out.Content, "Page Two") {
+		t.Errorf("get_dom without tab param = %q, want to contain 'Page Two'", out.Content)
 	}
 }
 

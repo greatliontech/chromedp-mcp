@@ -60,12 +60,13 @@ func TestGoBackSPA(t *testing.T) {
 	}
 
 	// The DOM should also reflect the change.
-	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "#page",
 	})
-	if !strings.Contains(text.Text, "Home") {
-		t.Errorf("after go_back, #page text = %q, want 'Home'", text.Text)
+	if !strings.Contains(text.Content, "Home") {
+		t.Errorf("after go_back, #page text = %q, want 'Home'", text.Content)
 	}
 }
 
@@ -94,12 +95,13 @@ func TestGoForwardSPA(t *testing.T) {
 		t.Fatalf("after go_forward, title = %s, want 'SPA About'", out.Result)
 	}
 
-	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "#page",
 	})
-	if !strings.Contains(text.Text, "About") {
-		t.Errorf("after go_forward, #page text = %q, want 'About'", text.Text)
+	if !strings.Contains(text.Content, "About") {
+		t.Errorf("after go_forward, #page text = %q, want 'About'", text.Content)
 	}
 }
 
@@ -898,26 +900,28 @@ func TestGoBackDOMWorks(t *testing.T) {
 	})
 
 	// Verify we're on the second page.
-	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if !strings.Contains(text.Text, "Interaction") {
-		t.Fatalf("expected interaction page heading, got %q", text.Text)
+	if !strings.Contains(text.Content, "Interaction") {
+		t.Fatalf("expected interaction page heading, got %q", text.Content)
 	}
 
 	// Go back via MCP tool.
 	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
 
-	// get_text must work after go_back.
-	text = callTool[GetTextOutput](t, "get_text", map[string]any{
+	// get_dom(text) must work after go_back.
+	text = callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if text.Text == "" {
-		t.Fatal("get_text returned empty after go_back")
+	if text.Content == "" {
+		t.Fatal("get_dom(text) returned empty after go_back")
 	}
-	t.Logf("get_text after go_back: %q", text.Text)
+	t.Logf("get_dom(text) after go_back: %q", text.Content)
 
 	// query must work after go_back.
 	qout := callTool[QueryOutput](t, "query", map[string]any{
@@ -934,13 +938,14 @@ func TestGoBackDOMWorks(t *testing.T) {
 		"selector": "h1",
 	})
 
-	// get_html must work after go_back.
-	html := callTool[GetHTMLOutput](t, "get_html", map[string]any{
+	// get_dom(html) must work after go_back.
+	html := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "html",
 		"selector": "h1",
 	})
-	if html.HTML == "" {
-		t.Fatal("get_html returned empty after go_back")
+	if html.Content == "" {
+		t.Fatal("get_dom(html) returned empty after go_back")
 	}
 }
 
@@ -962,12 +967,13 @@ func TestGoForwardDOMWorks(t *testing.T) {
 	callTool[struct{}](t, "go_forward", map[string]any{"tab": tabID})
 
 	// Selector-based queries must work after go_forward.
-	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if !strings.Contains(text.Text, "Interaction") {
-		t.Fatalf("expected interaction page after go_forward, got %q", text.Text)
+	if !strings.Contains(text.Content, "Interaction") {
+		t.Fatalf("expected interaction page after go_forward, got %q", text.Content)
 	}
 }
 
@@ -988,24 +994,26 @@ func TestGoBackMultipleHops(t *testing.T) {
 
 	// Go back to interaction.
 	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
-	text := callTool[GetTextOutput](t, "get_text", map[string]any{
+	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if !strings.Contains(text.Text, "Interaction") {
-		t.Fatalf("first go_back: expected interaction, got %q", text.Text)
+	if !strings.Contains(text.Content, "Interaction") {
+		t.Fatalf("first go_back: expected interaction, got %q", text.Content)
 	}
 
 	// Go back to index.
 	callTool[struct{}](t, "go_back", map[string]any{"tab": tabID})
-	text = callTool[GetTextOutput](t, "get_text", map[string]any{
+	text = callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if text.Text == "" {
-		t.Fatal("second go_back: get_text returned empty")
+	if text.Content == "" {
+		t.Fatal("second go_back: get_dom(text) returned empty")
 	}
-	t.Logf("second go_back h1: %q", text.Text)
+	t.Logf("second go_back h1: %q", text.Content)
 }
 
 // TestGoBackThenInteract verifies you can interact with the page after

@@ -65,21 +65,21 @@ func TestEvaluateSelectorTrailingLineCommentAndValidation(t *testing.T) {
 	}
 }
 
-func TestEvaluateAndAccessibilityTreeEmitOutputSchema(t *testing.T) {
+func TestEvaluateAndSnapshotEmitOutputSchema(t *testing.T) {
 	res, err := harness.session.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
 	found := map[string]bool{}
 	for _, tool := range res.Tools {
-		if tool.Name == "evaluate" || tool.Name == "get_accessibility_tree" {
+		if tool.Name == "evaluate" || tool.Name == "snapshot" || tool.Name == "get_dom" {
 			found[tool.Name] = true
 			if tool.OutputSchema == nil {
 				t.Errorf("tool %q has nil OutputSchema", tool.Name)
 			}
 		}
 	}
-	if !found["evaluate"] || !found["get_accessibility_tree"] {
+	if !found["evaluate"] || !found["snapshot"] || !found["get_dom"] {
 		t.Fatalf("missing expected tools in ListTools: %v", found)
 	}
 }

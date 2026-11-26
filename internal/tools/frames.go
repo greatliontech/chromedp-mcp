@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -46,7 +45,7 @@ type ListFramesOutput struct {
 func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_frames",
-		Description: "List all frames in a tab, including the main frame, same-origin in-process iframes (reachable=true), and known out-of-process cross-origin iframes (reachable=false). Pass a reachable frame's id as the optional 'frame' parameter on evaluate, query, get_html, or get_text.",
+		Description: "List all frames in a tab, including the main frame, same-origin in-process iframes (reachable=true), and known out-of-process cross-origin iframes (reachable=false). Pass a reachable frame's id as the optional 'frame' parameter on snapshot, query, get_dom, or evaluate.",
 		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListFramesInput) (*mcp.CallToolResult, ListFramesOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
@@ -167,103 +166,6 @@ func evalOptsForFrame(uniqueCtxID string, extra ...chromedp.EvaluateOption) []ch
 	opts = append(opts, evalInUniqueContext(uniqueCtxID))
 	opts = append(opts, extra...)
 	return opts
-}
-
-// frameElementJS wraps a JS body that reads/operates on the first element
-// matching selector, throwing a clear error if the element disappeared after
-// waiting.
-func frameElementJS(selector, body string) string {
-	qSel := jsQuote(selector)
-	return fmt.Sprintf("(function() {\nconst el = document.querySelector(%s);\nif (!el) throw new Error('selector ' + %s + ' matched no elements');\n%s\n})()", qSel, qSel, body)
-}
-
-// waitForSelector waits for selector to exist in the top frame (frameID == "")
-// or inside frameID's execution context. When frameID is non-empty, it returns
-// the live UniqueContextID (re-resolving across same-origin subframe
-// navigations while failing fast on CSS syntax errors, frame detachment, or
-// parent context cancellation).
-func waitForSelector(sctx, tctx context.Context, t *tab.Tab, uniqueCtxID, frameID, selector string) (string, error) {
-	if frameID == "" {
-		if err := chromedp.Do(sctx, chromedp.WaitReady(chromedp.CSS(selector))); err != nil {
-			return "", selectorError(tctx, selector, err)
-		}
-		return "", nil
-	}
-
-	checkJS := fmt.Sprintf(`document.querySelector(%s) !== null`, jsQuote(selector))
-	curCtxID := uniqueCtxID
-	deadCtxIDs := make(map[string]bool)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if curCtxID != "" {
-			found, err := chromedp.Run(sctx, chromedp.Evaluate[bool](checkJS, evalInUniqueContext(curCtxID)))
-			if err == nil {
-				if found {
-					return curCtxID, nil
-				}
-			} else {
-				if tctx.Err() != nil {
-					return "", err
-				}
-				if errors.Is(sctx.Err(), context.DeadlineExceeded) {
-					return "", fmt.Errorf("selector %q not found in frame %q: %w", selector, frameID, sctx.Err())
-				}
-				var exc *chromedp.ExceptionError
-				if errors.As(err, &exc) {
-					return "", fmt.Errorf("selector %q in frame %q: %w", selector, frameID, err)
-				}
-				// Re-check frame state when a context vanishes mid-wait (e.g.
-				// iframe navigation): record curCtxID as dead so we never
-				// re-select it before executionContextDestroyed drains, fail
-				// fast if detached or swapped to an OOPIF, switch to a new
-				// context immediately if ready, or retry while known.
-				if isStaleContextError(err) {
-					deadCtxIDs[curCtxID] = true
-					ec, reachable, known, swapped := t.ExecContexts.ContextForFrame(frameID)
-					if !known {
-						return "", fmt.Errorf("frame %q detached while waiting for selector %q", frameID, selector)
-					}
-					if swapped {
-						return "", fmt.Errorf("frame %q became out-of-process (cross-origin) while waiting for selector %q", frameID, selector)
-					}
-					if reachable && !deadCtxIDs[ec.UniqueID] {
-						curCtxID = ec.UniqueID
-						continue
-					}
-					curCtxID = ""
-				} else {
-					return "", err
-				}
-			}
-		} else {
-			ec, reachable, known, swapped := t.ExecContexts.ContextForFrame(frameID)
-			if !known {
-				return "", fmt.Errorf("frame %q detached while waiting for selector %q", frameID, selector)
-			}
-			if swapped {
-				return "", fmt.Errorf("frame %q became out-of-process (cross-origin) while waiting for selector %q", frameID, selector)
-			}
-			if reachable && !deadCtxIDs[ec.UniqueID] {
-				curCtxID = ec.UniqueID
-				continue
-			}
-		}
-
-		select {
-		case <-tctx.Done():
-			return "", tctx.Err()
-		case <-sctx.Done():
-			if curCtxID == "" {
-				if _, reachable, known, _ := t.ExecContexts.ContextForFrame(frameID); known && !reachable {
-					return "", fmt.Errorf("frame %q has no reachable execution context while waiting for selector %q: %w", frameID, selector, sctx.Err())
-				}
-			}
-			return "", fmt.Errorf("selector %q not found in frame %q: %w", selector, frameID, sctx.Err())
-		case <-ticker.C:
-		}
-	}
 }
 
 // isStaleContextError reports whether err is CDP's execution-context-gone

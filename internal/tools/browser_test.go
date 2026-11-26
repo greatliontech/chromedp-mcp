@@ -174,12 +174,13 @@ func TestBrowserConnectAdoptsExistingTabsWithoutRogueBlankTab(t *testing.T) {
 	}
 
 	// Immediately inspect an adopted tab without calling tab_new or navigate.
-	textOut := callTool[GetTextOutput](t, "get_text", map[string]any{
+	textOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      activeTab.ID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if strings.TrimSpace(textOut.Text) == "" {
-		t.Errorf("expected non-empty h1 text from adopted tab, got %q", textOut.Text)
+	if strings.TrimSpace(textOut.Content) == "" {
+		t.Errorf("expected non-empty h1 text from adopted tab, got %q", textOut.Content)
 	}
 
 	// Disconnect via browser_close — must detach and leave both user tabs open.
@@ -257,12 +258,13 @@ func TestBrowserConnectSkipsWedgedTabWithoutHanging(t *testing.T) {
 	if len(connOut.Tabs) != 1 || !strings.HasSuffix(connOut.Tabs[0].URL, "/page2.html") {
 		t.Fatalf("expected only healthy page2.html tab to be adopted, got %+v", connOut.Tabs)
 	}
-	textOut := callTool[GetTextOutput](t, "get_text", map[string]any{
+	textOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
 		"tab":      connOut.Tabs[0].ID,
+		"format":   "text",
 		"selector": "h1",
 	})
-	if strings.TrimSpace(textOut.Text) == "" {
-		t.Errorf("expected h1 text on healthy adopted tab, got %q", textOut.Text)
+	if strings.TrimSpace(textOut.Content) == "" {
+		t.Errorf("expected h1 text on healthy adopted tab, got %q", textOut.Content)
 	}
 }
 
@@ -629,8 +631,9 @@ func TestBrowserKilledExternally(t *testing.T) {
 	var errText string
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		result := callToolRaw(t, "get_text", map[string]any{
+		result := callToolRaw(t, "get_dom", map[string]any{
 			"tab":     tabID,
+			"format":  "text",
 			"timeout": 500,
 		})
 		if result.IsError {
@@ -640,7 +643,7 @@ func TestBrowserKilledExternally(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if errText == "" {
-		t.Error("get_text on killed browser should error")
+		t.Error("get_dom on killed browser should error")
 	}
 	if !strings.Contains(errText, "no longer running") && !strings.Contains(errText, "not found") {
 		t.Logf("error text: %s", errText)
