@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/chromedp/cdproto/target"
@@ -20,7 +21,8 @@ import (
 type Manager struct {
 	mu        sync.RWMutex
 	tabs      map[string]*Tab
-	order     []string // MRU order (most recent last; tail is active)
+	attaching map[target.ID]chan struct{} // in-flight Attach dedup by Chrome target ID
+	order     []string                    // MRU order (most recent last; tail is active)
 	closed    bool
 	parentCtx context.Context
 }
@@ -29,6 +31,7 @@ type Manager struct {
 func NewManager(parentCtx context.Context) *Manager {
 	return &Manager{
 		tabs:      make(map[string]*Tab),
+		attaching: make(map[target.ID]chan struct{}),
 		parentCtx: parentCtx,
 	}
 }
@@ -44,7 +47,7 @@ func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
 		return nil, fmt.Errorf("tab manager is closed")
 	}
 
-	t, err := New(m.parentCtx, ctx, "")
+	t, err := New(m.parentCtx, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -55,57 +58,153 @@ func (m *Manager) NewTab(ctx context.Context) (*Tab, error) {
 		t.Close()
 		return nil, fmt.Errorf("tab manager is closed")
 	}
-	m.registerTabLocked(t)
+	if !m.registerTabLocked(t, true) {
+		m.mu.Unlock()
+		t.Close()
+		return nil, chromedp.ErrTargetDetached
+	}
 	m.mu.Unlock()
 	return t, nil
 }
 
-// AttachTarget attaches to an existing Chrome target (using WithDetachOnCancel
-// so failed attaches, concurrent dedup, and browser disconnect preserve the
-// target, while Close closes it explicitly via CloseTarget) and registers it
-// as the active tab. If the target is already tracked, returns the existing Tab.
-func (m *Manager) AttachTarget(ctx context.Context, targetID target.ID) (*Tab, error) {
+// HasTarget reports whether a Chrome target ID is already tracked or currently
+// being attached by this manager.
+func (m *Manager) HasTarget(targetID target.ID) bool {
+	if targetID == "" {
+		return false
+	}
 	m.mu.RLock()
-	if m.closed {
-		m.mu.RUnlock()
-		return nil, fmt.Errorf("tab manager is closed")
+	defer m.mu.RUnlock()
+	if m.findByTargetLocked(targetID) != nil {
+		return true
 	}
-	for _, existing := range m.tabs {
-		if existing.targetID == targetID {
-			m.mu.RUnlock()
-			return existing, nil
-		}
-	}
-	m.mu.RUnlock()
+	_, busy := m.attaching[targetID]
+	return busy
+}
 
-	t, err := Attach(m.parentCtx, ctx, "", targetID)
-	if err != nil {
+// AttachTarget attaches to an existing Chrome target and registers it as the
+// active tab. If the target is already tracked, returns the existing Tab.
+func (m *Manager) AttachTarget(ctx context.Context, targetID target.ID) (*Tab, error) {
+	return m.attachTarget(ctx, targetID, true)
+}
+
+// AttachBackgroundTarget attaches to a newly opened popup / target="_blank"
+// target without stealing active focus from an existing active tab (it becomes
+// active only if no other tab is currently open).
+func (m *Manager) AttachBackgroundTarget(ctx context.Context, targetID target.ID) (*Tab, error) {
+	return m.attachTarget(ctx, targetID, false)
+}
+
+func (m *Manager) attachTarget(ctx context.Context, targetID target.ID, makeActive bool) (*Tab, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if targetID == "" {
+		return nil, fmt.Errorf("tab attach: target ID is required")
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("tab manager is closed")
+		}
+		if existing := m.findByTargetLocked(targetID); existing != nil {
+			m.mu.Unlock()
+			return existing, nil
+		}
+		if waitCh, busy := m.attaching[targetID]; busy {
+			m.mu.Unlock()
+			select {
+			case <-waitCh:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		done := make(chan struct{})
+		m.attaching[targetID] = done
+		m.mu.Unlock()
+
+		t, err := m.runAttachAndRegister(ctx, targetID, makeActive, done)
+		return t, err
+	}
+}
+
+func (m *Manager) runAttachAndRegister(ctx context.Context, targetID target.ID, makeActive bool, done chan struct{}) (*Tab, error) {
+	cleaned := false
+	cleanupAttachingLocked := func() {
+		if !cleaned {
+			delete(m.attaching, targetID)
+			close(done)
+			cleaned = true
+		}
+	}
+	defer func() {
+		if !cleaned {
+			m.mu.Lock()
+			cleanupAttachingLocked()
+			m.mu.Unlock()
+		}
+	}()
+
+	t, err := Attach(m.parentCtx, ctx, targetID)
 
 	m.mu.Lock()
+	cleanupAttachingLocked()
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
 	if m.closed {
 		m.mu.Unlock()
 		t.Close()
 		return nil, fmt.Errorf("tab manager is closed")
 	}
-	for _, existing := range m.tabs {
-		if existing.targetID == targetID {
-			m.mu.Unlock()
-			t.Close()
-			return existing, nil
-		}
+	if existing := m.findByTargetLocked(targetID); existing != nil {
+		m.mu.Unlock()
+		t.Close()
+		return existing, nil
 	}
-	m.registerTabLocked(t)
+	if !m.registerTabLocked(t, makeActive) {
+		m.mu.Unlock()
+		t.Close()
+		return nil, chromedp.ErrTargetDetached
+	}
 	m.mu.Unlock()
 	return t, nil
 }
 
-// registerTabLocked assigns a unique tab ID, inserts t at the MRU tail, and
-// watches for external target detachment (e.g. user closing an adopted tab in
-// Chrome or page calling window.close()) so dead tabs are pruned automatically.
+func (m *Manager) findByTargetLocked(targetID target.ID) *Tab {
+	for _, existing := range m.tabs {
+		if existing.targetID == targetID {
+			return existing
+		}
+	}
+	return nil
+}
+
+// registerTabLocked assigns a unique tab ID, inserts t into m.order (at tail if
+// makeActive or empty, else at head so background popups do not steal active
+// focus), and watches for external target detachment so dead tabs are pruned.
+// Returns false without registering if t is already detached.
 // Must be called with m.mu held for writing.
-func (m *Manager) registerTabLocked(t *Tab) {
+func (m *Manager) registerTabLocked(t *Tab, makeActive bool) bool {
+	detachedCh, detErr := chromedp.Detached(t.ctx)
+	if detErr == nil {
+		select {
+		case <-detachedCh:
+			return false
+		default:
+		}
+	}
+
 	var newID string
 	for {
 		newID = id.Generate()
@@ -115,9 +214,13 @@ func (m *Manager) registerTabLocked(t *Tab) {
 	}
 	t.ID = newID
 	m.tabs[newID] = t
-	m.order = append(m.order, newID)
+	if makeActive || len(m.order) == 0 {
+		m.order = append(m.order, newID)
+	} else {
+		m.order = slices.Insert(m.order, 0, newID)
+	}
 
-	if detachedCh, err := chromedp.Detached(t.ctx); err == nil {
+	if detErr == nil {
 		go func() {
 			select {
 			case <-detachedCh:
@@ -126,6 +229,7 @@ func (m *Manager) registerTabLocked(t *Tab) {
 			}
 		}()
 	}
+	return true
 }
 
 // pruneDetached removes an externally detached tab from the manager and
@@ -137,7 +241,7 @@ func (m *Manager) pruneDetached(id string, t *Tab) {
 		return
 	}
 	delete(m.tabs, id)
-	m.removeFromOrder(id)
+	m.removeFromOrderLocked(id)
 	m.mu.Unlock()
 	t.Close()
 }
@@ -164,11 +268,36 @@ func (m *Manager) Active() *Tab {
 	return m.tabs[activeID]
 }
 
-// Activate sets a tab as the active tab by ID.
-func (m *Manager) Activate(id string) error {
+// Activate focuses the tab in Chrome via Page.bringToFront and promotes it to
+// the active tab in MRU order.
+func (m *Manager) Activate(ctx context.Context, id string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.RLock()
+	t, ok := m.tabs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("tab %q: %w", id, ErrNotFound)
+	}
+
+	if err := t.BringToFront(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, chromedp.ErrTargetDetached) || t.ctx.Err() != nil {
+			m.pruneDetached(id, t)
+			return fmt.Errorf("tab %q: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("bring tab %q to front: %w", id, err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.tabs[id]; !ok {
+	if m.tabs[id] != t {
 		return fmt.Errorf("tab %q: %w", id, ErrNotFound)
 	}
 	m.touchLocked(id)
@@ -187,7 +316,7 @@ func (m *Manager) Close(id string) error {
 		return fmt.Errorf("tab %q: %w", id, ErrNotFound)
 	}
 	delete(m.tabs, id)
-	m.removeFromOrder(id)
+	m.removeFromOrderLocked(id)
 	m.mu.Unlock()
 
 	t.CloseTarget(m.parentCtx)
@@ -203,8 +332,6 @@ func (m *Manager) List(ctx context.Context) ([]TabInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Snapshot tab pointers in deterministic order under the lock, then
-	// release before doing CDP I/O.
 	m.mu.RLock()
 	tabs := make([]*Tab, 0, len(m.order))
 	for _, oid := range m.order {
@@ -249,7 +376,7 @@ func (m *Manager) List(ctx context.Context) ([]TabInfo, error) {
 }
 
 // CloseAll closes all tabs and marks the manager closed so concurrent in-flight
-// NewTab calls cannot leak live targets after shutdown.
+// NewTab or Attach calls cannot leak live targets after shutdown.
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
 	m.closed = true
@@ -291,8 +418,6 @@ func (m *Manager) Resolve(id string) (*Tab, error) {
 	return nil, fmt.Errorf("no open tabs — use tab_new to create one")
 }
 
-// activeIDLocked returns the active tab ID (the MRU tail), or "" when empty.
-// Must be called with m.mu held (read or write).
 func (m *Manager) activeIDLocked() string {
 	if len(m.order) == 0 {
 		return ""
@@ -300,18 +425,13 @@ func (m *Manager) activeIDLocked() string {
 	return m.order[len(m.order)-1]
 }
 
-// touchLocked moves an ID to the end of the MRU order. Must be called with mu held.
 func (m *Manager) touchLocked(id string) {
-	m.removeFromOrder(id)
+	m.removeFromOrderLocked(id)
 	m.order = append(m.order, id)
 }
 
-// removeFromOrder removes an ID from the order slice. Must be called with mu held.
-func (m *Manager) removeFromOrder(id string) {
-	for i, oid := range m.order {
-		if oid == id {
-			m.order = append(m.order[:i], m.order[i+1:]...)
-			return
-		}
+func (m *Manager) removeFromOrderLocked(id string) {
+	if i := slices.Index(m.order, id); i >= 0 {
+		m.order = slices.Delete(m.order, i, i+1)
 	}
 }

@@ -137,17 +137,29 @@ func TruncateUTF8Bytes(b []byte, maxBytes int) ([]byte, bool) {
 	if len(b) <= maxBytes {
 		return b, false
 	}
-	out := b[:maxBytes]
-	// Walk back at most 3 bytes to check if the cut landed inside a multi-byte rune.
-	for i := 1; i <= 3 && i <= len(out); i++ {
-		if utf8.RuneStart(out[len(out)-i]) {
-			if !utf8.FullRune(out[len(out)-i:]) {
-				out = out[:len(out)-i]
+	return trimTrailingPartialUTF8(b[:maxBytes]), true
+}
+
+// TrimUTF8Slice trims partial multi-byte UTF-8 runes from both ends of a slice
+// cut from a known-valid UTF-8 byte sequence in O(1) time (at most 3 bytes per
+// end since UTF-8 codepoints are at most 4 bytes long).
+func TrimUTF8Slice(b []byte) []byte {
+	for len(b) > 0 && !utf8.RuneStart(b[0]) {
+		b = b[1:]
+	}
+	return trimTrailingPartialUTF8(b)
+}
+
+func trimTrailingPartialUTF8(b []byte) []byte {
+	for i := 1; i <= 3 && i <= len(b); i++ {
+		if utf8.RuneStart(b[len(b)-i]) {
+			if !utf8.FullRune(b[len(b)-i:]) {
+				b = b[:len(b)-i]
 			}
 			break
 		}
 	}
-	return out, true
+	return b
 }
 
 // TruncateUTF8 caps a UTF-8 string at maxBytes, trimming back any partial

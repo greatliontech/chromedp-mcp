@@ -93,10 +93,10 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tab_activate",
-		Description: "Set a tab as the active tab by ID.",
+		Description: "Set a tab as the active tab by ID and bring it to the front.",
 		Annotations: idempotentWriteAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabActivateInput) (*mcp.CallToolResult, struct{}, error) {
-		if err := mgr.ActivateTab(input.Tab); err != nil {
+		if err := mgr.ActivateTab(ctx, input.Tab); err != nil {
 			return nil, struct{}{}, err
 		}
 		return nil, struct{}{}, nil

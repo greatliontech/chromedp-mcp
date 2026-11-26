@@ -2,8 +2,10 @@ package collector
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
@@ -137,5 +139,80 @@ func TestPerformanceLCPAndNilGuards(t *testing.T) {
 	p.Clear()
 	if len(p.PeekLayoutShifts(0)) != 0 || len(p.PeekLCP(0)) != 0 {
 		t.Error("expected both buffers empty after Clear")
+	}
+}
+
+func TestComputeCLSSessionWindows(t *testing.T) {
+	base := time.Unix(1700000000, 0)
+	mk := func(sec float64, val float64, recent bool) LayoutShiftEntry {
+		return LayoutShiftEntry{
+			Value:          val,
+			HadRecentInput: recent,
+			Timestamp:      base.Add(time.Duration(sec * float64(time.Second))),
+		}
+	}
+
+	cases := []struct {
+		name   string
+		shifts []LayoutShiftEntry
+		want   float64
+	}{
+		{"empty", nil, 0},
+		{"recent_input_excluded", []LayoutShiftEntry{mk(0, 0.5, true)}, 0},
+		{"single_window", []LayoutShiftEntry{
+			mk(0.0, 0.1, false),
+			mk(0.5, 0.2, false),
+			mk(0.8, 0.9, true), // ignored
+			mk(1.2, 0.05, false),
+		}, 0.35},
+		{"gap_over_1s_splits_window_picks_max", []LayoutShiftEntry{
+			mk(0.0, 0.10, false),
+			mk(0.9, 0.10, false), // window 1 = 0.20
+			mk(2.0, 0.15, false), // gap 1.1s > 1s -> window 2 starts
+			mk(2.5, 0.25, false), // window 2 = 0.40
+		}, 0.40},
+		{"duration_over_5s_splits_window", []LayoutShiftEntry{
+			mk(0.0, 0.10, false),
+			mk(0.9, 0.10, false),
+			mk(1.8, 0.10, false),
+			mk(2.7, 0.10, false),
+			mk(3.6, 0.10, false),
+			mk(4.5, 0.10, false), // window 1 = 0.60 (dur 4.5s < 5s)
+			mk(5.0, 0.20, false), // dur 5.0s >= 5s -> window 2 = 0.20
+		}, 0.60},
+		{"sub_1s_gap_and_sub_5s_dur_stay_in_window", []LayoutShiftEntry{
+			mk(0.000, 0.10, false),
+			mk(0.999, 0.10, false),
+			mk(1.998, 0.10, false),
+			mk(2.997, 0.10, false),
+			mk(3.996, 0.10, false),
+			mk(4.995, 0.10, false),
+		}, 0.60},
+		{"exact_1s_gap_splits_window", []LayoutShiftEntry{
+			mk(0.0, 0.10, false),
+			mk(1.0, 0.25, false), // gap == 1s starts new window
+		}, 0.25},
+		{"non_finite_and_non_positive_values_ignored", []LayoutShiftEntry{
+			mk(0.0, 0.10, false),
+			mk(0.1, math.NaN(), false),
+			mk(0.2, math.Inf(1), false),
+			mk(0.3, math.Inf(-1), false),
+			mk(0.4, -0.5, false),
+			mk(0.5, 0.0, false),
+			mk(0.6, 0.30, false),
+		}, 0.40},
+		{"non_monotonic_timestamp_starts_new_window", []LayoutShiftEntry{
+			mk(2.0, 0.10, false),
+			mk(1.5, 0.25, false), // earlier than prevTime -> splits window
+		}, 0.25},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ComputeCLS(tc.shifts)
+			if math.IsNaN(got) || math.IsInf(got, 0) || math.Abs(got-tc.want) > 1e-9 {
+				t.Errorf("ComputeCLS = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

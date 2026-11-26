@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/greatliontech/chromedp-mcp/internal/id"
@@ -34,7 +35,7 @@ func NewManager(parentCtx context.Context) *Manager {
 // ctx bounds browser startup without tying the browser's lifetime to ctx.
 func (m *Manager) Launch(ctx context.Context, opts LaunchOptions) (*Browser, error) {
 	return m.startAndRegister(func() (*Browser, error) {
-		return Launch(m.parentCtx, ctx, "", opts)
+		return Launch(m.parentCtx, ctx, opts)
 	})
 }
 
@@ -43,7 +44,7 @@ func (m *Manager) Launch(ctx context.Context, opts LaunchOptions) (*Browser, err
 // lifetime to ctx.
 func (m *Manager) Connect(ctx context.Context, url string, opts ConnectOptions) (*Browser, error) {
 	return m.startAndRegister(func() (*Browser, error) {
-		return Connect(m.parentCtx, ctx, "", url, opts)
+		return Connect(m.parentCtx, ctx, url, opts)
 	})
 }
 
@@ -281,16 +282,22 @@ func (m *Manager) CloseTab(tabID string) error {
 	return fmt.Errorf("tab %q: %w", tabID, tab.ErrNotFound)
 }
 
-// ActivateTab finds a tab by ID across all live browsers, activates it inside
-// its owning browser, and makes that browser the active browser so subsequent
-// default-tab calls target the activated tab.
-func (m *Manager) ActivateTab(tabID string) error {
+// ActivateTab finds a tab by ID across all live browsers, brings it to the
+// front and activates it inside its owning browser, and makes that browser
+// the active browser so subsequent default-tab calls target the activated tab.
+func (m *Manager) ActivateTab(ctx context.Context, tabID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	live := m.liveBrowsersMRU()
 	if len(live) == 0 {
 		return fmt.Errorf("no browser running — use browser_launch or browser_connect first")
 	}
 	for _, b := range live {
-		err := b.Tabs.Activate(tabID)
+		err := b.Tabs.Activate(ctx, tabID)
 		if err == nil {
 			m.mu.Lock()
 			if m.browsers[b.ID] != b {
@@ -382,13 +389,8 @@ func (m *Manager) removeLocked(id string) {
 	m.removeFromOrderLocked(id)
 }
 
-// removeFromOrderLocked removes an ID from the MRU order slice.
-// Must be called with m.mu held.
 func (m *Manager) removeFromOrderLocked(id string) {
-	for i, oid := range m.order {
-		if oid == id {
-			m.order = append(m.order[:i], m.order[i+1:]...)
-			return
-		}
+	if i := slices.Index(m.order, id); i >= 0 {
+		m.order = slices.Delete(m.order, i, i+1)
 	}
 }

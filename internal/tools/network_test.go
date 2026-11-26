@@ -138,9 +138,9 @@ func TestValidateRangeApplyByteRangeAndUTF8Trim(t *testing.T) {
 
 	// Mid-rune cuts at both ends of a 4-byte emoji + 2-byte accented string.
 	raw := []byte("🚀é€") // 4 + 2 + 3 = 9 bytes
-	mid := trimByteSliceToValidUTF8(raw[1 : len(raw)-1])
-	if !utf8.Valid(mid) || string(mid) != "é" {
-		t.Errorf("trimByteSliceToValidUTF8(mid) = %q (valid=%v), want \"é\"", mid, utf8.Valid(mid))
+	out := encodeBodySlice(raw, 1, int64(len(raw)-1))
+	if out.Base64Encoded || !utf8.ValidString(out.Body) || out.Body != "é" {
+		t.Errorf("encodeBodySlice(mid) = %+v, want text \"é\"", out)
 	}
 }
 

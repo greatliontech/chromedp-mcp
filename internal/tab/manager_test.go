@@ -3,12 +3,16 @@ package tab
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -128,7 +132,7 @@ func TestActivateAndMRU(t *testing.T) {
 	}
 
 	// Active is t3 (most recent). Activate t1 — it should become active.
-	if err := mgr.Activate(t1.ID); err != nil {
+	if err := mgr.Activate(context.Background(), t1.ID); err != nil {
 		t.Fatalf("Activate t1: %v", err)
 	}
 	active := mgr.Active()
@@ -152,7 +156,7 @@ func TestActivateNotFound(t *testing.T) {
 	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
-	err := mgr.Activate("nonexistent")
+	err := mgr.Activate(context.Background(), "nonexistent")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("Activate(nonexistent) err = %v, want ErrNotFound", err)
 	}
@@ -407,23 +411,21 @@ func TestTabURL(t *testing.T) {
 	}
 }
 
-func TestTabTitle(t *testing.T) {
+func TestTabInfo(t *testing.T) {
 	mgr := NewManager(browserCtx)
 	defer mgr.CloseAll()
 
-	tab, err := mgr.NewTab(context.Background())
+	tb, err := mgr.NewTab(context.Background())
 	if err != nil {
 		t.Fatalf("NewTab: %v", err)
 	}
 
-	// New tab title should be empty or blank.
-	title, err := tab.Title(context.Background())
+	url, title, err := tb.Info(context.Background())
 	if err != nil {
-		t.Fatalf("Title: %v", err)
+		t.Fatalf("Info: %v", err)
 	}
-	// about:blank has empty title
-	if title != "" {
-		t.Errorf("Title = %q, want empty string", title)
+	if url != "about:blank" || title != "" {
+		t.Errorf("Info = (%q, %q), want (\"about:blank\", \"\")", url, title)
 	}
 }
 
@@ -651,5 +653,246 @@ func TestListSkipsCancelledTabContext(t *testing.T) {
 	}
 	if mgr.Len() != 1 {
 		t.Errorf("Len() after List pruned cancelled tab = %d, want 1", mgr.Len())
+	}
+}
+
+func TestActivateCancelledAndBringToFront(t *testing.T) {
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	t1, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab t1: %v", err)
+	}
+	t2, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab t2: %v", err)
+	}
+
+	// Cancelled context must fail without mutating active tab order.
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := mgr.Activate(cctx, t1.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Activate(cancelled) err = %v, want context.Canceled", err)
+	}
+	if active := mgr.Active(); active == nil || active.ID != t2.ID {
+		t.Fatalf("Active after cancelled Activate = %v, want %q", active, t2.ID)
+	}
+
+	// Activating t1 brings it to front and updates MRU even when a dialog is open.
+	dialogOpened := make(chan struct{}, 1)
+	lctx, lcancel := context.WithCancel(t1.Context())
+	defer lcancel()
+	if err := chromedp.Listen(lctx, func(ev any) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			select {
+			case dialogOpened <- struct{}{}:
+			default:
+			}
+		}
+	}); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := chromedp.Do(t1.Context(), chromedp.Evaluate[chromedp.Void](`setTimeout(() => alert('bg'), 10);`)); err != nil {
+		t.Fatalf("Evaluate alert: %v", err)
+	}
+	select {
+	case <-dialogOpened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for alert dialog")
+	}
+
+	actCtx, actCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer actCancel()
+	if err := mgr.Activate(actCtx, t1.ID); err != nil {
+		t.Fatalf("Activate(t1) while dialog open: %v", err)
+	}
+	if active := mgr.Active(); active == nil || active.ID != t1.ID {
+		t.Errorf("Active = %v, want %q", active, t1.ID)
+	}
+	_, _ = chromedp.Call(t1.Context(), page.HandleJavaScriptDialog, page.HandleJavaScriptDialogParams{Accept: true})
+
+	// Activating a tab whose target context died must prune it and return ErrNotFound.
+	t2.Close()
+	if err := mgr.Activate(context.Background(), t2.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Activate(closed tab) err = %v, want ErrNotFound", err)
+	}
+	if mgr.Len() != 1 {
+		t.Errorf("Len() after Activate pruned closed tab = %d, want 1", mgr.Len())
+	}
+}
+
+func TestAttachBackgroundTargetAndConcurrentDedup(t *testing.T) {
+	// Empty manager: AttachBackgroundTarget must still become Active.
+	emptyMgr := NewManager(browserCtx)
+	defer emptyMgr.CloseAll()
+	res0, err := chromedp.CallBrowser(browserCtx, target.CreateTarget, target.CreateTargetParams{
+		URL: "about:blank",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget (empty): %v", err)
+	}
+	tid0 := res0.TargetID
+	defer func() {
+		_, _ = chromedp.CallBrowser(browserCtx, target.CloseTarget, target.CloseTargetParams{TargetID: tid0})
+	}()
+	bg0, err := emptyMgr.AttachBackgroundTarget(context.Background(), tid0)
+	if err != nil {
+		t.Fatalf("AttachBackgroundTarget on empty manager: %v", err)
+	}
+	if active := emptyMgr.Active(); active == nil || active.ID != bg0.ID {
+		t.Errorf("Active on empty manager = %v, want %q", active, bg0.ID)
+	}
+
+	// Non-empty manager: concurrent AttachBackgroundTarget calls must deduplicate
+	// without stealing active focus from primary.
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	primary, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab primary: %v", err)
+	}
+
+	res, err := chromedp.CallBrowser(browserCtx, target.CreateTarget, target.CreateTargetParams{
+		URL: "about:blank",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	tid := res.TargetID
+	defer func() {
+		_, _ = chromedp.CallBrowser(browserCtx, target.CloseTarget, target.CloseTargetParams{TargetID: tid})
+	}()
+
+	const callers = 4
+	results := make([]*Tab, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx], errs[idx] = mgr.AttachBackgroundTarget(context.Background(), tid)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d AttachBackgroundTarget: %v", i, err)
+		}
+		if results[i] == nil || results[i] != results[0] {
+			t.Fatalf("caller %d returned %v, want deduped %v", i, results[i], results[0])
+		}
+	}
+	if mgr.Len() != 2 {
+		t.Fatalf("Len() = %d, want 2", mgr.Len())
+	}
+	if !mgr.HasTarget(tid) {
+		t.Error("HasTarget(tid) = false, want true")
+	}
+	if active := mgr.Active(); active == nil || active.ID != primary.ID {
+		t.Errorf("AttachBackgroundTarget stole Active: got %v, want %q", active, primary.ID)
+	}
+
+	// Waiter recovery: if an in-flight attacher fails/cancels, a blocked waiter
+	// must wake up and succeed on its own attach attempt.
+	res2, err := chromedp.CallBrowser(browserCtx, target.CreateTarget, target.CreateTargetParams{
+		URL: "about:blank",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget (waiter): %v", err)
+	}
+	tid2 := res2.TargetID
+	defer func() {
+		_, _ = chromedp.CallBrowser(browserCtx, target.CloseTarget, target.CloseTargetParams{TargetID: tid2})
+	}()
+	blocker := make(chan struct{})
+	mgr.mu.Lock()
+	mgr.attaching[tid2] = blocker
+	mgr.mu.Unlock()
+	waiterDone := make(chan struct {
+		tb  *Tab
+		err error
+	}, 1)
+	go func() {
+		tb, err := mgr.AttachBackgroundTarget(context.Background(), tid2)
+		waiterDone <- struct {
+			tb  *Tab
+			err error
+		}{tb, err}
+	}()
+	time.Sleep(15 * time.Millisecond)
+	mgr.mu.Lock()
+	delete(mgr.attaching, tid2)
+	close(blocker)
+	mgr.mu.Unlock()
+	got := <-waiterDone
+	if got.err != nil || got.tb == nil {
+		t.Fatalf("waiter recovery failed: tb=%v err=%v", got.tb, got.err)
+	}
+}
+
+func TestSnapshotRefsAndNavigationInvalidation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Nav</title></head><body>ok</body></html>`))
+	}))
+	defer srv.Close()
+
+	mgr := NewManager(browserCtx)
+	defer mgr.CloseAll()
+
+	tb, err := mgr.NewTab(context.Background())
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+
+	// Navigating BEFORE any snapshot must still report "no active snapshot" (not stale).
+	if err := chromedp.Do(tb.Context(), chromedp.Navigate(srv.URL)); err != nil {
+		t.Fatalf("initial Navigate: %v", err)
+	}
+	if _, err := tb.ResolveRef("e1"); err == nil || !strings.Contains(err.Error(), "no active snapshot") {
+		t.Fatalf("ResolveRef before first snapshot = %v, want no active snapshot error", err)
+	}
+
+	gen := tb.SnapshotGeneration()
+	if !tb.SetSnapshotRefs(gen, map[string]SnapshotRef{
+		"e1": {BackendNodeID: cdp.BackendNodeID(42), FrameID: cdp.FrameID("main"), Role: "button", Name: "Go"},
+		"e2": {BackendNodeID: cdp.BackendNodeID(43), FrameID: cdp.FrameID("child-1"), Role: "link", Name: "Sub"},
+	}) {
+		t.Fatal("SetSnapshotRefs with current gen returned false")
+	}
+	got, err := tb.ResolveRef("e1")
+	if err != nil || got.BackendNodeID != 42 || got.Role != "button" || got.Name != "Go" {
+		t.Fatalf("ResolveRef(e1) = (%+v, %v)", got, err)
+	}
+	if _, err := tb.ResolveRef("e99"); err == nil || !strings.Contains(err.Error(), "not found in current snapshot") {
+		t.Fatalf("ResolveRef(e99) = %v, want not found in current snapshot", err)
+	}
+
+	// Subframe invalidation removes only that frame's refs without wiping main-frame refs.
+	tb.InvalidateFrameSnapshotRefs(cdp.FrameID("child-1"))
+	if _, err := tb.ResolveRef("e2"); err == nil {
+		t.Fatal("expected child frame ref e2 to be pruned")
+	}
+	if _, err := tb.ResolveRef("e1"); err != nil {
+		t.Fatalf("main-frame ref e1 unexpectedly invalidated by subframe prune: %v", err)
+	}
+
+	// Main-frame navigation must invalidate snapshot refs with a stale reason AND
+	// reject commits carrying the pre-navigation generation.
+	if err := chromedp.Do(tb.Context(), chromedp.Navigate(srv.URL+"/?v=2")); err != nil {
+		t.Fatalf("Navigate v2: %v", err)
+	}
+	if _, err := tb.ResolveRef("e1"); err == nil || !strings.Contains(err.Error(), "stale (page navigated)") {
+		t.Fatalf("ResolveRef after navigation = %v, want stale (page navigated)", err)
+	}
+	if tb.SetSnapshotRefs(gen, map[string]SnapshotRef{"e3": {BackendNodeID: 99}}) {
+		t.Fatal("SetSnapshotRefs with stale generation unexpectedly succeeded")
+	}
+	if _, err := tb.ResolveRef("e3"); err == nil || !strings.Contains(err.Error(), "stale (page navigated)") {
+		t.Fatalf("stale commit leaked ref e3: err = %v", err)
 	}
 }

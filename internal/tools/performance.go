@@ -139,16 +139,7 @@ func registerPerformanceTools(s *mcp.Server, mgr *browser.Manager) {
 			shifts = []collector.LayoutShiftEntry{}
 		}
 
-		var cls float64
-		for _, s := range shifts {
-			// Per W3C Layout Instability / Core Web Vitals CLS spec, shifts
-			// within 500ms of recent user input do not contribute to CLS.
-			if !s.HadRecentInput {
-				cls += s.Value
-			}
-		}
-
-		return nil, GetLayoutShiftsOutput{Shifts: shifts, CumulativeLS: cls}, nil
+		return nil, GetLayoutShiftsOutput{Shifts: shifts, CumulativeLS: collector.ComputeCLS(shifts)}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{

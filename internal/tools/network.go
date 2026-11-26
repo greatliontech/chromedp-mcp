@@ -342,7 +342,7 @@ func encodeBodySlice(body []byte, start, end int64) BodySliceOutput {
 	sliced, truncated := applyByteRange(body, start, end)
 	out := BodySliceOutput{TotalBytes: total, Truncated: truncated}
 	if isText {
-		text := trimByteSliceToValidUTF8(sliced)
+		text := collector.TrimUTF8Slice(sliced)
 		out.Body = string(text)
 		return out
 	}
@@ -516,22 +516,4 @@ func validateRange(start, end int64) error {
 		return fmt.Errorf("range_end (%d) must be >= range_start (%d) (use 0 for end of body)", end, start)
 	}
 	return nil
-}
-
-// trimByteSliceToValidUTF8 trims partial multi-byte UTF-8 runes from either
-// end of a slice cut from a known-valid UTF-8 body in O(1) time (at most 3
-// bytes per end since UTF-8 codepoints are at most 4 bytes long).
-func trimByteSliceToValidUTF8(b []byte) []byte {
-	for len(b) > 0 && !utf8.RuneStart(b[0]) {
-		b = b[1:]
-	}
-	for i := 1; i <= 3 && i <= len(b); i++ {
-		if utf8.RuneStart(b[len(b)-i]) {
-			if !utf8.FullRune(b[len(b)-i:]) {
-				b = b[:len(b)-i]
-			}
-			break
-		}
-	}
-	return b
 }

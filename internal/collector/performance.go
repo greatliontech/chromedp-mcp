@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"math"
 	"time"
 
 	"github.com/chromedp/cdproto/performancetimeline"
@@ -129,4 +130,45 @@ func (p *Performance) PeekLCP(limit int) []LCPEntry {
 func (p *Performance) Clear() {
 	p.layoutShifts.Clear()
 	p.lcpEntries.Clear()
+}
+
+const (
+	clsMaxGap      = 1 * time.Second
+	clsMaxDuration = 5 * time.Second
+)
+
+// ComputeCLS computes the W3C Core Web Vitals Cumulative Layout Shift score
+// using session windows (matching Google web-vitals): shifts with
+// HadRecentInput == true or non-finite / non-positive Value are excluded, and
+// remaining shifts are grouped into windows with < 1s gap between consecutive
+// shifts and < 5s total duration from window start. Returns the maximum
+// session window sum (0 when no eligible shifts exist).
+func ComputeCLS(shifts []LayoutShiftEntry) float64 {
+	var (
+		maxScore    float64
+		windowScore float64
+		windowStart time.Time
+		prevTime    time.Time
+		inWindow    bool
+	)
+	for _, s := range shifts {
+		if s.HadRecentInput || math.IsNaN(s.Value) || math.IsInf(s.Value, 0) || s.Value <= 0 {
+			continue
+		}
+		if !inWindow ||
+			s.Timestamp.Before(prevTime) ||
+			s.Timestamp.Sub(prevTime) >= clsMaxGap ||
+			s.Timestamp.Sub(windowStart) >= clsMaxDuration {
+			windowStart = s.Timestamp
+			windowScore = s.Value
+			inWindow = true
+		} else {
+			windowScore += s.Value
+		}
+		prevTime = s.Timestamp
+		if windowScore > maxScore {
+			maxScore = windowScore
+		}
+	}
+	return maxScore
 }

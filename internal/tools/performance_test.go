@@ -32,7 +32,7 @@ func TestGetLayoutShiftsExcludesHadRecentInput(t *testing.T) {
 	tb.Performance.HandleTimelineEvent(&performancetimeline.EventTimelineEventAdded{
 		Event: &performancetimeline.TimelineEvent{
 			Type: "layout-shift",
-			Time: cdp.TimeSinceEpoch(1700000001),
+			Time: cdp.TimeSinceEpoch(1700000001.0),
 			LayoutShiftDetails: &performancetimeline.LayoutShift{
 				Value:          0.12,
 				HadRecentInput: false,
@@ -42,7 +42,7 @@ func TestGetLayoutShiftsExcludesHadRecentInput(t *testing.T) {
 	tb.Performance.HandleTimelineEvent(&performancetimeline.EventTimelineEventAdded{
 		Event: &performancetimeline.TimelineEvent{
 			Type: "layout-shift",
-			Time: cdp.TimeSinceEpoch(1700000002),
+			Time: cdp.TimeSinceEpoch(1700000001.2),
 			LayoutShiftDetails: &performancetimeline.LayoutShift{
 				Value:          0.45,
 				HadRecentInput: true,
@@ -52,9 +52,21 @@ func TestGetLayoutShiftsExcludesHadRecentInput(t *testing.T) {
 	tb.Performance.HandleTimelineEvent(&performancetimeline.EventTimelineEventAdded{
 		Event: &performancetimeline.TimelineEvent{
 			Type: "layout-shift",
-			Time: cdp.TimeSinceEpoch(1700000003),
+			Time: cdp.TimeSinceEpoch(1700000001.5),
 			LayoutShiftDetails: &performancetimeline.LayoutShift{
 				Value:          0.08,
+				HadRecentInput: false,
+			},
+		},
+	})
+	// A later shift >1s away begins a separate session window (0.15 < 0.20),
+	// so W3C session-window CLS remains 0.20 rather than summing to 0.35.
+	tb.Performance.HandleTimelineEvent(&performancetimeline.EventTimelineEventAdded{
+		Event: &performancetimeline.TimelineEvent{
+			Type: "layout-shift",
+			Time: cdp.TimeSinceEpoch(1700000003.0),
+			LayoutShiftDetails: &performancetimeline.LayoutShift{
+				Value:          0.15,
 				HadRecentInput: false,
 			},
 		},
@@ -64,14 +76,14 @@ func TestGetLayoutShiftsExcludesHadRecentInput(t *testing.T) {
 		"tab":  tabID,
 		"mode": "drain",
 	})
-	if len(out.Shifts) != 3 {
-		t.Fatalf("shifts len = %d, want 3", len(out.Shifts))
+	if len(out.Shifts) != 4 {
+		t.Fatalf("shifts len = %d, want 4", len(out.Shifts))
 	}
 	if !out.Shifts[1].HadRecentInput {
 		t.Error("shifts[1].HadRecentInput = false, want true")
 	}
 	if math.Abs(out.CumulativeLS-0.20) > 1e-9 {
-		t.Errorf("CumulativeLS = %v, want 0.20 (excluding 0.45 recent-input shift)", out.CumulativeLS)
+		t.Errorf("CumulativeLS = %v, want 0.20 (max session window, excluding recent-input and separate later window)", out.CumulativeLS)
 	}
 }
 

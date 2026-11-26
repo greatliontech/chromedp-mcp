@@ -104,7 +104,7 @@ func launchAllocatorOptions(opts LaunchOptions) []chromedp.ExecAllocatorOption {
 // Launch starts a new Chrome browser process. startupCtx bounds browser
 // startup (e.g. MCP request cancellation) without tying the browser's
 // post-startup lifetime to startupCtx; nil defaults to context.Background().
-func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions) (*Browser, error) {
+func Launch(parentCtx, startupCtx context.Context, opts LaunchOptions) (*Browser, error) {
 	if startupCtx == nil {
 		startupCtx = context.Background()
 	}
@@ -128,7 +128,7 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 
-	b, err := newBrowser(startupCtx, id, ModeLaunch, allocCancel, browserCtx, browserCancel, opts.DownloadDir)
+	b, err := newBrowser(startupCtx, ModeLaunch, allocCancel, browserCtx, browserCancel, opts.DownloadDir)
 	if err != nil {
 		browserCancel()
 		allocCancel()
@@ -147,6 +147,10 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 			return nil, fmt.Errorf("launch browser: open initial tab: %w", err)
 		}
 	}
+	if err := b.enableTargetDiscovery(startupCtx); err != nil {
+		b.Close()
+		return nil, fmt.Errorf("launch browser: %w", err)
+	}
 	return b, nil
 }
 
@@ -157,7 +161,7 @@ type ConnectOptions struct {
 
 // Connect connects to an existing Chrome browser via its remote debugging URL.
 // startupCtx bounds connection setup without tying the browser's lifetime to it.
-func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, opts ConnectOptions) (*Browser, error) {
+func Connect(parentCtx, startupCtx context.Context, rawURL string, opts ConnectOptions) (*Browser, error) {
 	if startupCtx == nil {
 		startupCtx = context.Background()
 	}
@@ -197,7 +201,7 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 		rawAllocCancel()
 		waitAlloc()
 	}
-	b, err := newBrowser(startupCtx, id, ModeConnect, allocCancel, browserCtx, browserCancel, opts.DownloadDir)
+	b, err := newBrowser(startupCtx, ModeConnect, allocCancel, browserCtx, browserCancel, opts.DownloadDir)
 	if err != nil {
 		browserCancel()
 		allocCancel()
@@ -208,6 +212,10 @@ func Connect(parentCtx, startupCtx context.Context, id string, rawURL string, op
 	// WithDetachOnCancel so they are immediately inspectable via tab_list and
 	// preserved on browser_close.
 	if err := adoptPageTargets(startupCtx, b, targets); err != nil {
+		b.Close()
+		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
+	}
+	if err := b.enableTargetDiscovery(startupCtx); err != nil {
 		b.Close()
 		return nil, fmt.Errorf("connect to browser at %s: %w", rawURL, err)
 	}
@@ -316,7 +324,6 @@ func runBrowserStartup[T any](
 
 func newBrowser(
 	startupCtx context.Context,
-	id string,
 	mode Mode,
 	allocCancel context.CancelFunc,
 	browserCtx context.Context,
@@ -324,50 +331,87 @@ func newBrowser(
 	downloadDir string,
 ) (*Browser, error) {
 	dl := collector.NewDownload(DefaultDownloadBuffer, downloadDir)
-	if downloadDir != "" {
-		if err := os.MkdirAll(downloadDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create download dir %q: %w", downloadDir, err)
-		}
-		// Configure download handling once at the browser CDP session level
-		// rather than per-tab so multi-tab browsers emit each download event
-		// once instead of once per open tab.
-		if err := chromedp.ListenBrowser(browserCtx, func(ev any) {
-			switch ev := ev.(type) {
-			case *cdpbrowser.EventDownloadWillBegin:
-				dl.HandleDownloadWillBegin(ev)
-			case *cdpbrowser.EventDownloadProgress:
-				dl.HandleDownloadProgress(ev)
-			}
-		}); err != nil {
-			return nil, fmt.Errorf("listen browser downloads: %w", err)
-		}
-		dlCtx, dlCancel := context.WithCancelCause(browserCtx)
-		stop := context.AfterFunc(startupCtx, func() {
-			dlCancel(context.Cause(startupCtx))
-		})
-		_, err := chromedp.CallBrowser(dlCtx, cdpbrowser.SetDownloadBehavior, cdpbrowser.SetDownloadBehaviorParams{
-			Behavior:      cdpbrowser.SetDownloadBehaviorBehaviorAllowAndName,
-			DownloadPath:  downloadDir,
-			EventsEnabled: new(true),
-		})
-		stopped := stop()
-		dlCancel(nil)
-		if err != nil || !stopped {
-			if err == nil {
-				err = context.Cause(startupCtx)
-			}
-			return nil, fmt.Errorf("configure download behavior: %w", err)
-		}
-	}
-	return &Browser{
-		ID:            id,
+	b := &Browser{
 		Mode:          mode,
 		allocCancel:   allocCancel,
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
 		Tabs:          tab.NewManager(browserCtx),
 		Downloads:     dl,
-	}, nil
+	}
+
+	// Register a single browser-level CDP listener for download events (when
+	// enabled) and popup / target="_blank" page targets opened by existing pages.
+	if err := chromedp.ListenBrowser(browserCtx, func(ev any) {
+		switch ev := ev.(type) {
+		case *cdpbrowser.EventDownloadWillBegin:
+			if downloadDir != "" {
+				dl.HandleDownloadWillBegin(ev)
+			}
+		case *cdpbrowser.EventDownloadProgress:
+			if downloadDir != "" {
+				dl.HandleDownloadProgress(ev)
+			}
+		case *target.EventTargetCreated:
+			if isAttachablePageTarget(ev.TargetInfo) && ev.TargetInfo.OpenerID != "" && !b.Tabs.HasTarget(ev.TargetInfo.TargetID) {
+				go b.adoptPopupTarget(ev.TargetInfo.TargetID)
+			}
+		}
+	}); err != nil {
+		return nil, fmt.Errorf("listen browser events: %w", err)
+	}
+
+	if downloadDir != "" {
+		if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create download dir %q: %w", downloadDir, err)
+		}
+		if err := callBrowserBounded(startupCtx, browserCtx, func(ctx context.Context) error {
+			_, err := chromedp.CallBrowser(ctx, cdpbrowser.SetDownloadBehavior, cdpbrowser.SetDownloadBehaviorParams{
+				Behavior:      cdpbrowser.SetDownloadBehaviorBehaviorAllowAndName,
+				DownloadPath:  downloadDir,
+				EventsEnabled: new(true),
+			})
+			return err
+		}); err != nil {
+			return nil, fmt.Errorf("configure download behavior: %w", err)
+		}
+	}
+	return b, nil
+}
+
+func (b *Browser) enableTargetDiscovery(startupCtx context.Context) error {
+	if err := callBrowserBounded(startupCtx, b.browserCtx, func(ctx context.Context) error {
+		_, err := chromedp.CallBrowser(ctx, target.SetDiscoverTargets, target.SetDiscoverTargetsParams{
+			Discover: true,
+		})
+		return err
+	}); err != nil {
+		return fmt.Errorf("enable target discovery: %w", err)
+	}
+	return nil
+}
+
+func (b *Browser) adoptPopupTarget(targetID target.ID) {
+	attachCtx, cancel := context.WithTimeout(b.browserCtx, adoptTargetTimeout)
+	defer cancel()
+	_, _ = b.Tabs.AttachBackgroundTarget(attachCtx, targetID)
+}
+
+func callBrowserBounded(startupCtx, browserCtx context.Context, fn func(context.Context) error) error {
+	callCtx, cancel := context.WithCancelCause(browserCtx)
+	stop := context.AfterFunc(startupCtx, func() {
+		cancel(context.Cause(startupCtx))
+	})
+	err := fn(callCtx)
+	stopped := stop()
+	cancel(nil)
+	if err != nil || !stopped {
+		if err == nil {
+			err = context.Cause(startupCtx)
+		}
+		return err
+	}
+	return nil
 }
 
 // resolveDebuggerURL converts an HTTP(S) or base WebSocket Chrome remote
@@ -477,11 +521,6 @@ func resolvePlaintextHost(ctx context.Context, hostname, port string) (string, e
 		return "[" + hostname + "]", nil
 	}
 	return hostname, nil
-}
-
-// Context returns the browser's root chromedp context.
-func (b *Browser) Context() context.Context {
-	return b.browserCtx
 }
 
 // Alive returns true if the browser's context is still active (Chrome

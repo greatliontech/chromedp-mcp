@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
 // Options configures optional behavior for the MCP tools.
@@ -253,22 +254,10 @@ const defaultSelectorTimeout = 5 * time.Second
 const defaultLifecycleTimeout = 30 * time.Second
 
 // tabContext creates a child of the tab's context (tctx) that is also
-// cancelled when the MCP request context (reqCtx) is done. This ensures
-// that if the MCP client disconnects or cancels a request, in-flight
-// CDP operations are terminated. The returned cancel must always be called.
-//
-// The child is derived from tctx (not reqCtx) because chromedp stores
-// internal target state keyed by context — the context hierarchy must
-// descend from the tab's context for chromedp.Run to work.
+// cancelled when the MCP request context (reqCtx) is done. The returned cancel
+// must always be called.
 func tabContext(reqCtx, tctx context.Context) (context.Context, context.CancelFunc) {
-	child, cancel := context.WithCancelCause(tctx)
-	stop := context.AfterFunc(reqCtx, func() {
-		cancel(context.Cause(reqCtx))
-	})
-	return child, func() {
-		stop()
-		cancel(nil)
-	}
+	return tab.LinkContext(reqCtx, tctx, 0)
 }
 
 // selectorContext returns a context bounded by the user-specified timeout

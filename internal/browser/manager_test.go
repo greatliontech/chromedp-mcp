@@ -376,7 +376,7 @@ func TestManagerMultiBrowserResolveActivateAndCloseTab(t *testing.T) {
 
 	// ActivateTab(t1) must activate t1 AND switch the active browser to b1
 	// so default-tab calls (ResolveTab("", "")) now resolve to t1.
-	if err := mgr.ActivateTab(t1.ID); err != nil {
+	if err := mgr.ActivateTab(context.Background(), t1.ID); err != nil {
 		t.Fatalf("ActivateTab(t1): %v", err)
 	}
 	activeBrowser, _ = mgr.Active()
@@ -436,7 +436,7 @@ func TestManagerNoBrowserTabErrorsAndSentinel(t *testing.T) {
 	if err := mgr.CloseTab("missing"); err == nil || !strings.Contains(err.Error(), "no browser running") {
 		t.Errorf("CloseTab with no browsers = %v, want no browser running", err)
 	}
-	if err := mgr.ActivateTab("missing"); err == nil || !strings.Contains(err.Error(), "no browser running") {
+	if err := mgr.ActivateTab(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "no browser running") {
 		t.Errorf("ActivateTab with no browsers = %v, want no browser running", err)
 	}
 
@@ -447,7 +447,7 @@ func TestManagerNoBrowserTabErrorsAndSentinel(t *testing.T) {
 	if err := mgr.CloseTab("missing"); !errors.Is(err, tab.ErrNotFound) {
 		t.Errorf("CloseTab(missing) = %v, want tab.ErrNotFound", err)
 	}
-	if err := mgr.ActivateTab("missing"); !errors.Is(err, tab.ErrNotFound) {
+	if err := mgr.ActivateTab(context.Background(), "missing"); !errors.Is(err, tab.ErrNotFound) {
 		t.Errorf("ActivateTab(missing) = %v, want tab.ErrNotFound", err)
 	}
 	// Closing a dead browser directly by ID via Close() succeeds cleanly.
@@ -697,4 +697,88 @@ func TestLaunchAllocatorOptions(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestPopupTargetAutoAdoption(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/popup":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Popup Window</title></head><body>popup</body></html>`))
+		case "/blank":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Blank Link Tab</title></head><body>blank</body></html>`))
+		default:
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Opener</title></head><body><a id="lnk" href="/blank" target="_blank">open</a></body></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	mgr := NewManager(testCtx)
+	defer mgr.CloseAll()
+
+	b, err := mgr.Launch(context.Background(), LaunchOptions{Headless: true})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	primary := b.Tabs.Active()
+	if primary == nil {
+		t.Fatal("expected initial active tab")
+	}
+	if err := chromedp.Do(primary.Context(), chromedp.Navigate(srv.URL)); err != nil {
+		t.Fatalf("Navigate opener: %v", err)
+	}
+
+	// Open a popup via window.open().
+	if err := chromedp.Do(primary.Context(), chromedp.Evaluate[chromedp.Void](`void window.open('/popup', '_blank')`)); err != nil {
+		t.Fatalf("window.open: %v", err)
+	}
+
+	waitForTabs := func(want int) []tab.TabInfo {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if b.Tabs.Len() == want {
+				infos, err := b.Tabs.List(context.Background())
+				if err == nil && len(infos) == want {
+					return infos
+				}
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		infos, _ := b.Tabs.List(context.Background())
+		t.Fatalf("timed out waiting for %d tabs, got %d (%+v)", want, b.Tabs.Len(), infos)
+		return nil
+	}
+
+	infos := waitForTabs(2)
+	if active := b.Tabs.Active(); active == nil || active.ID != primary.ID {
+		t.Fatalf("popup stole Active tab: got %v, want %q", active, primary.ID)
+	}
+
+	var popupID string
+	for _, info := range infos {
+		if info.ID != primary.ID {
+			popupID = info.ID
+		}
+	}
+	if popupID == "" {
+		t.Fatalf("expected non-primary popup tab in %+v", infos)
+	}
+
+	// Click a target="_blank" link and verify it is also auto-adopted.
+	if err := chromedp.Do(primary.Context(), chromedp.Click(chromedp.CSS("#lnk"))); err != nil {
+		t.Fatalf("click target=_blank: %v", err)
+	}
+	_ = waitForTabs(3)
+	if active := b.Tabs.Active(); active == nil || active.ID != primary.ID {
+		t.Fatalf("target=_blank stole Active tab: got %v, want %q", active, primary.ID)
+	}
+
+	// Closing the popup via window.close() must prune it automatically.
+	popupTab, err := b.Tabs.Get(popupID)
+	if err != nil {
+		t.Fatalf("Get popup tab: %v", err)
+	}
+	_ = chromedp.Do(popupTab.Context(), chromedp.Evaluate[chromedp.Void](`window.close()`))
+	_ = waitForTabs(2)
 }

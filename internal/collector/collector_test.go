@@ -364,3 +364,21 @@ func TestTruncateUTF8AndBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestTrimUTF8Slice(t *testing.T) {
+	raw := []byte("ééé") // each 'é' is 2 bytes: C3 A9
+	if got := string(TrimUTF8Slice(raw[1 : len(raw)-1])); got != "é" {
+		t.Errorf("TrimUTF8Slice(mid) = %q, want %q", got, "é")
+	}
+	if got := string(TrimUTF8Slice(raw)); got != "ééé" {
+		t.Errorf("TrimUTF8Slice(full) = %q, want %q", got, "ééé")
+	}
+	// Continuation bytes only -> empty slice.
+	emoji := []byte("😀")
+	if got := TrimUTF8Slice(emoji[1:]); len(got) != 0 {
+		t.Errorf("TrimUTF8Slice(continuations only) = %x, want empty", got)
+	}
+	if got := TrimUTF8Slice(nil); len(got) != 0 {
+		t.Errorf("TrimUTF8Slice(nil) = %x, want empty", got)
+	}
+}
