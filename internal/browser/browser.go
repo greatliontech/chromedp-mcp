@@ -110,9 +110,6 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 			chromedp.Flag("profile-directory", opts.ProfileDir),
 		)
 	}
-	if os.Getenv("CHROMEDP_MCP_DEBUG_CHROME") != "" {
-		allocOpts = append(allocOpts, chromedp.CombinedOutput(os.Stderr))
-	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, allocOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)

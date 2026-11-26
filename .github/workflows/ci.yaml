@@ -17,6 +17,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, google-chrome]
     steps:
       - uses: actions/checkout@v5
 
@@ -46,31 +50,16 @@ jobs:
 
       - name: Configure Chrome
         run: |
-          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor,
-          # blocking Chromium's sandbox when chromedp resolves /usr/bin/chromium.
           if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-
-          for cand in chromium google-chrome chromium-browser; do
-            if p=$(command -v "$cand"); then
-              echo "Found $cand at $p: $("$p" --version)"
-            fi
-          done
-          if bin=$(command -v chromium || command -v google-chrome || command -v chromium-browser); then
-            echo "Using browser: $bin"
-            "$bin" --version
-          else
-            tmpdeb=$(mktemp --suffix=.deb)
-            trap 'rm -f "$tmpdeb"' EXIT
-            curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o "$tmpdeb"
-            chmod 644 "$tmpdeb"
-            sudo apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmpdeb"
-            google-chrome --version
+          if [ "${{ matrix.browser }}" = "google-chrome" ]; then
+            sudo rm -f /usr/bin/chromium /usr/bin/chromium-browser
           fi
+          bin=$(command -v chromium || command -v google-chrome || command -v chromium-browser)
+          echo "Using browser: $bin ($("$bin" --version))"
 
       - name: Test
-        env:
-          CHROMEDP_MCP_DEBUG_CHROME: "1"
-        run: go test -v -race -count=1 -timeout 600s ./internal/tools
+        run: |
+          set -o pipefail
+          go test -p=1 -race -count=1 -timeout 600s ./...
