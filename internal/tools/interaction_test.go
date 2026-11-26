@@ -23,7 +23,7 @@ func TestClickRightDoubleClickDispatchesRightButton(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			window.__events = [];
@@ -38,14 +38,14 @@ func TestClickRightDoubleClickDispatchesRightButton(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":         tabID,
 		"selector":    "#rt-dbl",
 		"button":      "right",
 		"click_count": 2,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__events`,
 	})
@@ -73,7 +73,7 @@ func TestClickOffscreenRightButtonScrollsIntoView(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			window.__rightClicked = false;
@@ -91,13 +91,13 @@ func TestClickOffscreenRightButtonScrollsIntoView(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#below-fold-btn",
 		"button":   "right",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__rightClicked`,
 	})
@@ -110,7 +110,7 @@ func TestClickSelfHidingAndSelfRemovingNoFalseWarning(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var hideBtn = document.createElement('button');
@@ -127,7 +127,7 @@ func TestClickSelfHidingAndSelfRemovingNoFalseWarning(t *testing.T) {
 		})()`,
 	})
 
-	hideOut := callTool[ClickOutput](t, "click", map[string]any{
+	hideOut := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#self-hide",
 	})
@@ -138,7 +138,7 @@ func TestClickSelfHidingAndSelfRemovingNoFalseWarning(t *testing.T) {
 		t.Errorf("expected post-click Visible=false for self-hiding button, got true")
 	}
 
-	rmOut := callTool[ClickOutput](t, "click", map[string]any{
+	rmOut := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#self-remove",
 	})
@@ -208,7 +208,7 @@ func TestClickOpeningAlertDoesNotHang(t *testing.T) {
 		t.Fatalf("chromedp.Listen: %v", err)
 	}
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { alert('hello'); }, 10); true`,
 	})
@@ -222,7 +222,7 @@ func TestClickOpeningAlertDoesNotHang(t *testing.T) {
 		h1Obj.Release(tabObj.Context(), tgtRef)
 	}()
 
-	pre := ClickOutput{PointerEvents: "auto", Visible: true}
+	pre := clickOutput{PointerEvents: "auto", Visible: true}
 
 	// Fast-path: when Dialog collector knows a dialog is open, finalizeClickObject
 	// returns immediately without stalling for the 500ms probe timeout.
@@ -250,7 +250,7 @@ func TestClickOpeningAlertDoesNotHang(t *testing.T) {
 	// Dismiss first alert and verify an end-to-end click that triggers a
 	// synchronous alert returns promptly without stalling on el.Release (2s).
 	handleDialog(t, tabID, map[string]any{"action": "accept"})
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var b = document.createElement('button');
@@ -261,12 +261,12 @@ func TestClickOpeningAlertDoesNotHang(t *testing.T) {
 		})()`,
 	})
 	start = time.Now()
-	callTool[ClickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#sync-alert-btn"})
+	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#sync-alert-btn"})
 	clickElapsed := time.Since(start)
 	if clickElapsed > 1400*time.Millisecond {
 		t.Errorf("end-to-end click opening sync alert took %v, want fast return without 2s ReleaseObject stall", clickElapsed)
 	}
-	if d := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open || d.Dialog == nil || d.Dialog.Message != "sync-from-click" {
+	if d := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open || d.Dialog == nil || d.Dialog.Message != "sync-from-click" {
 		t.Errorf("dialog after sync-alert click = %+v, want Open=true Message='sync-from-click'", d)
 	}
 }
@@ -275,7 +275,7 @@ func TestClickDelayedVisibilityRefreshClearsStaleHiddenWarning(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			window.__delayedClicked = false;
@@ -289,7 +289,7 @@ func TestClickDelayedVisibilityRefreshClearsStaleHiddenWarning(t *testing.T) {
 		})()`,
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#late-visible",
 		"timeout":  2000,
@@ -300,7 +300,7 @@ func TestClickDelayedVisibilityRefreshClearsStaleHiddenWarning(t *testing.T) {
 	if out.Warning != "" {
 		t.Errorf("delayed-visibility click produced stale hidden warning: %q", out.Warning)
 	}
-	clicked := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	clicked := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__delayedClicked`,
 	})
@@ -313,7 +313,7 @@ func TestHoverOffscreenElementScrollsIntoView(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			window.__hovered = false;
@@ -330,12 +330,12 @@ func TestHoverOffscreenElementScrollsIntoView(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ActionOutput](t, "hover", map[string]any{
+	callTool[actionOutput](t, "hover", map[string]any{
 		"tab":      tabID,
 		"selector": "#below-fold-hover",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__hovered && document.querySelector('#below-fold-hover').matches(':hover')`,
 	})
@@ -348,7 +348,7 @@ func TestTypeDelayExceedsSelectorTimeout(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var inp = document.createElement('input');
@@ -360,7 +360,7 @@ func TestTypeDelayExceedsSelectorTimeout(t *testing.T) {
 
 	// 5 characters with 80ms inter-key delay (~320ms) exceeds timeout=200ms.
 	// Typing must run on tctx after the selector wait so delay typing is not aborted.
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#slow-type",
 		"text":     "abcde",
@@ -369,7 +369,7 @@ func TestTypeDelayExceedsSelectorTimeout(t *testing.T) {
 		"timeout":  200,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.querySelector('#slow-type').value`,
 	})
@@ -382,7 +382,7 @@ func TestTypeReplaceContentEditableAndControlledInput(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var ce = document.createElement('div');
@@ -413,13 +413,13 @@ func TestTypeReplaceContentEditableAndControlledInput(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#ce-box",
 		"text":     "fresh",
 		"mode":     "replace",
 	})
-	ceOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	ceOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.querySelector('#ce-box').textContent`,
 	})
@@ -427,13 +427,13 @@ func TestTypeReplaceContentEditableAndControlledInput(t *testing.T) {
 		t.Errorf("contenteditable textContent = %s, want %q", ceOut.Result, "fresh")
 	}
 
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#controlled-inp",
 		"text":     "ok",
 		"mode":     "replace",
 	})
-	inpOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	inpOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `({
 			value: document.querySelector('#controlled-inp').value,
@@ -479,7 +479,7 @@ func TestTypeNegativeDelayRejected(t *testing.T) {
 func TestTypeDetachedOnClearTimesOutCleanly(t *testing.T) {
 	for _, delay := range []int{0, 20} {
 		tabID := navigateToFixture(t, "page2.html")
-		callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab": tabID,
 			"expression": `(function() {
 				var inp = document.createElement('input');
@@ -513,7 +513,7 @@ func TestTypeDetachedOnClearTimesOutCleanly(t *testing.T) {
 	// Ref target detached on clear fails fast with detached error.
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var inp = document.createElement('input');
@@ -524,7 +524,7 @@ func TestTypeDetachedOnClearTimesOutCleanly(t *testing.T) {
 			document.body.appendChild(inp);
 		})()`,
 	})
-	snap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
+	snap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
 	vRef := findSnapshotRef(t, snap.Snapshot, `"Vanish Ref"`)
 	if errText := callToolExpectErr(t, "type", map[string]any{
 		"tab":  tabID,
@@ -536,7 +536,7 @@ func TestTypeDetachedOnClearTimesOutCleanly(t *testing.T) {
 	}
 
 	// Selector target remounted on clear succeeds on the replacement node.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var inp = document.createElement('input');
@@ -551,13 +551,13 @@ func TestTypeDetachedOnClearTimesOutCleanly(t *testing.T) {
 			document.body.appendChild(inp);
 		})()`,
 	})
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#remount-inp",
 		"text":     "reborn",
 		"mode":     "replace",
 	})
-	remountVal := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	remountVal := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.getElementById('remount-inp').value`,
 	})
@@ -602,7 +602,7 @@ func TestSelectOptionEmptyLabelAndNonSelectElement(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var sel = document.createElement('select');
@@ -620,12 +620,12 @@ func TestSelectOptionEmptyLabelAndNonSelectElement(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ActionOutput](t, "select_option", map[string]any{
+	callTool[actionOutput](t, "select_option", map[string]any{
 		"tab":      tabID,
 		"selector": "#empty-label-sel",
 		"labels":   []string{""},
 	})
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.querySelector('#empty-label-sel').value`,
 	})
@@ -647,7 +647,7 @@ func TestPressKeyCtrlShortcutSuppressesLiteralChar(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			window.__keyEvents = [];
@@ -666,18 +666,18 @@ func TestPressKeyCtrlShortcutSuppressesLiteralChar(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ActionOutput](t, "press_key", map[string]any{
+	callTool[actionOutput](t, "press_key", map[string]any{
 		"tab":       tabID,
 		"key":       "a",
 		"modifiers": []string{"ctrl"},
 	})
-	callTool[ActionOutput](t, "press_key", map[string]any{
+	callTool[actionOutput](t, "press_key", map[string]any{
 		"tab":       tabID,
 		"key":       "a",
 		"modifiers": []string{"meta"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `({
 			value: document.querySelector('#shortcut-inp').value,
@@ -712,7 +712,7 @@ func TestPressKeySpaceAndInsert(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			window.__keys = [];
@@ -724,10 +724,10 @@ func TestPressKeySpaceAndInsert(t *testing.T) {
 		})()`,
 	})
 
-	callTool[ActionOutput](t, "press_key", map[string]any{"tab": tabID, "key": "Space"})
-	callTool[ActionOutput](t, "press_key", map[string]any{"tab": tabID, "key": "Insert"})
+	callTool[actionOutput](t, "press_key", map[string]any{"tab": tabID, "key": "Space"})
+	callTool[actionOutput](t, "press_key", map[string]any{"tab": tabID, "key": "Insert"})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `({value: document.querySelector('#named-keys-inp').value, keys: window.__keys})`,
 	})
@@ -784,13 +784,13 @@ func TestHandleDialogPromptTextAndEmptyString(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Case 1: explicit prompt text is returned to window.prompt.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { window.__promptVal = prompt('Name?', 'default'); }, 20); true`,
 	})
 	handleDialog(t, tabID, map[string]any{"action": "accept", "text": "alice"})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__promptVal`,
 	})
@@ -799,13 +799,13 @@ func TestHandleDialogPromptTextAndEmptyString(t *testing.T) {
 	}
 
 	// Case 2: explicit empty string submits "".
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { window.__promptEmpty = prompt('Name?', 'default'); }, 20); true`,
 	})
 	handleDialog(t, tabID, map[string]any{"action": "accept", "text": ""})
 
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__promptEmpty`,
 	})
@@ -818,7 +818,7 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	waitDialogOpen := func(wantType string) (DialogOutput, string) {
+	waitDialogOpen := func(wantType string) (dialogOutput, string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
@@ -833,7 +833,7 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 					break
 				}
 			}
-			var d DialogOutput
+			var d dialogOutput
 			if err := json.Unmarshal([]byte(rawJSON), &d); err != nil {
 				t.Fatalf("unmarshal dialog(get): %v", err)
 			}
@@ -849,11 +849,11 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 		t.Fatalf("timed out waiting for %q dialog to appear in dialog(get)", wantType)
-		return DialogOutput{}, ""
+		return dialogOutput{}, ""
 	}
 
 	// Initially no dialog is open.
-	initState := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"})
+	initState := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"})
 	if initState.Open || initState.Dialog != nil {
 		t.Fatalf("expected Open=false Dialog=nil initially, got %+v", initState)
 	}
@@ -862,7 +862,7 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 	// has_browser_handler:false are preserved in serialized JSON (not dropped
 	// by omitempty), and immediate post-accept dialog(get) sees open=false
 	// without polling.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { alert(''); }, 20); true`,
 	})
@@ -877,7 +877,7 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 		t.Errorf("dialog(get) JSON omitted has_browser_handler: %s", rawJSON)
 	}
 	// Verify false has_browser_handler and empty message are never dropped by omitempty.
-	falseOut, err := json.Marshal(DialogOutput{
+	falseOut, err := json.Marshal(dialogOutput{
 		Open: true,
 		Dialog: &collector.DialogState{
 			Type:              "alert",
@@ -891,17 +891,17 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 	if !strings.Contains(string(falseOut), `"has_browser_handler":false`) || !strings.Contains(string(falseOut), `"message":""`) {
 		t.Errorf("DialogOutput JSON omitted false/empty fields: %s", falseOut)
 	}
-	accOut := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
+	accOut := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
 	if accOut.Open {
 		t.Fatalf("dialog(accept) immediately reported open: %+v", accOut)
 	}
 	// ClearIfSeq guarantees immediate follow-up dialog(get) reports closed.
-	if after := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
+	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
 		t.Fatalf("dialog(get) immediately after accept still reported open: %+v", after)
 	}
 
 	// 2. Confirm dialog inspection + dismiss.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { window.__confirm = confirm('proceed?'); }, 20); true`,
 	})
@@ -909,16 +909,16 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 	if d.Dialog.Message != "proceed?" {
 		t.Errorf("confirm message = %q, want %q", d.Dialog.Message, "proceed?")
 	}
-	callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "dismiss"})
-	if after := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
+	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "dismiss"})
+	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
 		t.Fatalf("dialog(get) immediately after confirm dismiss still reported open: %+v", after)
 	}
-	if res := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__confirm`}); string(res.Result) != "false" {
+	if res := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__confirm`}); string(res.Result) != "false" {
 		t.Errorf("dismissed confirm result = %s, want false", res.Result)
 	}
 
 	// 3. Prompt dialog with omitted text preserves DefaultPrompt.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { window.__promptDef = prompt('Your name?', 'keep-default'); }, 20); true`,
 	})
@@ -926,25 +926,25 @@ func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
 	if d.Dialog.Message != "Your name?" || d.Dialog.DefaultPrompt != "keep-default" {
 		t.Errorf("prompt dialog state = %+v, want message='Your name?' default_prompt='keep-default'", d.Dialog)
 	}
-	callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
-	if after := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
+	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
+	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
 		t.Fatalf("dialog(get) immediately after prompt accept still reported open: %+v", after)
 	}
-	if res := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptDef`}); string(res.Result) != `"keep-default"` {
+	if res := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptDef`}); string(res.Result) != `"keep-default"` {
 		t.Errorf("omitted text prompt result = %s, want %q", res.Result, "keep-default")
 	}
 
 	// 4. Prompt dialog with explicit empty string submits "".
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { window.__promptBlank = prompt('Your name?', 'keep-default'); }, 20); true`,
 	})
 	waitDialogOpen("prompt")
-	callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept", "text": ""})
-	if after := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
+	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept", "text": ""})
+	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
 		t.Fatalf("dialog(get) immediately after empty prompt accept still reported open: %+v", after)
 	}
-	if res := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptBlank`}); string(res.Result) != `""` {
+	if res := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptBlank`}); string(res.Result) != `""` {
 		t.Errorf("explicit empty text prompt result = %s, want %q", res.Result, "")
 	}
 }
@@ -1045,10 +1045,10 @@ func TestDragAndDropHTML5AndPointerWithObservation(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	// 1. HTML5 native drag-and-drop with inline observation window.
-	out := callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	out := callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":               tabID,
 		"source_selector":   "#src-html5",
 		"target_selector":   "#dst-html5",
@@ -1058,7 +1058,7 @@ func TestDragAndDropHTML5AndPointerWithObservation(t *testing.T) {
 	if out.Observed == nil || !out.Observed.HasAnyEffect || out.Observed.DOMMutations == 0 {
 		t.Fatalf("HTML5 drag_and_drop observation = %+v, want HasAnyEffect=true DOMMutations>0", out.Observed)
 	}
-	evHTML5 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evHTML5 := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `({data: window.__droppedData, events: window.__html5Events})`,
 	})
@@ -1077,42 +1077,42 @@ func TestDragAndDropHTML5AndPointerWithObservation(t *testing.T) {
 	}
 
 	// Verify HTML5 drag works with steps=1 (async Input.dragIntercepted).
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":             tabID,
 		"source_selector": "#src-step1",
 		"target_selector": "#dst-step1",
 		"steps":           1,
 	})
-	if evS1 := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__step1Data`}); string(evS1.Result) != `"step1-ok"` {
+	if evS1 := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__step1Data`}); string(evS1.Result) != `"step1-ok"` {
 		t.Fatalf("steps=1 HTML5 drag __step1Data = %s, want \"step1-ok\"", evS1.Result)
 	}
 
 	// Verify mouse state is clean after HTML5 drop by clicking a normal button.
-	callTool[ClickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#after-btn"})
-	evClick := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__afterClicked`})
+	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#after-btn"})
+	evClick := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__afterClicked`})
 	if string(evClick.Result) != "true" {
 		t.Fatalf("post-drag click failed: __afterClicked = %s", evClick.Result)
 	}
 
 	// Verify HTML5 drag across >1 viewport height separation (1800px spacer).
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":             tabID,
 		"source_selector": "#src-far",
 		"target_selector": "#dst-far",
 		"steps":           5,
 	})
-	if evFar := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__farData`}); string(evFar.Result) != `"far-99"` {
+	if evFar := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__farData`}); string(evFar.Result) != `"far-99"` {
 		t.Fatalf(">1-viewport HTML5 drag __farData = %s, want \"far-99\"", evFar.Result)
 	}
 
 	// 2. Pointer/mouse-based drag-and-drop (non-draggable element).
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":             tabID,
 		"source_selector": "#src-ptr",
 		"target_selector": "#dst-ptr",
 		"steps":           8,
 	})
-	evPtr := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evPtr := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `({done: window.__ptrDone, moves: window.__ptrMoves})`,
 	})
@@ -1158,7 +1158,7 @@ func TestClickAndType(t *testing.T) {
 	})
 
 	// Verify click was registered.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('click-count').textContent",
 	})
@@ -1175,7 +1175,7 @@ func TestClickAndType(t *testing.T) {
 	})
 
 	// Verify typed text.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -1204,7 +1204,7 @@ func TestFormInteraction(t *testing.T) {
 	})
 
 	// Verify selection.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('color').value",
 	})
@@ -1225,7 +1225,7 @@ func TestFormInteraction(t *testing.T) {
 		"selector": "#result",
 	})
 
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('result').textContent",
 	})
@@ -1244,7 +1244,7 @@ func TestScrollIntoView(t *testing.T) {
 	})
 
 	// Verify the element is in view.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var el = document.getElementById('scroll-marker');
@@ -1266,7 +1266,7 @@ func TestPressKey(t *testing.T) {
 		"key": "a",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -1284,7 +1284,7 @@ func TestHover(t *testing.T) {
 		"selector": "#hover-target",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('hover-target').textContent",
 	})
@@ -1303,7 +1303,7 @@ func TestPressKeyFocusesSelector(t *testing.T) {
 		"key":      "x",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "({active: document.activeElement.id, val: document.getElementById('type-target').value})",
 	})
@@ -1332,7 +1332,7 @@ func TestTypeWithClear(t *testing.T) {
 		"mode":     "replace",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -1366,7 +1366,7 @@ func TestTypeAppendPreservesExisting(t *testing.T) {
 		"mode":     "append",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -1385,7 +1385,7 @@ func TestPressKeyWithModifiers(t *testing.T) {
 		"modifiers": []string{"ctrl"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -1404,7 +1404,7 @@ func TestSelectOptionByLabel(t *testing.T) {
 		"labels":   []string{"Green"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('color').value",
 	})
@@ -1424,7 +1424,7 @@ func TestSelectOptionByIndex(t *testing.T) {
 		"indexes":  []int{idx},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('color').value",
 	})
@@ -1487,7 +1487,7 @@ func TestScrollByOffset(t *testing.T) {
 		"y":   500,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.scrollY > 0",
 	})
@@ -1506,7 +1506,7 @@ func TestClickMissingSelector(t *testing.T) {
 	)
 
 	// Verify the valid click actually worked.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('click-count').textContent",
 	})
@@ -1535,7 +1535,7 @@ func TestTypeMissingSelector(t *testing.T) {
 	)
 
 	// Verify the valid type actually worked.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -1564,7 +1564,7 @@ func TestPressKeyMissingSelector(t *testing.T) {
 	)
 
 	// Verify focus actually moved.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.activeElement.id",
 	})
@@ -1644,7 +1644,7 @@ func TestClickRightButton(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Set up a contextmenu listener.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `document.getElementById('click-target').addEventListener('contextmenu', function(e) {
 			e.preventDefault();
@@ -1658,7 +1658,7 @@ func TestClickRightButton(t *testing.T) {
 		"button":   "right",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('click-target').textContent",
 	})
@@ -1674,7 +1674,7 @@ func TestClickDoubleClickBehaviour(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Set up a dblclick listener.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `document.getElementById('click-target').addEventListener('dblclick', function() {
 			document.getElementById('click-count').textContent = 'dblclick';
@@ -1687,7 +1687,7 @@ func TestClickDoubleClickBehaviour(t *testing.T) {
 		"click_count": 2,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('click-count').textContent",
 	})
@@ -1716,7 +1716,7 @@ func TestTypeWithDelay(t *testing.T) {
 	}
 
 	// Verify the text was actually typed.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -1743,7 +1743,7 @@ func TestUploadFilesSuccess(t *testing.T) {
 	})
 
 	// Verify the file input now has a file.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('file-input').files.length",
 	})
@@ -1751,7 +1751,7 @@ func TestUploadFilesSuccess(t *testing.T) {
 		t.Errorf("file input files.length = %s, want 1", out.Result)
 	}
 
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('file-input').files[0].name",
 	})
@@ -1766,7 +1766,7 @@ func TestHandleDialogDismiss(t *testing.T) {
 
 	done := make(chan string, 1)
 	go func() {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"expression": "confirm('Are you sure?')",
 		})
@@ -1791,7 +1791,7 @@ func TestHandleDialogConfirmAccept(t *testing.T) {
 
 	done := make(chan string, 1)
 	go func() {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"expression": "confirm('Are you sure?')",
 		})
@@ -1816,7 +1816,7 @@ func TestHandleDialogPrompt(t *testing.T) {
 
 	done := make(chan string, 1)
 	go func() {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"expression": "prompt('Enter name:')",
 		})
@@ -1844,7 +1844,7 @@ func TestPressKeyEnter(t *testing.T) {
 		"key": "Enter",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -1863,7 +1863,7 @@ func TestPressKeyMultiModifier(t *testing.T) {
 		"modifiers": []string{"ctrl", "shift"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -1892,7 +1892,7 @@ func TestTypeSubmitSubmitsForm(t *testing.T) {
 		"selector": "#result",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('result').textContent",
 	})
@@ -1926,7 +1926,7 @@ func TestClickMiddleButton(t *testing.T) {
 		"button":   "middle",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('middle-click-output').textContent",
 	})
@@ -1945,7 +1945,7 @@ func TestClickTripleClick(t *testing.T) {
 		"click_count": 3,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('triple-click-output').textContent",
 	})
@@ -1963,7 +1963,7 @@ func TestScrollHorizontal(t *testing.T) {
 		"x":   300,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.scrollX > 0",
 	})
@@ -1982,7 +1982,7 @@ func TestScrollBothAxes(t *testing.T) {
 		"y":   400,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.scrollX > 0 && window.scrollY > 0",
 	})
@@ -2003,7 +2003,7 @@ func TestTypeWithClearOnEmptyField(t *testing.T) {
 		"mode":     "replace",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -2021,7 +2021,7 @@ func TestPressKeyTab(t *testing.T) {
 		"key": "Tab",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -2039,7 +2039,7 @@ func TestPressKeyEscape(t *testing.T) {
 		"key": "Escape",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -2057,7 +2057,7 @@ func TestPressKeyArrowDown(t *testing.T) {
 		"key": "ArrowDown",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -2076,7 +2076,7 @@ func TestPressKeyAltModifier(t *testing.T) {
 		"modifiers": []string{"alt"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -2096,7 +2096,7 @@ func TestSelectOptionByValueVerification(t *testing.T) {
 	})
 
 	// Verify value.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('color').value",
 	})
@@ -2105,7 +2105,7 @@ func TestSelectOptionByValueVerification(t *testing.T) {
 	}
 
 	// Verify selectedIndex.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('color').selectedIndex",
 	})
@@ -2124,7 +2124,7 @@ func TestSelectOptionFiresChangeEvent(t *testing.T) {
 		"values":   []string{"blue"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('change-output').textContent",
 	})
@@ -2149,7 +2149,7 @@ func TestSelectOptionByIndexZero(t *testing.T) {
 		"indexes":  []int{0},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('color').value",
 	})
@@ -2169,7 +2169,7 @@ func TestUploadMultipleFiles(t *testing.T) {
 	os.WriteFile(file2, []byte("content2"), 0644)
 
 	// Make the file input accept multiple files.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('file-input').multiple = true",
 	})
@@ -2180,7 +2180,7 @@ func TestUploadMultipleFiles(t *testing.T) {
 		"paths":    []string{file1, file2},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('file-input').files.length",
 	})
@@ -2240,7 +2240,7 @@ func TestPressKeyIntoFocusedInput(t *testing.T) {
 		"key":      "x",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -2260,7 +2260,7 @@ func TestTypeUnicodeCharacters(t *testing.T) {
 		"mode":     "replace",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -2290,7 +2290,7 @@ func TestTypeWithDelayAndClear(t *testing.T) {
 		"delay":    20,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -2313,7 +2313,7 @@ func TestTypeIntoTextarea(t *testing.T) {
 		"mode":     "replace",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('textarea-target').value",
 	})
@@ -2334,7 +2334,7 @@ func TestTypeEmptyText(t *testing.T) {
 		"mode":     "replace",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('textarea-target').value",
 	})
@@ -2359,7 +2359,7 @@ func TestClickDisabledButton(t *testing.T) {
 
 	// And the page-side handler must not have fired (defense against an
 	// implementation that errored after dispatching).
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('disabled-output').textContent",
 	})
@@ -2400,7 +2400,7 @@ func TestClickTriggersNavigation(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -2465,7 +2465,7 @@ func TestScrollNegativeOffset(t *testing.T) {
 		"y":   500,
 	})
 
-	out1 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out1 := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.scrollY",
 	})
@@ -2476,7 +2476,7 @@ func TestScrollNegativeOffset(t *testing.T) {
 		"y":   -200,
 	})
 
-	out2 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out2 := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.scrollY",
 	})
@@ -2504,7 +2504,7 @@ func TestScrollSelectorIgnoresXY(t *testing.T) {
 	})
 
 	// The marker should now be in view. Verify scrollY > 0.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.scrollY > 0",
 	})
@@ -2534,7 +2534,7 @@ func TestHandleDialogDismissConfirm(t *testing.T) {
 		t.Fatal("timed out waiting for confirm dialog")
 	}
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('confirm-result').textContent",
 	})
@@ -2564,7 +2564,7 @@ func TestHandleDialogDismissPrompt(t *testing.T) {
 		t.Fatal("timed out waiting for prompt dialog")
 	}
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('prompt-result').textContent",
 	})
@@ -2583,7 +2583,7 @@ func TestPressKeyMetaModifier(t *testing.T) {
 		"modifiers": []string{"meta"},
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('key-output').textContent",
 	})
@@ -2611,7 +2611,7 @@ func TestHoverTriggersCSSHover(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Get the background color BEFORE hover.
-	bgBefore := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	bgBefore := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "getComputedStyle(document.getElementById('hover-target')).backgroundColor",
 	})
@@ -2623,7 +2623,7 @@ func TestHoverTriggersCSSHover(t *testing.T) {
 	})
 
 	// Verify JS mouseover event fired (CDP mouseMoved triggers native events).
-	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('hover-output').textContent",
 	})
@@ -2633,7 +2633,7 @@ func TestHoverTriggersCSSHover(t *testing.T) {
 
 	// Check background color AFTER hover — CSS :hover SHOULD activate
 	// because we use CDP Input.dispatchMouseEvent (mouseMoved).
-	bgAfter := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	bgAfter := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "getComputedStyle(document.getElementById('hover-target')).backgroundColor",
 	})
@@ -2654,7 +2654,7 @@ func TestSelectOptionMultipleSelect(t *testing.T) {
 		"selector": "#multi-select",
 		"values":   []string{"red", "green"},
 	})
-	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "Array.from(document.getElementById('multi-select').selectedOptions).map(o => o.value).join(',')",
 	})
@@ -2668,7 +2668,7 @@ func TestSelectOptionMultipleSelect(t *testing.T) {
 		"selector": "#multi-select",
 		"values":   []string{"blue"},
 	})
-	eval2 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval2 := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "Array.from(document.getElementById('multi-select').selectedOptions).map(o => o.value).join(',')",
 	})
@@ -2682,7 +2682,7 @@ func TestSelectOptionMultipleSelect(t *testing.T) {
 		"selector": "#multi-select",
 		"values":   []string{},
 	})
-	evalEmpty := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evalEmpty := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('multi-select').selectedOptions.length",
 	})
@@ -2707,7 +2707,7 @@ func TestSelectOptionMultipleSelect(t *testing.T) {
 	}
 
 	// Verify change event fired.
-	eval3 := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval3 := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('multi-select-output').textContent",
 	})
@@ -2726,7 +2726,7 @@ func TestSelectOptionMultipleByLabel(t *testing.T) {
 		"labels":   []string{"Blue"},
 	})
 
-	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('multi-select').value",
 	})
@@ -2746,7 +2746,7 @@ func TestSelectOptionMultipleByIndex(t *testing.T) {
 		"indexes":  []int{idx},
 	})
 
-	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('multi-select').value",
 	})
@@ -2854,7 +2854,7 @@ func TestClickToggleRevealsElement(t *testing.T) {
 	})
 
 	// Verify the input is focused.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.activeElement.id",
 	})
@@ -2889,7 +2889,7 @@ func TestPressEnterSubmitsForm(t *testing.T) {
 	})
 
 	// Check that the form's submit handler was called.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('search-submitted').textContent",
 	})
@@ -2924,7 +2924,7 @@ func TestPressEnterAfterFocus(t *testing.T) {
 		"timeout":    3000,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('search-submitted').textContent",
 	})
@@ -2947,7 +2947,7 @@ func TestPressKeyUTF8Character(t *testing.T) {
 	})
 
 	// Verify the character was typed.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.querySelector('#name').value`,
 	})
@@ -3033,7 +3033,7 @@ func TestSelectOptionEmptyValue(t *testing.T) {
 	})
 
 	// Verify it was set to "low".
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('priority').value",
 	})
@@ -3049,7 +3049,7 @@ func TestSelectOptionEmptyValue(t *testing.T) {
 	})
 
 	// Verify it was set back to "".
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('priority').value",
 	})
@@ -3072,7 +3072,7 @@ func TestPressKeyInsertsCharacter(t *testing.T) {
 	}
 
 	// Verify the input has the typed characters.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -3203,9 +3203,9 @@ func TestInteractionWithSnapshotRefs(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
-	snap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
+	snap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
 	btnRef := findSnapshotRef(t, snap.Snapshot, `"Run Action"`)
 	inpRef := findSnapshotRef(t, snap.Snapshot, `"Search Box"`)
 	selRef := findSnapshotRef(t, snap.Snapshot, `"Tags"`)
@@ -3216,63 +3216,63 @@ func TestInteractionWithSnapshotRefs(t *testing.T) {
 	farRef := findSnapshotRef(t, snap.Snapshot, `"Bottom Target"`)
 
 	// 1. click(ref) with modifiers.
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":       tabID,
 		"ref":       btnRef,
 		"modifiers": []string{"shift"},
 	})
-	clicks := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__clicks`})
+	clicks := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__clicks`})
 	if !strings.Contains(string(clicks.Result), `"shift":true`) {
 		t.Errorf("click(ref, shift) = %s, want shift=true", clicks.Result)
 	}
 
 	// 2. type(ref, append) moves caret to end even if caret was placed at 0,
 	//    then type(ref, replace, submit=true) submits the form.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `(function(){ var i = document.getElementById('ref-inp'); i.focus(); i.setSelectionRange(0, 0); })()`,
 	})
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":  tabID,
 		"ref":  inpRef,
 		"text": "-end",
 		"mode": "append",
 	})
-	val := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('ref-inp').value`})
+	val := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('ref-inp').value`})
 	if string(val.Result) != `"start-end"` {
 		t.Errorf("type(ref, append) value = %s, want \"start-end\"", val.Result)
 	}
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":    tabID,
 		"ref":    inpRef,
 		"text":   "final",
 		"mode":   "replace",
 		"submit": true,
 	})
-	sub := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__submittedVal`})
+	sub := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__submittedVal`})
 	if string(sub.Result) != `"final"` {
 		t.Errorf("type(ref, submit=true) submitted = %s, want \"final\"", sub.Result)
 	}
 
 	// 3. select_option(ref) multi-select + deselect all.
-	callTool[ActionOutput](t, "select_option", map[string]any{
+	callTool[actionOutput](t, "select_option", map[string]any{
 		"tab":    tabID,
 		"ref":    selRef,
 		"values": []string{"go", "zig"},
 	})
-	selOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	selOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `Array.from(document.getElementById('ref-sel').selectedOptions).map(o => o.value).join(',')`,
 	})
 	if string(selOut.Result) != `"go,zig"` {
 		t.Errorf("select_option(ref) = %s, want \"go,zig\"", selOut.Result)
 	}
-	callTool[ActionOutput](t, "select_option", map[string]any{
+	callTool[actionOutput](t, "select_option", map[string]any{
 		"tab":    tabID,
 		"ref":    selRef,
 		"values": []string{},
 	})
-	selEmpty := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	selEmpty := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.getElementById('ref-sel').selectedOptions.length`,
 	})
@@ -3281,15 +3281,15 @@ func TestInteractionWithSnapshotRefs(t *testing.T) {
 	}
 
 	// 4. hover(ref).
-	callTool[ActionOutput](t, "hover", map[string]any{"tab": tabID, "ref": hoverRef})
-	hov := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__hovered`})
+	callTool[actionOutput](t, "hover", map[string]any{"tab": tabID, "ref": hoverRef})
+	hov := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__hovered`})
 	if string(hov.Result) != "true" {
 		t.Errorf("hover(ref) __hovered = %s, want true", hov.Result)
 	}
 
 	// 5. press_key(ref).
-	callTool[ActionOutput](t, "press_key", map[string]any{"tab": tabID, "ref": inpRef, "key": "!"})
-	val2 := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('ref-inp').value`})
+	callTool[actionOutput](t, "press_key", map[string]any{"tab": tabID, "ref": inpRef, "key": "!"})
+	val2 := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('ref-inp').value`})
 	if !strings.Contains(string(val2.Result), "!") {
 		t.Errorf("press_key(ref) value = %s, want to contain '!'", val2.Result)
 	}
@@ -3299,12 +3299,12 @@ func TestInteractionWithSnapshotRefs(t *testing.T) {
 	if err := os.WriteFile(tmpFile, []byte("ok"), 0o644); err != nil {
 		t.Fatalf("write tmpFile: %v", err)
 	}
-	callTool[ActionOutput](t, "upload_files", map[string]any{
+	callTool[actionOutput](t, "upload_files", map[string]any{
 		"tab":   tabID,
 		"ref":   fileRef,
 		"paths": []string{tmpFile},
 	})
-	fName := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	fName := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.getElementById('ref-file').files[0].name`,
 	})
@@ -3313,25 +3313,25 @@ func TestInteractionWithSnapshotRefs(t *testing.T) {
 	}
 
 	// 7. drag_and_drop(source_ref, target_ref).
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":        tabID,
 		"source_ref": srcRef,
 		"target_ref": dstRef,
 		"steps":      5,
 	})
-	dropVal := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__dropped`})
+	dropVal := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__dropped`})
 	if string(dropVal.Result) != `"via-ref"` {
 		t.Errorf("drag_and_drop(refs) = %s, want \"via-ref\"", dropVal.Result)
 	}
 
 	// 8. scroll(ref).
-	scr := callTool[ScrollOutput](t, "scroll", map[string]any{"tab": tabID, "ref": farRef})
+	scr := callTool[scrollOutput](t, "scroll", map[string]any{"tab": tabID, "ref": farRef})
 	if scr.ScrollY <= 0 {
 		t.Errorf("scroll(ref) ScrollY = %v, want > 0", scr.ScrollY)
 	}
 
 	// 9. Detached ref fails cleanly with snapshot guidance.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('act-btn').remove(); true`})
+	callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('act-btn').remove(); true`})
 	if errText := callToolExpectErr(t, "click", map[string]any{"tab": tabID, "ref": btnRef}); !strings.Contains(errText, "snapshot") {
 		t.Errorf("detached ref click err = %q, want snapshot guidance", errText)
 	}
@@ -3391,7 +3391,7 @@ func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	// Wait for iframe load.
 	callTool[struct{}](t, "wait_for", map[string]any{
@@ -3400,15 +3400,15 @@ func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
 	})
 
 	// Nested open Shadow DOM interactions via '>>>'.
-	callTool[ClickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#outer-host >>> #inner-host >>> #s-btn"})
-	callTool[ActionOutput](t, "hover", map[string]any{"tab": tabID, "selector": "#outer-host >>> #inner-host >>> #s-btn"})
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#outer-host >>> #inner-host >>> #s-btn"})
+	callTool[actionOutput](t, "hover", map[string]any{"tab": tabID, "selector": "#outer-host >>> #inner-host >>> #s-btn"})
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#outer-host >>> #inner-host >>> #s-inp",
 		"text":     "shadow-typed",
 		"mode":     "replace",
 	})
-	callTool[ActionOutput](t, "select_option", map[string]any{
+	callTool[actionOutput](t, "select_option", map[string]any{
 		"tab":      tabID,
 		"selector": "#outer-host >>> #inner-host >>> #s-sel",
 		"values":   []string{"two"},
@@ -3417,19 +3417,19 @@ func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
 	if err := os.WriteFile(tmpFile, []byte("s"), 0o644); err != nil {
 		t.Fatalf("write tmpFile: %v", err)
 	}
-	callTool[ActionOutput](t, "upload_files", map[string]any{
+	callTool[actionOutput](t, "upload_files", map[string]any{
 		"tab":      tabID,
 		"selector": "#outer-host >>> #inner-host >>> #s-file",
 		"paths":    []string{tmpFile},
 	})
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":             tabID,
 		"source_selector": "#outer-host >>> #inner-host >>> #s-src",
 		"target_selector": "#outer-host >>> #inner-host >>> #s-dst",
 		"steps":           4,
 	})
 
-	shadowCheck := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	shadowCheck := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			const inner = document.getElementById('outer-host').shadowRoot.getElementById('inner-host').shadowRoot;
@@ -3459,7 +3459,7 @@ func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
 	}
 
 	// Same-origin iframe interactions via frame + selector AND via snapshot(frame) ref.
-	frames := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+	frames := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 	var childFrameID string
 	for _, fr := range frames.Frames {
 		if strings.HasSuffix(fr.URL, "/child.html") {
@@ -3471,25 +3471,25 @@ func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
 		t.Fatalf("child frame not found in %+v", frames.Frames)
 	}
 
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"frame":    childFrameID,
 		"selector": "#if-btn",
 	})
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"frame":    childFrameID,
 		"selector": "#if-inp",
 		"text":     "in-frame",
 		"mode":     "replace",
 	})
-	callTool[ActionOutput](t, "select_option", map[string]any{
+	callTool[actionOutput](t, "select_option", map[string]any{
 		"tab":      tabID,
 		"frame":    childFrameID,
 		"selector": "#if-sel",
 		"values":   []string{"y"},
 	})
-	scrFrame := callTool[ScrollOutput](t, "scroll", map[string]any{
+	scrFrame := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":   tabID,
 		"frame": childFrameID,
 		"y":     200,
@@ -3500,16 +3500,16 @@ func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
 
 	// Now take a subframe snapshot, click the button via ref, and scroll to
 	// #if-bottom via ref (must report subframe scroll_y > 0, not main-frame 0).
-	fSnap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "frame": childFrameID})
+	fSnap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "frame": childFrameID})
 	ifBtnRef := findSnapshotRef(t, fSnap.Snapshot, `"Frame Button"`)
 	ifBottomRef := findSnapshotRef(t, fSnap.Snapshot, `"Frame Bottom"`)
-	callTool[ClickOutput](t, "click", map[string]any{"tab": tabID, "ref": ifBtnRef})
-	scrSubRef := callTool[ScrollOutput](t, "scroll", map[string]any{"tab": tabID, "ref": ifBottomRef})
+	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "ref": ifBtnRef})
+	scrSubRef := callTool[scrollOutput](t, "scroll", map[string]any{"tab": tabID, "ref": ifBottomRef})
 	if scrSubRef.ScrollY <= 500 {
 		t.Errorf("scroll(ref=<subframe bottom>) ScrollY = %v, want > 500 (subframe scroll, not main-frame 0)", scrSubRef.ScrollY)
 	}
 
-	ifCheck := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	ifCheck := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":   tabID,
 		"frame": childFrameID,
 		"expression": `({
@@ -3562,17 +3562,17 @@ func TestInteractionViewportCoordinatesAndDialogObserveWindow(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	// Hover + Click by raw viewport coordinates with modifiers.
-	callTool[ActionOutput](t, "hover", map[string]any{"tab": tabID, "x": 80.0, "y": 60.0})
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[actionOutput](t, "hover", map[string]any{"tab": tabID, "x": 80.0, "y": 60.0})
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":       tabID,
 		"x":         80.0,
 		"y":         60.0,
 		"modifiers": []string{"shift", "ctrl"},
 	})
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":      tabID,
 		"source_x": 80.0,
 		"source_y": 140.0,
@@ -3580,7 +3580,7 @@ func TestInteractionViewportCoordinatesAndDialogObserveWindow(t *testing.T) {
 		"target_y": 140.0,
 		"steps":    4,
 	})
-	ev := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	ev := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `({click: window.__xyClick, hover: window.__xyHover, drop: window.__xyDrop})`,
 	})
@@ -3592,18 +3592,18 @@ func TestInteractionViewportCoordinatesAndDialogObserveWindow(t *testing.T) {
 	}
 
 	// dialog(action="accept", observe_window_ms=300) observes post-dialog fetch.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(() => { if (confirm('fetch?')) fetch('/ping'); }, 15); true`,
 	})
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	dlgOut := callTool[DialogOutput](t, "dialog", map[string]any{
+	dlgOut := callTool[dialogOutput](t, "dialog", map[string]any{
 		"tab":               tabID,
 		"action":            "accept",
 		"observe_window_ms": 300,
@@ -3616,18 +3616,18 @@ func TestInteractionViewportCoordinatesAndDialogObserveWindow(t *testing.T) {
 	}
 
 	// Chained dialog opening during observe_window_ms must be reflected in Open/Dialog.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(() => { if (confirm('first')) setTimeout(() => alert('second'), 30); }, 15); true`,
 	})
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	chained := callTool[DialogOutput](t, "dialog", map[string]any{
+	chained := callTool[dialogOutput](t, "dialog", map[string]any{
 		"tab":               tabID,
 		"action":            "accept",
 		"observe_window_ms": 200,
@@ -3642,7 +3642,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			document.body.innerHTML =
@@ -3674,7 +3674,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	}); !strings.Contains(strings.ToLower(errText), "focus") {
 		t.Errorf("press_key on plain div err = %q, want focus error", errText)
 	}
-	guardCheck := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	guardCheck := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `({active: document.getElementById('active-inp').value, disabled: document.getElementById('disabled-inp').value})`,
 	})
@@ -3683,13 +3683,13 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	}
 
 	// type(append) on <input type="email"> and Shadow DOM contenteditable appends at end.
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#email-inp",
 		"text":     ".uk",
 		"mode":     "append",
 	})
-	emailVal := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	emailVal := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.getElementById('email-inp').value`,
 	})
@@ -3697,7 +3697,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 		t.Errorf("email append value = %s, want \"a@b.com.uk\"", emailVal.Result)
 	}
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			const ce = document.getElementById('ce-host').shadowRoot.getElementById('ce');
@@ -3710,13 +3710,13 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 			if (sel) { sel.removeAllRanges(); sel.addRange(r); }
 		})()`,
 	})
-	callTool[ActionOutput](t, "type", map[string]any{
+	callTool[actionOutput](t, "type", map[string]any{
 		"tab":      tabID,
 		"selector": "#ce-host >>> #ce",
 		"text":     " world",
 		"mode":     "append",
 	})
-	ceText := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	ceText := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.getElementById('ce-host').shadowRoot.getElementById('ce').textContent`,
 	})
@@ -3725,7 +3725,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	}
 
 	// Clicking a display:none element removed mid-wait fails fast with a detached error.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(() => document.getElementById('vanish-hidden').remove(), 60); true`,
 	})
@@ -3743,7 +3743,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	}
 
 	// drag_and_drop whose drop handler opens a synchronous alert returns promptly with dialog open.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			document.body.innerHTML =
@@ -3758,7 +3758,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 		})()`,
 	})
 	dragStart := time.Now()
-	callTool[ActionOutput](t, "drag_and_drop", map[string]any{
+	callTool[actionOutput](t, "drag_and_drop", map[string]any{
 		"tab":             tabID,
 		"source_selector": "#d-src",
 		"target_selector": "#d-dst",
@@ -3768,7 +3768,7 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 		t.Errorf("drag_and_drop opening sync alert took %v, want prompt return", elapsed)
 	}
 	defer handleDialog(t, tabID, map[string]any{"action": "accept"})
-	if d := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open || d.Dialog == nil || d.Dialog.Message != "drop-alert" {
+	if d := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open || d.Dialog == nil || d.Dialog.Message != "drop-alert" {
 		t.Errorf("dialog after drop-alert = %+v, want Open=true Message='drop-alert'", d)
 	}
 }

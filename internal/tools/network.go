@@ -19,9 +19,9 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
-// GetNetworkRequestsInput is the input for get_network_requests.
-type GetNetworkRequestsInput struct {
-	TabInput
+// getNetworkRequestsInput is the input for get_network_requests.
+type getNetworkRequestsInput struct {
+	tabInput
 	Mode       string   `json:"mode" jsonschema:"Read mode: 'peek' to keep entries in the HTTP buffer, 'drain' to consume entries that match the filter. Required. WebSocket connections are never drained (long-lived); they are always returned by snapshot."`
 	Limit      int      `json:"limit,omitempty" jsonschema:"Max entries to return (default all)"`
 	Type       string   `json:"type,omitempty" jsonschema:"Filter by resource type (e.g. document, stylesheet, script, image, xhr, fetch, websocket, other)"`
@@ -32,30 +32,30 @@ type GetNetworkRequestsInput struct {
 	Fields     []string `json:"fields,omitempty" jsonschema:"Project each entry to this set of JSON field names (e.g. ['id','method','url','status']). When omitted or empty, every field is returned. Useful to keep responses tiny when listing many entries."`
 }
 
-// GetNetworkRequestsOutput is the output for get_network_requests when
+// getNetworkRequestsOutput is the output for get_network_requests when
 // no fields projection is requested.
-type GetNetworkRequestsOutput struct {
+type getNetworkRequestsOutput struct {
 	Requests []collector.NetworkEntry `json:"requests"`
 }
 
-// ProjectedNetworkRequestsOutput is the output for get_network_requests
+// projectedNetworkRequestsOutput is the output for get_network_requests
 // when the caller asked for a fields projection. Each request is a map
 // containing only the requested keys.
-type ProjectedNetworkRequestsOutput struct {
+type projectedNetworkRequestsOutput struct {
 	Requests []map[string]any `json:"requests"`
 }
 
-// GetNetworkBodyInput is the input for get_network_body.
-type GetNetworkBodyInput struct {
-	TabInput
+// getNetworkBodyInput is the input for get_network_body.
+type getNetworkBodyInput struct {
+	tabInput
 	RequestID  string `json:"request_id" jsonschema:"Request ID from get_network_requests."`
 	Part       string `json:"part,omitempty" jsonschema:"Which body to fetch: 'response' (default) or 'request'."`
 	RangeStart int64  `json:"range_start,omitempty" jsonschema:"Inclusive byte offset to start returning from (default 0, must be >= 0)."`
 	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"Exclusive byte offset to stop at (default 0 = end of body, must be 0 or >= range_start). When base64_encoded=true, offsets address the decoded binary, not the base64 text."`
 }
 
-// BodySliceOutput is the output for get_network_body.
-type BodySliceOutput struct {
+// bodySliceOutput is the output for get_network_body.
+type bodySliceOutput struct {
 	Body          string `json:"body"`
 	Base64Encoded bool   `json:"base64_encoded"`
 	// TotalBytes is the size of the full body (decoded for base64
@@ -66,17 +66,17 @@ type BodySliceOutput struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-// GetWebSocketFramesInput is the input for get_websocket_frames.
-type GetWebSocketFramesInput struct {
-	TabInput
+// getWebSocketFramesInput is the input for get_websocket_frames.
+type getWebSocketFramesInput struct {
+	tabInput
 	RequestID string `json:"request_id" jsonschema:"The websocket connection's request ID from get_network_requests"`
 	Direction string `json:"direction,omitempty" jsonschema:"Frame direction: sent received or both (default both)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"Max frames to return per direction (default all buffered)"`
 	Mode      string `json:"mode" jsonschema:"Read mode: 'peek' to keep frames in the buffer, 'drain' to consume them. Required."`
 }
 
-// GetWebSocketFramesOutput is the output for get_websocket_frames.
-type GetWebSocketFramesOutput struct {
+// getWebSocketFramesOutput is the output for get_websocket_frames.
+type getWebSocketFramesOutput struct {
 	Sent     []collector.WSFrame `json:"sent"`
 	Received []collector.WSFrame `json:"received"`
 }
@@ -101,15 +101,15 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_network_requests",
 		Description: "Get captured network requests (HTTP and WebSocket connections) with their URLs, methods, status codes, timing, and headers. WebSocket entries include frame counts; use get_websocket_frames to read the actual frames. 'mode' must be 'peek' (keep entries in the HTTP buffer) or 'drain' (consume entries that match the filter). WebSocket connections are long-lived and always returned by snapshot regardless of mode. Pass 'fields' (e.g. ['id','method','url','status']) to project each entry to a subset of JSON keys — useful when listing many entries.",
-		InputSchema: schemaWithEnums[GetNetworkRequestsInput](map[string][]string{
-			"mode":   {ModePeek, ModeDrain},
+		InputSchema: schemaWithEnums[getNetworkRequestsInput](map[string][]string{
+			"mode":   {modePeek, modeDrain},
 			"type":   networkResourceTypeValues,
 			"fields": sortedKeys(networkEntryFieldSet),
 		}),
 		OutputSchema: networkRequestsOutputSchema(),
 		Annotations:  mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkRequestsInput) (*mcp.CallToolResult, any, error) {
-		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input getNetworkRequestsInput) (*mcp.CallToolResult, any, error) {
+		if err := validateMode(input.Mode, modePeek, modeDrain); err != nil {
 			return nil, nil, err
 		}
 		if err := validateLimit(input.Limit); err != nil {
@@ -152,7 +152,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		// or type="websocket") are filled with matching WebSocket snapshots.
 		var httpEntries []collector.NetworkEntry
 		if !strings.EqualFold(input.Type, "websocket") {
-			if input.Mode == ModePeek {
+			if input.Mode == modePeek {
 				httpEntries = t.Network.Peek(f, input.Limit)
 			} else {
 				httpEntries = t.Network.Drain(f, input.Limit)
@@ -171,31 +171,31 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		requests = append(requests, wsEntries...)
 
 		if len(allowedFields) == 0 {
-			return nil, GetNetworkRequestsOutput{Requests: requests}, nil
+			return nil, getNetworkRequestsOutput{Requests: requests}, nil
 		}
 		projected, err := projectEntries(requests, allowedFields)
 		if err != nil {
 			return nil, nil, err
 		}
-		return nil, ProjectedNetworkRequestsOutput{Requests: projected}, nil
+		return nil, projectedNetworkRequestsOutput{Requests: projected}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_network_body",
 		Description: "Get the response ('response', default) or request ('request') body of a network request by request ID. Use range_start/range_end to fetch slices of large bodies; total_bytes always reports the full decoded size.",
-		InputSchema: schemaWithEnums[GetNetworkBodyInput](map[string][]string{
+		InputSchema: schemaWithEnums[getNetworkBodyInput](map[string][]string{
 			"part": networkBodyPartValues,
 		}),
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetNetworkBodyInput) (*mcp.CallToolResult, BodySliceOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input getNetworkBodyInput) (*mcp.CallToolResult, bodySliceOutput, error) {
 		if input.RequestID == "" {
-			return nil, BodySliceOutput{}, fmt.Errorf("request_id is required")
+			return nil, bodySliceOutput{}, fmt.Errorf("request_id is required")
 		}
 		if err := validateEnum("part", input.Part, true, networkBodyPartValues); err != nil {
-			return nil, BodySliceOutput{}, err
+			return nil, bodySliceOutput{}, err
 		}
 		if err := validateRange(input.RangeStart, input.RangeEnd); err != nil {
-			return nil, BodySliceOutput{}, err
+			return nil, bodySliceOutput{}, err
 		}
 		part := input.Part
 		if part == "" {
@@ -203,7 +203,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, BodySliceOutput{}, err
+			return nil, bodySliceOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -214,7 +214,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 				RequestID: cdpnetwork.RequestID(input.RequestID),
 			})
 			if err != nil {
-				return nil, BodySliceOutput{}, err
+				return nil, bodySliceOutput{}, err
 			}
 			// Multipart form uploads with binary parts (files) are excluded by
 			// Chrome; cdproto decodes base64 when base64Encoded=true.
@@ -225,7 +225,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			RequestID: cdpnetwork.RequestID(input.RequestID),
 		})
 		if err != nil {
-			return nil, BodySliceOutput{}, err
+			return nil, bodySliceOutput{}, err
 		}
 		return nil, encodeBodySlice(res.Body, input.RangeStart, input.RangeEnd), nil
 	})
@@ -233,23 +233,23 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_websocket_frames",
 		Description: "Get WebSocket frames sent and/or received on a specific connection. Use the request ID returned for entries with type=websocket from get_network_requests. 'mode' must be 'peek' (keep frames buffered) or 'drain' (consume them).",
-		InputSchema: schemaWithEnums[GetWebSocketFramesInput](map[string][]string{
-			"mode":      {ModePeek, ModeDrain},
+		InputSchema: schemaWithEnums[getWebSocketFramesInput](map[string][]string{
+			"mode":      {modePeek, modeDrain},
 			"direction": wsDirectionValues,
 		}),
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetWebSocketFramesInput) (*mcp.CallToolResult, GetWebSocketFramesOutput, error) {
-		if err := validateMode(input.Mode, ModePeek, ModeDrain); err != nil {
-			return nil, GetWebSocketFramesOutput{}, err
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input getWebSocketFramesInput) (*mcp.CallToolResult, getWebSocketFramesOutput, error) {
+		if err := validateMode(input.Mode, modePeek, modeDrain); err != nil {
+			return nil, getWebSocketFramesOutput{}, err
 		}
 		if input.RequestID == "" {
-			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("request_id is required")
+			return nil, getWebSocketFramesOutput{}, fmt.Errorf("request_id is required")
 		}
 		if err := validateLimit(input.Limit); err != nil {
-			return nil, GetWebSocketFramesOutput{}, err
+			return nil, getWebSocketFramesOutput{}, err
 		}
 		if err := validateEnum("direction", input.Direction, true, wsDirectionValues); err != nil {
-			return nil, GetWebSocketFramesOutput{}, err
+			return nil, getWebSocketFramesOutput{}, err
 		}
 		direction := input.Direction
 		if direction == "" {
@@ -257,11 +257,11 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, GetWebSocketFramesOutput{}, err
+			return nil, getWebSocketFramesOutput{}, err
 		}
 
-		peek := input.Mode == ModePeek
-		out := GetWebSocketFramesOutput{
+		peek := input.Mode == modePeek
+		out := getWebSocketFramesOutput{
 			Sent:     []collector.WSFrame{},
 			Received: []collector.WSFrame{},
 		}
@@ -285,7 +285,7 @@ func registerNetworkTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 		}
 		if !found {
-			return nil, GetWebSocketFramesOutput{}, fmt.Errorf("no websocket connection with request_id %q", input.RequestID)
+			return nil, getWebSocketFramesOutput{}, fmt.Errorf("no websocket connection with request_id %q", input.RequestID)
 		}
 		return nil, out, nil
 	})
@@ -333,11 +333,11 @@ func websocketEntries(conns []collector.WSConnection, f *collector.NetworkFilter
 // classified on the *full* body so a UTF-8 body sliced mid-codepoint
 // stays text — the slice is trimmed back to the last valid rune
 // boundary on either end. Binary bodies are base64-encoded as before.
-func encodeBodySlice(body []byte, start, end int64) BodySliceOutput {
+func encodeBodySlice(body []byte, start, end int64) bodySliceOutput {
 	total := int64(len(body))
 	isText := utf8.Valid(body)
 	sliced, truncated := applyByteRange(body, start, end)
-	out := BodySliceOutput{TotalBytes: total, Truncated: truncated}
+	out := bodySliceOutput{TotalBytes: total, Truncated: truncated}
 	if isText {
 		text := collector.TrimUTF8Slice(sliced)
 		out.Body = string(text)

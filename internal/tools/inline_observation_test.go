@@ -20,7 +20,7 @@ func TestClickObserveWindowCatchesNetwork(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#fetch-btn",
 		"observe_window_ms": 500,
@@ -43,7 +43,7 @@ func TestClickObserveWindowZeroOmitted(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#noop-btn",
 	})
@@ -62,12 +62,12 @@ func TestClickObserveWindowNoOpReportsZero(t *testing.T) {
 
 	// Drain ambient state so the no-op observation isn't confused by
 	// page-load network activity still arriving.
-	_ = callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	_ = callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
 		"observe_window_ms": 200,
@@ -101,7 +101,7 @@ func TestClickObserveWindowURLChange(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#pushstate-btn",
 		"observe_window_ms": 300,
@@ -144,8 +144,9 @@ func TestTypeObserveWindow(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Add an oninput handler that fires a fetch — simulating typeahead.
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.body.insertAdjacentHTML('beforeend', '<input id="typeahead">');
 			document.getElementById('typeahead').addEventListener('input', function() {
@@ -155,7 +156,7 @@ func TestTypeObserveWindow(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ActionOutput](t, "type", map[string]any{
+	out := callTool[actionOutput](t, "type", map[string]any{
 		"tab":               tabID,
 		"selector":          "#typeahead",
 		"text":              "x",
@@ -178,7 +179,7 @@ func TestClickObserveWindowDOMMutation(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#dom-btn",
 		"observe_window_ms": 200,
@@ -190,7 +191,7 @@ func TestClickObserveWindowDOMMutation(t *testing.T) {
 		t.Errorf("DOMMutations = %d, want >= 1 after appending an <li>", out.Observed.DOMMutations)
 	}
 	// DOMMutations is deliberately excluded from has_any_effect, so a
-	// mutation-only click must NOT flip it. See the ObservedActivity doc.
+	// mutation-only click must NOT flip it. See the observedActivity doc.
 	if out.Observed.HasAnyEffect {
 		t.Errorf("HasAnyEffect = true on a mutation-only click; got %+v", out.Observed)
 	}
@@ -203,7 +204,7 @@ func TestClickObserveWindowConsoleAndJSError(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#console-btn",
 		"observe_window_ms": 200,
@@ -218,7 +219,7 @@ func TestClickObserveWindowConsoleAndJSError(t *testing.T) {
 		t.Errorf("HasAnyEffect = false despite a console message; got %+v", out.Observed)
 	}
 
-	out2 := callTool[ClickOutput](t, "click", map[string]any{
+	out2 := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#throw-btn",
 		"observe_window_ms": 300,
@@ -250,8 +251,9 @@ func TestClickObserveWindowSlowRequestStillInFlightCounted(t *testing.T) {
 	// request could complete before the window closes, CountStartedSince
 	// would find it in the *completed* buffer and the test would pass
 	// even with the pending-map walk deleted, silently losing the pin.
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.body.insertAdjacentHTML('beforeend', '<button id="slow-btn">slow</button>');
 			document.getElementById('slow-btn').addEventListener('click', function() {
@@ -262,12 +264,12 @@ func TestClickObserveWindowSlowRequestStillInFlightCounted(t *testing.T) {
 	})
 
 	// Drain prior network so the count reflects only what the click adds.
-	_ = callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	_ = callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#slow-btn",
 		"observe_window_ms": 80,
@@ -294,7 +296,7 @@ func TestClickObserveWindowWindowMsReportsElapsed(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	const requested = 200
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
 		"observe_window_ms": requested,
@@ -324,8 +326,9 @@ func TestTypeSubmitObserveWindow(t *testing.T) {
 	// Create a tiny form whose submit is captured as a fetch (instead
 	// of a real navigation) so we can detect the activity within the
 	// observation window.
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.body.insertAdjacentHTML('beforeend',
 				'<form id="f"><input id="fx" name="x"><button type="submit">go</button></form>');
@@ -337,7 +340,7 @@ func TestTypeSubmitObserveWindow(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ActionOutput](t, "type", map[string]any{
+	out := callTool[actionOutput](t, "type", map[string]any{
 		"tab":               tabID,
 		"selector":          "#fx",
 		"text":              "hello",
@@ -371,12 +374,12 @@ func TestPressKeyObserveWindowExcludesElementWait(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#late-btn",
 	})
 
-	out := callTool[ActionOutput](t, "press_key", map[string]any{
+	out := callTool[actionOutput](t, "press_key", map[string]any{
 		"tab":               tabID,
 		"selector":          "#late-input",
 		"key":               "Tab",
@@ -411,12 +414,12 @@ func TestClickObserveWindowExcludesVisibilityWait(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#late-btn",
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#late-visible-btn",
 		"observe_window_ms": 100,
@@ -462,7 +465,7 @@ func TestObserveWindowTruncatedOnTabClose(t *testing.T) {
 		})
 	}()
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
 		"observe_window_ms": 5000,
@@ -496,7 +499,7 @@ func TestClickObserveWindowNavigationMakesDOMUnavailable(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#nav-btn",
 		"observe_window_ms": 800,
@@ -535,8 +538,9 @@ func TestSelectOptionObserveWindowCatchesSyncMutation(t *testing.T) {
 
 	// A <select> whose change handler SYNCHRONOUSLY mutates the DOM and
 	// fires a request — the cascading-dropdown shape.
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.body.insertAdjacentHTML('beforeend',
 				'<select id="sel"><option value="a">a</option><option value="b">b</option></select>');
@@ -550,7 +554,7 @@ func TestSelectOptionObserveWindowCatchesSyncMutation(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ActionOutput](t, "select_option", map[string]any{
+	out := callTool[actionOutput](t, "select_option", map[string]any{
 		"tab":               tabID,
 		"selector":          "#sel",
 		"values":            []string{"b"},
@@ -577,8 +581,9 @@ func TestPressKeyObserveWindow(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.addEventListener('keydown', function(e) {
 				if (e.key === 'Enter') { fetch('/api/data?key=enter'); }
@@ -587,7 +592,7 @@ func TestPressKeyObserveWindow(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ActionOutput](t, "press_key", map[string]any{
+	out := callTool[actionOutput](t, "press_key", map[string]any{
 		"tab":               tabID,
 		"key":               "Enter",
 		"observe_window_ms": 400,
@@ -608,8 +613,9 @@ func TestScrollObserveWindow(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.body.style.height = '5000px';
 			window.addEventListener('scroll', function() { fetch('/api/data?page=2'); }, {once: true});
@@ -617,7 +623,7 @@ func TestScrollObserveWindow(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":               tabID,
 		"y":                 400,
 		"observe_window_ms": 400,
@@ -640,7 +646,7 @@ func TestObserveWindowRejectsOverMax(t *testing.T) {
 	errText := callToolExpectErr(t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
-		"observe_window_ms": MaxObserveWindowMs + 1,
+		"observe_window_ms": maxObserveWindowMs + 1,
 	})
 	if !strings.Contains(errText, "observe_window_ms") {
 		t.Errorf("error %q should reference observe_window_ms", errText)
@@ -666,7 +672,7 @@ func TestClickObserveWindowCountsIframeMutations(t *testing.T) {
 		"expression": `document.getElementById('frame').contentDocument.readyState === 'complete'`,
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#iframe-mutate-btn",
 		"observe_window_ms": 300,
@@ -696,7 +702,7 @@ func TestClickObserveWindowIframeDoesNotInflateTopFrame(t *testing.T) {
 		"expression": `document.getElementById('frame').contentDocument.readyState === 'complete'`,
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
 		"observe_window_ms": 200,
@@ -751,8 +757,9 @@ func TestClickObserveWindowCrossOriginFrameReportsPartial(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			var f = document.createElement('iframe');
 			f.id = 'oopif';
@@ -769,11 +776,11 @@ func TestClickObserveWindowCrossOriginFrameReportsPartial(t *testing.T) {
 		"expression": `!!document.getElementById('oopif')`,
 	})
 	// Let the cross-origin frame attach and load.
-	callTool[ClickOutput](t, "click", map[string]any{
+	callTool[clickOutput](t, "click", map[string]any{
 		"tab": tabID, "selector": "#dom-btn", "observe_window_ms": 300,
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
 		"observe_window_ms": 500,
@@ -806,8 +813,9 @@ func TestClickObserveWindowSubframeNavigationReportsPartial(t *testing.T) {
 	})
 
 	// Navigate the SUBframe (not the page) inside the window.
-	callTool[AddScriptOutput](t, "add_script", map[string]any{
-		"tab": tabID,
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action": "add_script",
+		"tab":    tabID,
 		"source": `(function() {
 			document.getElementById('noop-btn').addEventListener('click', function() {
 				document.getElementById('frame').src = '/observation_frame.html?v=2';
@@ -816,7 +824,7 @@ func TestClickObserveWindowSubframeNavigationReportsPartial(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#noop-btn",
 		"observe_window_ms": 600,
@@ -857,12 +865,12 @@ func TestObserveWindowPartialNotStuckAfterNavigation(t *testing.T) {
 	})
 
 	// Navigate away, to a page with no frames whatsoever.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": harness.httpSrv.URL + "/page2.html",
 	})
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "body",
 		"observe_window_ms": 200,
@@ -923,8 +931,8 @@ func TestObserveWindowCrossOriginFramePartialSurvivesBackForward(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/host.html"})
-	before := callTool[ClickOutput](t, "click", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/host.html"})
+	before := callTool[clickOutput](t, "click", map[string]any{
 		"tab": tabID, "selector": "#b", "observe_window_ms": 300,
 	})
 	if before.Observed == nil || !before.Observed.DOMMutationsPartial {
@@ -934,13 +942,13 @@ func TestObserveWindowCrossOriginFramePartialSurvivesBackForward(t *testing.T) {
 	// Leave for a frameless page, then come BACK (a bfcache restore of the
 	// iframe page). Settling with a sleep rather than wait_for: evaluating
 	// against a document mid-restore races the context swap.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID, "url": harness.httpSrv.URL + "/page2.html",
 	})
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 	time.Sleep(700 * time.Millisecond)
 
-	back := callTool[ClickOutput](t, "click", map[string]any{
+	back := callTool[clickOutput](t, "click", map[string]any{
 		"tab": tabID, "selector": "#b", "observe_window_ms": 300,
 	})
 	if back.Observed == nil {
@@ -954,10 +962,10 @@ func TestObserveWindowCrossOriginFramePartialSurvivesBackForward(t *testing.T) {
 	// back put page2 in the cache too, so this is a restore as well — and
 	// page2 genuinely has no frames, so the count must NOT claim to be
 	// partial. A flag that fires here is a flag callers learn to ignore.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 	time.Sleep(700 * time.Millisecond)
 
-	fwd := callTool[ClickOutput](t, "click", map[string]any{
+	fwd := callTool[clickOutput](t, "click", map[string]any{
 		"tab": tabID, "selector": "body", "observe_window_ms": 200,
 	})
 	if fwd.Observed == nil {

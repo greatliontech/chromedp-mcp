@@ -21,13 +21,13 @@ import (
 // opening mid-call cannot stall list_frames indefinitely.
 const listFramesTimeout = 5 * time.Second
 
-// ListFramesInput is the input for list_frames.
-type ListFramesInput struct {
-	TabInput
+// listFramesInput is the input for list_frames.
+type listFramesInput struct {
+	tabInput
 }
 
-// FrameInfo describes a single frame in a tab.
-type FrameInfo struct {
+// frameInfo describes a single frame in a tab.
+type frameInfo struct {
 	ID             string `json:"id"`
 	ParentID       string `json:"parent_id,omitempty"`
 	Name           string `json:"name,omitempty"`
@@ -37,25 +37,25 @@ type FrameInfo struct {
 	Reachable      bool   `json:"reachable"`
 }
 
-// ListFramesOutput is the output for list_frames.
-type ListFramesOutput struct {
-	Frames []FrameInfo `json:"frames"`
+// listFramesOutput is the output for list_frames.
+type listFramesOutput struct {
+	Frames []frameInfo `json:"frames"`
 }
 
 func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_frames",
-		Description: "List all frames in a tab, including the main frame, same-origin in-process iframes (reachable=true), and known out-of-process cross-origin iframes (reachable=false). Pass a reachable frame's id as the optional 'frame' parameter on snapshot, query, get_dom, wait_for, screenshot, evaluate, or interaction tools.",
+		Description: "List all frames in a tab, including the main frame, same-origin in-process iframes (reachable=true), and known out-of-process cross-origin iframes (reachable=false). Pass a reachable frame's id as the optional 'frame' parameter on snapshot, query, get_dom, wait_for, screenshot, evaluate, emulate(action='pseudo_state'), or interaction tools.",
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ListFramesInput) (*mcp.CallToolResult, ListFramesOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input listFramesInput) (*mcp.CallToolResult, listFramesOutput, error) {
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, ListFramesOutput{}, err
+			return nil, listFramesOutput{}, err
 		}
 		// Page.getFrameTree runs in Blink's renderer and stalls while a JS
 		// modal dialog is open; fail fast so callers can inspect/dismiss it.
 		if t.Dialog != nil && t.Dialog.Open() {
-			return nil, ListFramesOutput{}, fmt.Errorf("cannot list frames while a JavaScript dialog is open — use dialog tool first")
+			return nil, listFramesOutput{}, fmt.Errorf("cannot list frames while a JavaScript dialog is open — use dialog tool first")
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -65,10 +65,10 @@ func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 
 		treeRes, err := chromedp.Call(treeCtx, page.GetFrameTree, cdp.Empty{})
 		if err != nil {
-			return nil, ListFramesOutput{}, err
+			return nil, listFramesOutput{}, err
 		}
 
-		frames := make([]FrameInfo, 0)
+		frames := make([]frameInfo, 0)
 		seen := make(map[string]struct{})
 		var walk func(*page.FrameTree)
 		walk = func(node *page.FrameTree) {
@@ -79,7 +79,7 @@ func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 			id := string(f.ID)
 			seen[id] = struct{}{}
 			_, reachable, _, _ := t.ExecContexts.ContextForFrame(id)
-			frames = append(frames, FrameInfo{
+			frames = append(frames, frameInfo{
 				ID:             id,
 				ParentID:       string(f.ParentID),
 				Name:           f.Name,
@@ -110,7 +110,7 @@ func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 		}
 		slices.Sort(extra)
 		for _, id := range extra {
-			frames = append(frames, FrameInfo{
+			frames = append(frames, frameInfo{
 				ID:        id,
 				ParentID:  knownFrames[id],
 				IsMain:    false,
@@ -118,7 +118,7 @@ func registerFrameTools(s *mcp.Server, mgr *browser.Manager) {
 			})
 		}
 
-		return nil, ListFramesOutput{Frames: frames}, nil
+		return nil, listFramesOutput{Frames: frames}, nil
 	})
 }
 

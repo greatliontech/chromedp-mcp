@@ -24,7 +24,7 @@ func TestGoBackSPA(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Verify initial state.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -39,7 +39,7 @@ func TestGoBackSPA(t *testing.T) {
 	})
 
 	// Verify we're on the About page.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -48,10 +48,10 @@ func TestGoBackSPA(t *testing.T) {
 	}
 
 	// go_back should trigger same-document navigation (popstate).
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// Verify we're back on Home.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -60,7 +60,7 @@ func TestGoBackSPA(t *testing.T) {
 	}
 
 	// The DOM should also reflect the change.
-	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	text := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "#page",
@@ -82,12 +82,12 @@ func TestGoForwardSPA(t *testing.T) {
 		"selector": "#go-about",
 	})
 	// Go back to Home.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// Go forward to About.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -95,7 +95,7 @@ func TestGoForwardSPA(t *testing.T) {
 		t.Fatalf("after go_forward, title = %s, want 'SPA About'", out.Result)
 	}
 
-	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	text := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "#page",
@@ -121,7 +121,7 @@ func TestGoBackSPAMultipleSteps(t *testing.T) {
 	})
 
 	// Verify we're on Contact.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -130,8 +130,8 @@ func TestGoBackSPAMultipleSteps(t *testing.T) {
 	}
 
 	// Go back to About.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -140,8 +140,8 @@ func TestGoBackSPAMultipleSteps(t *testing.T) {
 	}
 
 	// Go back to Home.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -163,7 +163,7 @@ func TestGoBackSPAThenInteract(t *testing.T) {
 		"selector": "#go-about",
 	})
 	// Go back to Home.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// After SPA go_back, we should be able to interact with the DOM normally.
 	// Click the Contact button.
@@ -172,7 +172,7 @@ func TestGoBackSPAThenInteract(t *testing.T) {
 		"selector": "#go-contact",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -181,7 +181,7 @@ func TestGoBackSPAThenInteract(t *testing.T) {
 	}
 
 	// query should also work.
-	qout := callTool[QueryOutput](t, "query", map[string]any{
+	qout := callTool[queryOutput](t, "query", map[string]any{
 		"tab":      tabID,
 		"selector": "#page",
 	})
@@ -198,7 +198,7 @@ func TestNavigateDOMContentLoadedFasterThanLoad(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	start := time.Now()
-	dcl := callTool[NavigateOutput](t, "navigate", map[string]any{
+	dcl := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        harness.httpSrv.URL + "/slow-subresource",
 		"wait_until": "domcontentloaded",
@@ -215,7 +215,7 @@ func TestNavigateDOMContentLoadedFasterThanLoad(t *testing.T) {
 	}
 
 	start = time.Now()
-	full := callTool[NavigateOutput](t, "navigate", map[string]any{
+	full := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        harness.httpSrv.URL + "/slow-subresource",
 		"wait_until": "load",
@@ -233,7 +233,7 @@ func TestNavigateNetworkIdleWaitsPastReplaceStateAndXHR(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        harness.httpSrv.URL + "/slow-xhr",
 		"wait_until": "networkidle",
@@ -245,7 +245,7 @@ func TestNavigateNetworkIdleWaitsPastReplaceStateAndXHR(t *testing.T) {
 		t.Errorf("expected URL updated by replaceState, got %q", out.URL)
 	}
 
-	done := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	done := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `window.__xhrDone`,
 	})
@@ -259,7 +259,7 @@ func TestNavigateLifecycleModesRedirectFragmentAndBlank(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	for _, mode := range []string{"domcontentloaded", "networkidle"} {
-		redir := callTool[NavigateOutput](t, "navigate", map[string]any{
+		redir := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
 			"url":        harness.httpSrv.URL + "/redirect",
 			"wait_until": mode,
@@ -273,7 +273,7 @@ func TestNavigateLifecycleModesRedirectFragmentAndBlank(t *testing.T) {
 
 		// Same-document fragment navigation and repeated no-op fragment navigation.
 		fragURL := harness.httpSrv.URL + "/page2.html#sec1"
-		frag := callTool[NavigateOutput](t, "navigate", map[string]any{
+		frag := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
 			"url":        fragURL,
 			"wait_until": mode,
@@ -281,7 +281,7 @@ func TestNavigateLifecycleModesRedirectFragmentAndBlank(t *testing.T) {
 		if frag.URL != fragURL {
 			t.Errorf("%s fragment URL = %q, want %q", mode, frag.URL, fragURL)
 		}
-		same := callTool[NavigateOutput](t, "navigate", map[string]any{
+		same := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
 			"url":        fragURL,
 			"wait_until": mode,
@@ -290,7 +290,7 @@ func TestNavigateLifecycleModesRedirectFragmentAndBlank(t *testing.T) {
 			t.Errorf("%s no-op fragment URL = %q, want %q", mode, same.URL, fragURL)
 		}
 
-		blank := callTool[NavigateOutput](t, "navigate", map[string]any{
+		blank := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
 			"url":        "about:blank",
 			"wait_until": mode,
@@ -327,7 +327,7 @@ func TestWaitForNegativeTimeoutAndHiddenSelectorDiagnostics(t *testing.T) {
 		t.Errorf("expected negative timeout error, got: %s", errText)
 	}
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var d = document.createElement('div');
@@ -356,7 +356,7 @@ func TestNavigateClientRedirectAnd204DoNotHang(t *testing.T) {
 	// domcontentloaded and networkidle without hanging 30s.
 	for _, mode := range []string{"domcontentloaded", "networkidle"} {
 		start := time.Now()
-		out := callTool[NavigateOutput](t, "navigate", map[string]any{
+		out := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
 			"url":        harness.httpSrv.URL + "/bounce",
 			"wait_until": mode,
@@ -375,7 +375,7 @@ func TestNavigateClientRedirectAnd204DoNotHang(t *testing.T) {
 	// Delayed client-side redirect (50ms, before networkIdle's 500ms quiet
 	// window) must adopt the destination loader and finish on /page2.html.
 	start := time.Now()
-	delayed := callTool[NavigateOutput](t, "navigate", map[string]any{
+	delayed := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        harness.httpSrv.URL + "/bounce-delayed",
 		"wait_until": "networkidle",
@@ -425,7 +425,7 @@ func TestNavigate(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": fixtureURL("page2.html"),
 		"tab": tabID,
 	})
@@ -442,15 +442,15 @@ func TestNavigateAndGoBack(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate to page2.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": fixtureURL("page2.html"),
 		"tab": tabID,
 	})
 	// Go back.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// Verify we're back on the forms page by checking the URL.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -482,7 +482,7 @@ func TestNavigateReturnsStatusCode(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": fixtureURL("page2.html"),
 		"tab": tabID,
 	})
@@ -498,7 +498,7 @@ func TestNavigateFollowsRedirect(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": harness.httpSrv.URL + "/redirect",
 		"tab": tabID,
 	})
@@ -516,7 +516,7 @@ func TestNavigate404(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": harness.httpSrv.URL + "/api/not-found",
 		"tab": tabID,
 	})
@@ -530,16 +530,16 @@ func TestGoForward(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate to page2.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": fixtureURL("page2.html"),
 		"tab": tabID,
 	})
 	// Go back to forms.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 	// Go forward to page2 again.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -550,7 +550,7 @@ func TestGoForward(t *testing.T) {
 
 func TestGoBackNoHistory(t *testing.T) {
 	// A fresh tab with no navigation has no back history.
-	out := callTool[TabNewOutput](t, "tab_new", map[string]any{})
+	out := callTool[tabNewOutput](t, "tab_new", map[string]any{})
 	defer closeTab(t, out.TabID)
 
 	errText := callToolExpectErr(t, "navigate", map[string]any{"tab": out.TabID, "action": "back"})
@@ -564,12 +564,12 @@ func TestReload(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Mutate the page via JS.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title = 'mutated'",
 	})
 	// Reload should restore the original and return useful output.
-	rout := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
+	rout := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
 	if rout.Title == "mutated" {
 		t.Errorf("after reload, title should not be 'mutated', got %s", rout.Title)
 	}
@@ -622,7 +622,7 @@ func TestNavigateWaitUntilDOMContentLoaded(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        fixtureURL("index.html"),
 		"wait_until": "domcontentloaded",
@@ -641,7 +641,7 @@ func TestNavigateWaitUntilNetworkIdle(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        fixtureURL("network.html"),
 		"wait_until": "networkidle",
@@ -658,7 +658,7 @@ func TestNavigateWaitUntilLoadExplicit(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
 		"url":        fixtureURL("forms.html"),
 		"wait_until": "load",
@@ -676,13 +676,13 @@ func TestReloadBypassCache(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Mutate the title.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title = 'cached-mutant'",
 	})
 
 	// Reload with bypass_cache — should wait for page load and return output.
-	rout := callTool[NavigateOutput](t, "navigate", map[string]any{
+	rout := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":          tabID,
 		"action":       "reload",
 		"bypass_cache": true,
@@ -716,7 +716,7 @@ func TestWaitForAsyncSelector(t *testing.T) {
 		"timeout":  5000,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('delayed-element').textContent",
 	})
@@ -736,7 +736,7 @@ func TestWaitForAsyncExpression(t *testing.T) {
 		"timeout":    5000,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.__delayedReady",
 	})
@@ -750,20 +750,20 @@ func TestGoBackMultipleSteps(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate to page2, then forms (3 pages total).
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("page2.html"),
 	})
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("forms.html"),
 	})
 
 	// Go back twice to reach index.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -777,13 +777,13 @@ func TestReloadBypassCacheFalse(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Mutate title.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title = 'mutated-again'",
 	})
 
 	// Reload with bypass_cache=false (explicit) — should behave same as default reload.
-	rout := callTool[NavigateOutput](t, "navigate", map[string]any{
+	rout := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":          tabID,
 		"action":       "reload",
 		"bypass_cache": false,
@@ -801,7 +801,7 @@ func TestNavigateSlowPage(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	start := time.Now()
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": harness.httpSrv.URL + "/slow",
 	})
@@ -848,24 +848,24 @@ func TestGoForwardMultipleSteps(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate: index -> page2 -> forms (3 pages).
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("page2.html"),
 	})
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("forms.html"),
 	})
 
 	// Go back twice to index.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// Go forward twice to forms.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title",
 	})
@@ -896,13 +896,13 @@ func TestGoBackDOMWorks(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate to a second page.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("interaction.html"),
 	})
 
 	// Verify we're on the second page.
-	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	text := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "h1",
@@ -912,10 +912,10 @@ func TestGoBackDOMWorks(t *testing.T) {
 	}
 
 	// Go back via MCP tool.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// get_dom(text) must work after go_back.
-	text = callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	text = callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "h1",
@@ -926,7 +926,7 @@ func TestGoBackDOMWorks(t *testing.T) {
 	t.Logf("get_dom(text) after go_back: %q", text.Content)
 
 	// query must work after go_back.
-	qout := callTool[QueryOutput](t, "query", map[string]any{
+	qout := callTool[queryOutput](t, "query", map[string]any{
 		"tab":      tabID,
 		"selector": "h1",
 	})
@@ -941,7 +941,7 @@ func TestGoBackDOMWorks(t *testing.T) {
 	})
 
 	// get_dom(html) must work after go_back.
-	html := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	html := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "html",
 		"selector": "h1",
@@ -957,19 +957,19 @@ func TestGoForwardDOMWorks(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate to second page.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("interaction.html"),
 	})
 
 	// Go back.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// Go forward.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 
 	// Selector-based queries must work after go_forward.
-	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	text := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "h1",
@@ -985,18 +985,18 @@ func TestGoBackMultipleHops(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Build a 3-page history: index -> interaction -> forms.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("interaction.html"),
 	})
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("forms.html"),
 	})
 
 	// Go back to interaction.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
-	text := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	text := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "h1",
@@ -1006,8 +1006,8 @@ func TestGoBackMultipleHops(t *testing.T) {
 	}
 
 	// Go back to index.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
-	text = callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	text = callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "h1",
@@ -1025,13 +1025,13 @@ func TestGoBackThenInteract(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate away.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("index.html"),
 	})
 
 	// Go back to interaction page.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 
 	// Type into an input.
 	callTool[struct{}](t, "type", map[string]any{
@@ -1042,7 +1042,7 @@ func TestGoBackThenInteract(t *testing.T) {
 	})
 
 	// Read the value back.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('type-target').value",
 	})
@@ -1055,7 +1055,7 @@ func TestGoBackThenInteract(t *testing.T) {
 		"tab":      tabID,
 		"selector": "#click-target",
 	})
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('click-count').textContent",
 	})
@@ -1109,7 +1109,7 @@ func TestNavigateNetworkIdleTimesOut(t *testing.T) {
 	}
 
 	// Tab must remain usable after a lifecycle timeout.
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": fixtureURL("page2.html"),
 	})
@@ -1119,7 +1119,7 @@ func TestNavigateNetworkIdleTimesOut(t *testing.T) {
 }
 
 func TestNavigateUnreachableURL(t *testing.T) {
-	tab := callTool[TabNewOutput](t, "tab_new", map[string]any{})
+	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{})
 	defer closeTab(t, tab.TabID)
 
 	errText := callToolExpectErr(t, "navigate", map[string]any{
@@ -1159,7 +1159,7 @@ func TestNavigateBackForwardReturnURLAndTitle(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Default reload (bypass_cache=false) populates HTTP status.
-	reloaded := callTool[NavigateOutput](t, "navigate", map[string]any{
+	reloaded := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":    tabID,
 		"action": "reload",
 	})
@@ -1168,7 +1168,7 @@ func TestNavigateBackForwardReturnURLAndTitle(t *testing.T) {
 	}
 
 	// Untitled HTTP page must report empty Title rather than URL-as-title.
-	untitled := callTool[NavigateOutput](t, "navigate", map[string]any{
+	untitled := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": srv.URL + "/untitled",
 	})
@@ -1177,25 +1177,25 @@ func TestNavigateBackForwardReturnURLAndTitle(t *testing.T) {
 	}
 
 	// Non-BFCache (Cache-Control: no-store) back/forward waits for load and returns exact title.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/nostore-a"})
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/nostore-b"})
-	backNS := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/nostore-a"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/nostore-b"})
+	backNS := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 	if !strings.HasSuffix(backNS.URL, "/nostore-a") || backNS.Title != "NoStore A" {
 		t.Errorf("non-BFCache navigate(back) = %+v, want /nostore-a Title 'NoStore A'", backNS)
 	}
-	fwdNS := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	fwdNS := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 	if !strings.HasSuffix(fwdNS.URL, "/nostore-b") || fwdNS.Title != "NoStore B" {
 		t.Errorf("non-BFCache navigate(forward) = %+v, want /nostore-b Title 'NoStore B'", fwdNS)
 	}
 
 	// SPA pushState back/forward returns the updated document.title directly.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": fixtureURL("spa.html")})
-	callTool[ClickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#go-about"})
-	backSPA := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": fixtureURL("spa.html")})
+	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#go-about"})
+	backSPA := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 	if !strings.Contains(backSPA.Title, "SPA Home") {
 		t.Errorf("SPA navigate(back) Title = %q, want 'SPA Home'", backSPA.Title)
 	}
-	fwdSPA := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
+	fwdSPA := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "forward"})
 	if !strings.Contains(fwdSPA.Title, "SPA About") {
 		t.Errorf("SPA navigate(forward) Title = %q, want 'SPA About'", fwdSPA.Title)
 	}
@@ -1250,7 +1250,7 @@ func TestWaitForStatesTextURLShadowAndFrame(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	// Synchronous state checks BEFORE starting async timers.
 	callTool[struct{}](t, "wait_for", map[string]any{
@@ -1284,7 +1284,7 @@ func TestWaitForStatesTextURLShadowAndFrame(t *testing.T) {
 	}
 
 	// Start async mutations now so every wait genuinely polls across ticks.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__startAsync(); true`})
+	callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__startAsync(); true`})
 
 	// state="visible" pierces open Shadow DOM ('>>>') and waits for async mount.
 	callTool[struct{}](t, "wait_for", map[string]any{
@@ -1336,7 +1336,7 @@ func TestWaitForStatesTextURLShadowAndFrame(t *testing.T) {
 	}
 
 	// Same-origin iframe support for selector, text, and expression.
-	frames := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+	frames := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 	var subFrameID string
 	for _, fr := range frames.Frames {
 		if strings.HasSuffix(fr.URL, "/sub.html") {
@@ -1368,7 +1368,7 @@ func TestWaitForStatesTextURLShadowAndFrame(t *testing.T) {
 	})
 
 	// wait_for(text) works on SVG documents where document.body is null.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/doc.svg"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/doc.svg"})
 	callTool[struct{}](t, "wait_for", map[string]any{
 		"tab":     tabID,
 		"text":    "SVG Text Ready",

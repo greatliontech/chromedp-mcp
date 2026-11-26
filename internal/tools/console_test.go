@@ -10,7 +10,7 @@ func TestConsoleLogs(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -35,7 +35,7 @@ func TestJSErrors(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForJSErrors(t, tabID)
 
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -60,7 +60,7 @@ func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 	waitForConsole(t, tabID)
 
 	// First drain — should return logs.
-	out1 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out1 := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -69,7 +69,7 @@ func TestConsoleLogsDrainClearsBuffer(t *testing.T) {
 	}
 
 	// Second drain — buffer should be empty now.
-	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out2 := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -83,7 +83,7 @@ func TestConsoleLogsLevelFilter(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"level": "warn",
@@ -104,7 +104,7 @@ func TestJSErrorsDrainClearsBuffer(t *testing.T) {
 	waitForJSErrors(t, tabID)
 
 	// First drain.
-	out1 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out1 := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -113,7 +113,7 @@ func TestJSErrorsDrainClearsBuffer(t *testing.T) {
 	}
 
 	// Second drain — should be empty.
-	out2 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out2 := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -128,7 +128,7 @@ func TestJSErrorsPeek(t *testing.T) {
 	waitForJSErrors(t, tabID)
 
 	// Peek should not clear the buffer.
-	out1 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out1 := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -136,7 +136,7 @@ func TestJSErrorsPeek(t *testing.T) {
 		t.Fatal("expected JS errors from errors.html")
 	}
 
-	out2 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out2 := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -150,7 +150,7 @@ func TestJSErrorsEntryFields(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForJSErrors(t, tabID)
 
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -179,7 +179,7 @@ func TestConsoleLogsLimit(t *testing.T) {
 	waitForConsole(t, tabID)
 
 	// index.html emits at least 3 console messages (log, warn, error).
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"limit": 1,
@@ -194,11 +194,11 @@ func TestConsoleLogsPeekIdempotence(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out1 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out1 := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
-	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out2 := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -212,7 +212,7 @@ func TestConsoleLogEntryFields(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -237,7 +237,7 @@ func TestConsoleLogsLevelFilterError(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"level": "error",
@@ -257,7 +257,7 @@ func TestConsoleLogsLevelFilterLog(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"level": "log",
@@ -283,7 +283,7 @@ func TestConsoleLogsLimitWithFilter(t *testing.T) {
 		"expression": `console.warn("second warning")`,
 	})
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"level": "warn",
@@ -301,7 +301,7 @@ func TestConsoleLogSourceField(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -328,7 +328,7 @@ func TestJSErrorsLimit(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForJSErrors(t, tabID)
 
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"limit": 1,
@@ -343,7 +343,7 @@ func TestJSErrorsPromiseRejection(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForJSErrors(t, tabID)
 
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -366,7 +366,7 @@ func TestJSErrorsDetailedFields(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForJSErrors(t, tabID)
 
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -394,7 +394,7 @@ func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 	waitForConsole(t, tabID)
 
 	// Snapshot what's there to count levels.
-	all := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	all := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -409,14 +409,14 @@ func TestConsoleDrainWithFilterRetainsNonMatching(t *testing.T) {
 	}
 
 	// Drain only "warn" level.
-	_ = callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	_ = callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"level": "warn",
 		"mode":  "drain",
 	})
 
 	// Selective drain: non-warning entries must remain.
-	out2 := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out2 := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -435,7 +435,7 @@ func TestJSErrorsCleanPage(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -452,13 +452,13 @@ func TestConsoleBufferOverflowIntegration(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Generate 1100 console.log messages (buffer size is 1000).
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "for (var i = 0; i < 1100; i++) { console.log('msg-' + i); }",
 	})
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})

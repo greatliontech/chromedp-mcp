@@ -75,7 +75,7 @@ func TestGetPerformanceSessionWindowCLSAndRecentInput(t *testing.T) {
 	})
 
 	// Default mode (omitted) is non-destructive peek.
-	peeked := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	peeked := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab": tabID,
 	})
 	if len(peeked.LayoutShifts) != 4 {
@@ -83,7 +83,7 @@ func TestGetPerformanceSessionWindowCLSAndRecentInput(t *testing.T) {
 	}
 
 	// Explicit drain returns all 4 shifts and clears the buffer.
-	out := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	out := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -97,7 +97,7 @@ func TestGetPerformanceSessionWindowCLSAndRecentInput(t *testing.T) {
 		t.Errorf("CLS = %v, want 0.20 (max session window, excluding recent-input and separate later window)", out.CLS)
 	}
 
-	after := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	after := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -113,10 +113,10 @@ func TestGetPerformanceLCPPeekDrainLimitAndLiveCapture(t *testing.T) {
 	// Verify live Chrome PerformanceTimeline LCP capture. Wait for paint
 	// BEFORE any user interaction because per W3C LCP spec a click/keydown
 	// immediately stops LCP candidate reporting.
-	var live GetPerformanceOutput
+	var live getPerformanceOutput
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		live = callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+		live = callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 			"tab":  tabID,
 			"mode": "peek",
 		})
@@ -182,7 +182,7 @@ func TestGetPerformanceLCPPeekDrainLimitAndLiveCapture(t *testing.T) {
 	}
 
 	// Peek with limit=2 caps LCP to 2, keeps all 3 layout shifts unbounded, and leaves all buffered.
-	peekOut := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	peekOut := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"limit": 2,
@@ -201,7 +201,7 @@ func TestGetPerformanceLCPPeekDrainLimitAndLiveCapture(t *testing.T) {
 	}
 
 	// Drain with limit=2 consumes only the first 2 and leaves the 3rd.
-	drain1 := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	drain1 := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":   tabID,
 		"mode":  "drain",
 		"limit": 2,
@@ -210,7 +210,7 @@ func TestGetPerformanceLCPPeekDrainLimitAndLiveCapture(t *testing.T) {
 		t.Fatalf("drain(limit=2) = %+v, want sizes [1000, 2000]", drain1.LCP)
 	}
 
-	drain2 := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	drain2 := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -218,7 +218,7 @@ func TestGetPerformanceLCPPeekDrainLimitAndLiveCapture(t *testing.T) {
 		t.Fatalf("second drain = %+v, want remaining size 3000", drain2.LCP)
 	}
 
-	drain3 := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	drain3 := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -239,7 +239,7 @@ func TestGetPerformanceMetricsNamesAndReasonableValues(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	out := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab": tabID,
 	})
 	if len(out.Metrics) == 0 {
@@ -279,7 +279,7 @@ func TestGetPerformanceLayoutShiftsReal(t *testing.T) {
 		"timeout":  5000,
 	})
 
-	out := callTool[GetPerformanceOutput](t, "get_performance", map[string]any{
+	out := callTool[getPerformanceOutput](t, "get_performance", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -312,7 +312,7 @@ func TestGetPerformanceFailsFastOnOpenDialogWithoutDraining(t *testing.T) {
 	})
 
 	// Trigger an async alert so the renderer blocks on a modal dialog.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(() => alert('perf-block'), 10); true`,
 	})
@@ -320,12 +320,12 @@ func TestGetPerformanceFailsFastOnOpenDialogWithoutDraining(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+	if !callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for alert dialog")
 	}
 
@@ -377,7 +377,7 @@ func TestGetPerformanceConcurrentCallsSerialized(t *testing.T) {
 				errs <- fmt.Sprintf("worker %d marshal error: %v", idx, err)
 				return
 			}
-			var out GetPerformanceOutput
+			var out getPerformanceOutput
 			if err := json.Unmarshal(raw, &out); err != nil {
 				errs <- fmt.Sprintf("worker %d unmarshal error: %v", idx, err)
 				return

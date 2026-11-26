@@ -10,7 +10,7 @@ func TestObserveWindowDegradesCleanlyWhenDialogOpens(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			// Embed multiple same-origin iframes so O(N) per-frame timeouts
@@ -41,7 +41,7 @@ func TestObserveWindowDegradesCleanlyWhenDialogOpens(t *testing.T) {
 	})
 
 	start := time.Now()
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":               tabID,
 		"selector":          "#obs-alert",
 		"observe_window_ms": 200,
@@ -67,7 +67,7 @@ func TestOpenObservationFastPathWhenDialogAlreadyOpen(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Open an alert BEFORE openObservation runs.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { alert('pre-existing'); }, 10); true`,
 	})
@@ -75,12 +75,12 @@ func TestOpenObservationFastPathWhenDialogAlreadyOpen(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+	if !callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for pre-existing alert to open")
 	}
 

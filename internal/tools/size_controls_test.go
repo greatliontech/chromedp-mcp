@@ -15,13 +15,13 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -32,7 +32,7 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	rid := out.Requests[0].ID
 
 	// Full body fetch — total_bytes set, truncated false.
-	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	full := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": rid,
 	})
@@ -45,7 +45,7 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	wantBody := full.Body
 
 	// Slice to first 5 bytes.
-	slice := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	slice := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 0,
@@ -62,7 +62,7 @@ func TestGetResponseBodyRangeSlicesUTF8(t *testing.T) {
 	}
 
 	// Slice from byte 5 to end (range_end=0 means "end of body").
-	tail := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	tail := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 5,
@@ -81,26 +81,26 @@ func TestGetResponseBodyRangePastEnd(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
 	waitForNetwork(t, tabID, "/api/data")
 
-	rs := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	rs := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
 	})
 	rid := rs.Requests[0].ID
 
-	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	full := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": rid,
 	})
 
 	// range_end past the total — clamped to total.
-	clamped := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	clamped := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 0,
@@ -111,7 +111,7 @@ func TestGetResponseBodyRangePastEnd(t *testing.T) {
 	}
 
 	// range_start past the total — empty body, truncated=true.
-	past := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	past := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": full.TotalBytes + 100,
@@ -133,7 +133,7 @@ func TestEvaluateMaxResultBytesCaps(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":              tabID,
 		"expression":       `'A'.repeat(2000)`,
 		"max_result_bytes": 100,
@@ -163,7 +163,7 @@ func TestEvaluateMaxResultBytesUnderCap(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":              tabID,
 		"expression":       `'small'`,
 		"max_result_bytes": 100,
@@ -185,13 +185,13 @@ func TestGetNetworkRequestsFieldsProjects(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[ProjectedNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[projectedNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -237,13 +237,13 @@ func TestGetResponseBodyRangeMidCodepoint(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/unicode')`,
 	})
 	waitForNetwork(t, tabID, "/api/unicode")
 
-	rs := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	rs := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/unicode",
@@ -255,7 +255,7 @@ func TestGetResponseBodyRangeMidCodepoint(t *testing.T) {
 	// Slicing to N+1 lands inside the codepoint. The body must remain
 	// reported as text (Base64Encoded=false) and the slice must end
 	// before the partial rune.
-	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	full := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": rid,
 	})
@@ -263,7 +263,7 @@ func TestGetResponseBodyRangeMidCodepoint(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("expected 'é' in unicode response body")
 	}
-	cut := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	cut := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  rid,
 		"range_start": 0,
@@ -287,13 +287,13 @@ func TestGetResponseBodyRangeRejectsNegative(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
 	waitForNetwork(t, tabID, "/api/data")
 
-	rs := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	rs := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -321,7 +321,7 @@ func TestEvaluateMaxResultBytesUTF8Safe(t *testing.T) {
 
 	// Result is "ééééé" (10 bytes = 5 × 2-byte é) plus the wrapping
 	// quotes (12 bytes total). Cap to 5 bytes lands inside a codepoint.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":              tabID,
 		"expression":       `'é'.repeat(5)`,
 		"max_result_bytes": 5,
@@ -364,13 +364,13 @@ func TestGetNetworkRequestsFieldsEmptyReturnsAll(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",

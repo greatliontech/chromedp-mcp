@@ -17,13 +17,13 @@ const defaultDOMMaxBytes = 65_536
 
 // DOM format constants for get_dom.
 const (
-	DOMFormatText = "text"
-	DOMFormatHTML = "html"
+	domFormatText = "text"
+	domFormatHTML = "html"
 )
 
-// QueryInput is the input for query.
-type QueryInput struct {
-	SelectorInput
+// queryInput is the input for query.
+type queryInput struct {
+	selectorInput
 	Frame         string   `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector      string   `json:"selector" jsonschema:"CSS selector (supports '>>>' to pierce open Shadow DOM, e.g. 'my-card >>> button')."`
 	Limit         int      `json:"limit,omitempty" jsonschema:"Max elements to return (default 10)."`
@@ -34,34 +34,34 @@ type QueryInput struct {
 	BBox          bool     `json:"bbox,omitempty" jsonschema:"Include bounding box dimensions (default false)."`
 }
 
-// QueryOutputElement is one element in query output.
-type QueryOutputElement struct {
+// queryOutputElement is one element in query output.
+type queryOutputElement struct {
 	Index         int               `json:"index"`
 	TagName       string            `json:"tag_name"`
 	Attributes    map[string]string `json:"attributes,omitempty"`
 	Text          string            `json:"text,omitempty"`
 	OuterHTML     string            `json:"outer_html,omitempty"`
 	ComputedStyle map[string]string `json:"computed_style,omitempty"`
-	BBox          *BoundingBox      `json:"bbox,omitempty"`
+	BBox          *boundingBox      `json:"bbox,omitempty"`
 }
 
-// BoundingBox represents element dimensions.
-type BoundingBox struct {
+// boundingBox represents element dimensions.
+type boundingBox struct {
 	X      float64 `json:"x"`
 	Y      float64 `json:"y"`
 	Width  float64 `json:"width"`
 	Height float64 `json:"height"`
 }
 
-// QueryOutput is the output for query.
-type QueryOutput struct {
-	Elements []QueryOutputElement `json:"elements"`
+// queryOutput is the output for query.
+type queryOutput struct {
+	Elements []queryOutputElement `json:"elements"`
 	Total    int                  `json:"total"`
 }
 
-// GetDOMInput is the input for get_dom.
-type GetDOMInput struct {
-	SelectorInput
+// getDOMInput is the input for get_dom.
+type getDOMInput struct {
+	selectorInput
 	Format   string `json:"format" jsonschema:"Output format: 'text' (visible/DOM text) or 'html' (markup)."`
 	Ref      string `json:"ref,omitempty" jsonschema:"Element ref from snapshot (e.g. 'e4'). Mutually exclusive with selector and frame."`
 	Frame    string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
@@ -71,8 +71,8 @@ type GetDOMInput struct {
 	MaxBytes int    `json:"max_bytes,omitempty" jsonschema:"Max bytes to return (default 65536)."`
 }
 
-// GetDOMOutput is the output for get_dom.
-type GetDOMOutput struct {
+// getDOMOutput is the output for get_dom.
+type getDOMOutput struct {
 	Content    string `json:"content"`
 	Truncated  bool   `json:"truncated,omitempty"`
 	TotalBytes int    `json:"total_bytes,omitempty"`
@@ -83,27 +83,27 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "query",
 		Description: "Query the DOM with a CSS selector (supports '>>>' to pierce open Shadow DOM) and return matching elements.",
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input QueryInput) (*mcp.CallToolResult, QueryOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input queryInput) (*mcp.CallToolResult, queryOutput, error) {
 		if input.Selector == "" {
-			return nil, QueryOutput{}, fmt.Errorf("selector is required")
+			return nil, queryOutput{}, fmt.Errorf("selector is required")
 		}
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 		if err := validateLimit(input.Limit); err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 		findAllExpr, err := queryAllElementsJS(input.Selector)
 		if err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 		uniqueCtxID, err := resolveFrameContext(t, input.Frame, true)
 		if err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 
 		limit := input.Limit
@@ -120,12 +120,12 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		uniqueCtxID, err = waitForSelector(sctx, tctx, t, uniqueCtxID, input.Frame, input.Selector)
 		if err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 
 		stylePropsJSON, err := json.Marshal(input.ComputedStyle)
 		if err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 		js := fmt.Sprintf(`(function() {
 			const all = %s;
@@ -180,12 +180,12 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			return {elements: elements, total: all.length};
 		})()`, findAllExpr, limit, includeAttrs, includeText, input.OuterHTML, string(stylePropsJSON), input.BBox)
 
-		out, err := chromedp.Run(tctx, chromedp.Evaluate[QueryOutput](js, evalOptsForFrame(uniqueCtxID)...))
+		out, err := chromedp.Run(tctx, chromedp.Evaluate[queryOutput](js, evalOptsForFrame(uniqueCtxID)...))
 		if err != nil {
-			return nil, QueryOutput{}, err
+			return nil, queryOutput{}, err
 		}
 		if out.Elements == nil {
-			out.Elements = []QueryOutputElement{}
+			out.Elements = []queryOutputElement{}
 		}
 		return nil, out, nil
 	})
@@ -193,22 +193,22 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_dom",
 		Description: "Get text or HTML content of the page, a frame, or a specific element (by snapshot ref or CSS/shadow selector), bounded by max_bytes.",
-		InputSchema: schemaWithEnums[GetDOMInput](map[string][]string{
-			"format": {DOMFormatText, DOMFormatHTML},
+		InputSchema: schemaWithEnums[getDOMInput](map[string][]string{
+			"format": {domFormatText, domFormatHTML},
 		}),
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetDOMInput) (*mcp.CallToolResult, GetDOMOutput, error) {
-		if err := validateEnum("format", input.Format, false, []string{DOMFormatText, DOMFormatHTML}); err != nil {
-			return nil, GetDOMOutput{}, err
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input getDOMInput) (*mcp.CallToolResult, getDOMOutput, error) {
+		if err := validateEnum("format", input.Format, false, []string{domFormatText, domFormatHTML}); err != nil {
+			return nil, getDOMOutput{}, err
 		}
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
-			return nil, GetDOMOutput{}, err
+			return nil, getDOMOutput{}, err
 		}
 		if input.MaxBytes < 0 {
-			return nil, GetDOMOutput{}, fmt.Errorf("max_bytes must be >= 0, got %d", input.MaxBytes)
+			return nil, getDOMOutput{}, fmt.Errorf("max_bytes must be >= 0, got %d", input.MaxBytes)
 		}
 		if err := validateElementTarget(input.Ref, input.Selector, input.Frame, false); err != nil {
-			return nil, GetDOMOutput{}, err
+			return nil, getDOMOutput{}, err
 		}
 
 		maxBytes := input.MaxBytes
@@ -218,11 +218,11 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, GetDOMOutput{}, err
+			return nil, getDOMOutput{}, err
 		}
 
 		var readFn string
-		if input.Format == DOMFormatHTML {
+		if input.Format == domFormatHTML {
 			if input.Outer == nil || *input.Outer {
 				readFn = `function() { return this.outerHTML || ""; }`
 			} else {
@@ -246,7 +246,7 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 
 		selector := input.Selector
 		if input.Ref == "" && selector == "" {
-			if input.Format == DOMFormatHTML {
+			if input.Format == domFormatHTML {
 				selector = "html"
 			} else {
 				selector = "body"
@@ -267,19 +267,19 @@ func registerDOMTools(s *mcp.Server, mgr *browser.Manager) {
 			return err
 		}))
 		if err != nil {
-			return nil, GetDOMOutput{}, err
+			return nil, getDOMOutput{}, err
 		}
 
 		return nil, capDOMContent(content, maxBytes), nil
 	})
 }
 
-func capDOMContent(content string, maxBytes int) GetDOMOutput {
+func capDOMContent(content string, maxBytes int) getDOMOutput {
 	if maxBytes <= 0 || len(content) <= maxBytes {
-		return GetDOMOutput{Content: content}
+		return getDOMOutput{Content: content}
 	}
 	trimmed, _ := collector.TruncateUTF8(content, maxBytes)
-	return GetDOMOutput{
+	return getDOMOutput{
 		Content:    trimmed,
 		Truncated:  true,
 		TotalBytes: len(content),

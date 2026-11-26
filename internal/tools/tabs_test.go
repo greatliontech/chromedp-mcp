@@ -14,7 +14,7 @@ func TestTabNewFailedNavigationRollsBackTab(t *testing.T) {
 	existing := navigateToFixture(t, "index.html")
 	defer closeTab(t, existing)
 
-	before := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	before := callTool[tabListOutput](t, "tab_list", map[string]any{})
 
 	// Creating a tab with an unreachable/invalid URL must fail AND roll back
 	// the newly created tab so it neither leaks nor hijacks the active tab.
@@ -25,7 +25,7 @@ func TestTabNewFailedNavigationRollsBackTab(t *testing.T) {
 		t.Fatal("tab_new with unreachable URL should fail")
 	}
 
-	after := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	after := callTool[tabListOutput](t, "tab_list", map[string]any{})
 	if len(after.Tabs) != len(before.Tabs) {
 		t.Fatalf("tab count changed after failed tab_new: before=%d after=%d", len(before.Tabs), len(after.Tabs))
 	}
@@ -41,7 +41,7 @@ func TestTabNewFailedNavigationRollsBackTab(t *testing.T) {
 }
 
 func TestTabNewRedirectReturnsFinalURL(t *testing.T) {
-	out := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("redirect"),
 	})
 	defer closeTab(t, out.TabID)
@@ -52,23 +52,23 @@ func TestTabNewRedirectReturnsFinalURL(t *testing.T) {
 }
 
 func TestMultiBrowserTabRoutingAndActivate(t *testing.T) {
-	b1 := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
-	defer callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": b1.BrowserID})
-	t1 := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	b1 := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
+	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b1.BrowserID})
+	t1 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b1.BrowserID,
 		"url":     fixtureURL("index.html"),
 	})
 
-	b2 := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
-	defer callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": b2.BrowserID})
-	t2 := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	b2 := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
+	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b2.BrowserID})
+	t2 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b2.BrowserID,
 		"url":     fixtureURL("page2.html"),
 	})
 	_ = t2
 
 	// b2 is currently active, but explicit tab=t1 must still reach t1 in b1.
-	txt := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	txt := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      t1.TabID,
 		"format":   "text",
 		"selector": "#title",
@@ -80,7 +80,7 @@ func TestMultiBrowserTabRoutingAndActivate(t *testing.T) {
 	// Activating t1 must also switch the active browser to b1 so default-tab
 	// calls now hit t1 rather than b2's t2.
 	callTool[struct{}](t, "tab_activate", map[string]any{"tab": t1.TabID})
-	defaultEval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	defaultEval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"expression": "document.title",
 	})
 	if !strings.Contains(string(defaultEval.Result), "Test Page") {
@@ -90,7 +90,7 @@ func TestMultiBrowserTabRoutingAndActivate(t *testing.T) {
 
 func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	// Capture active harness browser to restore afterward.
-	initList := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	initList := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	var origBrowser string
 	for _, b := range initList.Browsers {
 		if b.Active {
@@ -99,9 +99,9 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 		}
 	}
 
-	bOut := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
+	bOut := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
 	defer func() {
-		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": bOut.BrowserID})
+		callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": bOut.BrowserID})
 		if origBrowser != "" {
 			callTool[struct{}](t, "browser_activate", map[string]any{"browser": origBrowser})
 		}
@@ -115,7 +115,7 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	defaultTabID := bOut.Tabs[0].ID
 
 	// Immediately call navigate WITHOUT tab_new or explicit tab ID.
-	nav := callTool[NavigateOutput](t, "navigate", map[string]any{
+	nav := callTool[navigateOutput](t, "navigate", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
 	if !strings.HasSuffix(nav.URL, "/page2.html") || nav.Title != "Page 2" {
@@ -123,7 +123,7 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	}
 
 	// Verify tab_list reports the same single tab now at /page2.html.
-	tabs := callTool[TabListOutput](t, "tab_list", map[string]any{"browser": bOut.BrowserID})
+	tabs := callTool[tabListOutput](t, "tab_list", map[string]any{"browser": bOut.BrowserID})
 	if len(tabs.Tabs) != 1 || tabs.Tabs[0].ID != defaultTabID || !strings.HasSuffix(tabs.Tabs[0].URL, "/page2.html") {
 		t.Fatalf("tab_list after immediate navigate = %+v, want single tab %q at /page2.html", tabs.Tabs, defaultTabID)
 	}
@@ -148,15 +148,15 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	}
 
 	// Verify collectors work on the adopted default tab (console + network).
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"expression": `console.log('default-tab-log'); fetch('/api/data').then(r => r.json())`,
 	})
-	logs := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{"mode": "drain"})
+	logs := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{"mode": "drain"})
 	if len(logs.Logs) == 0 || !strings.Contains(logs.Logs[0].Text, "default-tab-log") {
 		t.Errorf("default tab console collector missed log: %+v", logs.Logs)
 	}
 	waitForNetwork(t, defaultTabID, "/api/data")
-	netOut := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	netOut := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"mode":        "drain",
 		"url_pattern": "/api/data",
 	})
@@ -171,7 +171,7 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	if errText := callToolExpectErr(t, "navigate", map[string]any{"url": fixtureURL("forms.html")}); !strings.Contains(errText, "no open tabs") {
 		t.Errorf("navigate after closing last tab err = %q, want 'no open tabs'", errText)
 	}
-	reopened := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	reopened := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": bOut.BrowserID,
 		"url":     fixtureURL("forms.html"),
 	})
@@ -182,19 +182,19 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 
 func TestTabManagement(t *testing.T) {
 	// Create a new tab.
-	out := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("index.html"),
 	})
 	tab1 := out.TabID
 
 	// Create another tab.
-	out = callTool[TabNewOutput](t, "tab_new", map[string]any{
+	out = callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
 	tab2 := out.TabID
 
 	// List tabs.
-	list := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	list := callTool[tabListOutput](t, "tab_list", map[string]any{})
 	if len(list.Tabs) < 2 {
 		t.Errorf("tab_list returned %d tabs, want >= 2", len(list.Tabs))
 	}
@@ -209,13 +209,13 @@ func TestTabManagement(t *testing.T) {
 
 func TestTabActiveTabSwitch(t *testing.T) {
 	// Create tab A.
-	a := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	a := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
 	defer closeTab(t, a.TabID)
 
 	// Create tab B — should now be active.
-	b := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	b := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("forms.html"),
 	})
 	defer closeTab(t, b.TabID)
@@ -250,10 +250,10 @@ func TestTabActiveTabSwitch(t *testing.T) {
 
 func TestTabCloseActiveSwitches(t *testing.T) {
 	// Create two tabs.
-	a := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	a := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
-	b := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	b := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("forms.html"),
 	})
 	// B is active. Close B — A (MRU) should become active.
@@ -293,7 +293,7 @@ func TestTabCloseInvalidID(t *testing.T) {
 }
 
 func TestTabNewWithoutURL(t *testing.T) {
-	out := callTool[TabNewOutput](t, "tab_new", map[string]any{})
+	out := callTool[tabNewOutput](t, "tab_new", map[string]any{})
 	defer closeTab(t, out.TabID)
 
 	if out.TabID == "" {
@@ -306,13 +306,13 @@ func TestTabNewWithoutURL(t *testing.T) {
 
 func TestActiveTabDefault(t *testing.T) {
 	// Create a tab and navigate it — it becomes the active tab.
-	tabOut := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabOut := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
 	defer closeTab(t, tabOut.TabID)
 
 	// Call get_dom WITHOUT the tab parameter — should use the active tab.
-	out := callTool[GetDOMOutput](t, "get_dom", map[string]any{"format": "text"})
+	out := callTool[getDOMOutput](t, "get_dom", map[string]any{"format": "text"})
 	if !strings.Contains(out.Content, "Page Two") {
 		t.Errorf("get_dom without tab param = %q, want to contain 'Page Two'", out.Content)
 	}
@@ -332,14 +332,14 @@ func TestConcurrentToolCallsOnDifferentTabs(t *testing.T) {
 	ch := make(chan result, 2)
 
 	go func() {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tab1,
 			"expression": "document.title",
 		})
 		ch <- result{tab: "tab1", title: string(out.Result)}
 	}()
 	go func() {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tab2,
 			"expression": "document.title",
 		})
@@ -368,7 +368,7 @@ func TestTabListFieldsURLAndTitle(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	list := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	list := callTool[tabListOutput](t, "tab_list", map[string]any{})
 	var found bool
 	for _, tab := range list.Tabs {
 		if tab.ID == tabID {
@@ -397,7 +397,7 @@ func TestTabActivateIdempotent(t *testing.T) {
 
 func TestTabNewReturnsURL(t *testing.T) {
 	url := fixtureURL("forms.html")
-	out := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": url,
 	})
 	defer closeTab(t, out.TabID)
@@ -419,7 +419,7 @@ func TestPerTabCollectorIsolation(t *testing.T) {
 	// Tab2 has JS errors.
 
 	// Tab1 should have console logs.
-	logs := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	logs := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":  tab1,
 		"mode": "peek",
 	})
@@ -428,7 +428,7 @@ func TestPerTabCollectorIsolation(t *testing.T) {
 	}
 
 	// Tab1 should NOT have JS errors (those are only from errors.html on tab2).
-	errs := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	errs := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tab1,
 		"mode": "peek",
 	})
@@ -440,7 +440,7 @@ func TestPerTabCollectorIsolation(t *testing.T) {
 	}
 
 	// Tab2 should have its own JS errors.
-	errs2 := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+	errs2 := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tab2,
 		"mode": "peek",
 	})
@@ -457,7 +457,7 @@ func TestPerTabNetworkIsolation(t *testing.T) {
 	waitForNetwork(t, tab1, "/api/data")
 
 	// Tab1 made fetch calls; tab2 did not.
-	net1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	net1 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tab1,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -467,7 +467,7 @@ func TestPerTabNetworkIsolation(t *testing.T) {
 	}
 
 	// Tab2 should not have /api/data requests.
-	net2 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	net2 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tab2,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -488,7 +488,7 @@ func TestTabNewInvalidBrowserID(t *testing.T) {
 
 func TestTabCloseLastErrors(t *testing.T) {
 	// Capture active harness browser to restore afterward.
-	initList := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	initList := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	var origBrowser string
 	for _, br := range initList.Browsers {
 		if br.Active {
@@ -498,11 +498,11 @@ func TestTabCloseLastErrors(t *testing.T) {
 	}
 
 	// Launch a separate browser so we don't mess with the shared harness browser.
-	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
+	b := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
 	defer func() {
-		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+		callTool[browserCloseOutput](t, "browser_close", map[string]any{
 			"browser": b.BrowserID,
 		})
 		if origBrowser != "" {
@@ -519,7 +519,7 @@ func TestTabCloseLastErrors(t *testing.T) {
 	callTool[struct{}](t, "tab_close", map[string]any{"tab": defaultTabID})
 
 	// tab_list should show 0 tabs.
-	list := callTool[TabListOutput](t, "tab_list", map[string]any{
+	list := callTool[tabListOutput](t, "tab_list", map[string]any{
 		"browser": b.BrowserID,
 	})
 	if len(list.Tabs) != 0 {
@@ -552,7 +552,7 @@ func TestConcurrentSameTab(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		go func(n int) {
 			defer func() { done <- struct{}{} }()
-			callTool[EvaluateOutput](t, "evaluate", map[string]any{
+			callTool[evaluateOutput](t, "evaluate", map[string]any{
 				"tab":        tabID,
 				"expression": "document.title",
 			})
@@ -570,13 +570,13 @@ func TestConcurrentSameTab(t *testing.T) {
 
 func TestTabMRUOrder(t *testing.T) {
 	// Create three tabs: A, B, C.
-	tabA := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabA := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("index.html"),
 	})
-	tabB := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabB := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
-	tabC := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabC := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("forms.html"),
 	})
 
@@ -591,7 +591,7 @@ func TestTabMRUOrder(t *testing.T) {
 	closeTab(t, tabA.TabID)
 
 	// Check which tab is now active.
-	tabs := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	tabs := callTool[tabListOutput](t, "tab_list", map[string]any{})
 	var activeID string
 	for _, tab := range tabs.Tabs {
 		if tab.Active {
@@ -611,16 +611,16 @@ func TestTabMRUOrder(t *testing.T) {
 
 func TestTabMRUOrderComplexSequence(t *testing.T) {
 	// Create tabs A, B, C, D.
-	tabA := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabA := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("index.html"),
 	})
-	tabB := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabB := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("page2.html"),
 	})
-	tabC := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabC := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("forms.html"),
 	})
-	tabD := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabD := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL("interaction.html"),
 	})
 
@@ -636,7 +636,7 @@ func TestTabMRUOrderComplexSequence(t *testing.T) {
 	// Close C. Fallback should be A (MRU: D, B, A).
 	closeTab(t, tabC.TabID)
 
-	tabs := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	tabs := callTool[tabListOutput](t, "tab_list", map[string]any{})
 	var activeAfterCloseC string
 	for _, tab := range tabs.Tabs {
 		if tab.Active {
@@ -649,7 +649,7 @@ func TestTabMRUOrderComplexSequence(t *testing.T) {
 
 	// Close A. Fallback should be B (MRU: D, B).
 	closeTab(t, tabA.TabID)
-	tabs2 := callTool[TabListOutput](t, "tab_list", map[string]any{})
+	tabs2 := callTool[tabListOutput](t, "tab_list", map[string]any{})
 	var activeAfterCloseA string
 	for _, tab := range tabs2.Tabs {
 		if tab.Active {

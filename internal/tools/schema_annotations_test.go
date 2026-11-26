@@ -61,11 +61,6 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"snapshot":              {true, false, true},
 		"list_frames":           {true, false, true},
 		"get_network_body":      {true, false, true},
-		"get_cookies":           {true, false, true},
-		"get_storage":           {true, false, true},
-		"get_storage_keys":      {true, false, true},
-		"get_indexeddb":         {true, false, true},
-		"get_cache_storage":     {true, false, true},
 
 		// Peek/drain buffer readers (must NOT claim ReadOnlyHint: true)
 		"get_console_logs":     {false, false, false},
@@ -80,7 +75,6 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"tab_new":         {false, false, false},
 		"navigate":        {false, false, false},
 		"evaluate":        {false, false, false},
-		"add_script":      {false, false, false},
 		"click":           {false, false, false},
 		"type":            {false, false, false},
 		"select_option":   {false, false, false},
@@ -92,35 +86,20 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"drag_and_drop":   {false, false, false},
 
 		// Idempotent non-destructive writes
-		"browser_activate":              {false, false, true},
-		"tab_activate":                  {false, false, true},
-		"set_viewport":                  {false, false, true},
-		"clear_buffers":                 {false, false, true},
-		"set_cookie":                    {false, false, true},
-		"set_storage":                   {false, false, true},
-		"set_extra_headers":             {false, false, true},
-		"set_permission":                {false, false, true},
-		"set_emulated_media":            {false, false, true},
-		"set_ignore_certificate_errors": {false, false, true},
-		"set_geolocation":               {false, false, true},
-		"set_timezone":                  {false, false, true},
-		"set_locale":                    {false, false, true},
-		"set_user_agent":                {false, false, true},
-		"set_cpu_throttling":            {false, false, true},
-		"set_vision_deficiency":         {false, false, true},
-		"emulate_network":               {false, false, true},
-		"force_pseudo_state":            {false, false, true},
-		"emulate_device":                {false, false, true},
+		"browser_activate": {false, false, true},
+		"tab_activate":     {false, false, true},
+		"clear_buffers":    {false, false, true},
+		"emulate":          {false, false, true},
 
-		// Destructive
-		"browser_close":        {false, true, false},
-		"tab_close":            {false, true, false},
-		"intercept":            {false, true, false},
-		"delete_cookies":       {false, true, false},
-		"delete_storage":       {false, true, false},
-		"delete_indexeddb":     {false, true, false},
-		"delete_cache_storage": {false, true, false},
-		"remove_script":        {false, true, false},
+		// Destructive (tools that close resources or delete/remove state)
+		"browser_close":  {false, true, false},
+		"tab_close":      {false, true, false},
+		"intercept":      {false, true, false},
+		"cookies":        {false, true, false},
+		"storage":        {false, true, false},
+		"indexeddb":      {false, true, false},
+		"cache_storage":  {false, true, false},
+		"configure_page": {false, true, false},
 	}
 
 	// Enforce exact bijection so newly registered tools cannot bypass annotation checks.
@@ -196,35 +175,38 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"navigate", "wait_until", false, navigateWaitUntilValues},
 		{"wait_for", "state", false, waitForStateValues},
 		{"screenshot", "format", false, screenshotFormatValues},
-		{"get_dom", "format", false, []string{DOMFormatText, DOMFormatHTML}},
-		{"get_console_logs", "mode", false, []string{ModePeek, ModeDrain}},
-		{"get_js_errors", "mode", false, []string{ModePeek, ModeDrain}},
-		{"get_network_requests", "mode", false, []string{ModePeek, ModeDrain}},
+		{"get_dom", "format", false, []string{domFormatText, domFormatHTML}},
+		{"get_console_logs", "mode", false, []string{modePeek, modeDrain}},
+		{"get_js_errors", "mode", false, []string{modePeek, modeDrain}},
+		{"get_network_requests", "mode", false, []string{modePeek, modeDrain}},
 		{"get_network_requests", "type", false, networkResourceTypeValues},
 		{"get_network_requests", "fields", true, sortedKeys(networkEntryFieldSet)},
 		{"get_network_body", "part", false, networkBodyPartValues},
-		{"get_websocket_frames", "mode", false, []string{ModePeek, ModeDrain}},
+		{"get_websocket_frames", "mode", false, []string{modePeek, modeDrain}},
 		{"get_websocket_frames", "direction", false, wsDirectionValues},
 		{"click", "button", false, clickButtonValues},
 		{"click", "modifiers", true, pressKeyModifierValues},
-		{"type", "mode", false, []string{TypeModeReplace, TypeModeAppend}},
+		{"type", "mode", false, []string{typeModeReplace, typeModeAppend}},
 		{"press_key", "modifiers", true, pressKeyModifierValues},
 		{"dialog", "action", false, dialogActionValues},
-		{"set_cookie", "same_site", false, cookieSameSiteValues},
-		{"get_storage", "type", false, storageTypeValues},
-		{"set_storage", "type", false, storageTypeValues},
-		{"delete_storage", "type", false, storageTypeValues},
-		{"get_storage_keys", "type", false, storageTypeValues},
+		{"cookies", "action", false, cookiesActionValues},
+		{"cookies", "same_site", false, cookieSameSiteValues},
+		{"storage", "action", false, storageActionValues},
+		{"storage", "type", false, storageTypeValues},
+		{"indexeddb", "action", false, indexedDBActionValues},
+		{"cache_storage", "action", false, cacheStorageActionValues},
 		{"get_performance", "mode", false, performanceModeValues},
 		{"clear_buffers", "targets", true, clearBufferTargetValues},
-		{"get_downloads", "mode", false, []string{ModePeek, ModeDrain}},
-		{"set_permission", "setting", false, permissionSettingValues},
-		{"set_vision_deficiency", "type", false, visionDeficiencyValues},
+		{"get_downloads", "mode", false, []string{modePeek, modeDrain}},
+		{"configure_page", "action", false, configurePageActionValues},
+		{"configure_page", "setting", false, permissionSettingValues},
 		{"intercept", "action", false, interceptToolActionValues},
 		{"intercept", "resource_type", false, networkResourceTypeValues},
 		{"intercept", "error_reason", false, interceptErrorReasonValues},
-		{"force_pseudo_state", "states", true, forcePseudoStateValues},
-		{"emulate_device", "device", false, emulateDeviceValues},
+		{"emulate", "action", false, emulateActionValues},
+		{"emulate", "device", false, emulateDeviceValues},
+		{"emulate", "type", false, visionDeficiencyValues},
+		{"emulate", "states", true, forcePseudoStateValues},
 	}
 
 	for _, tc := range checks {
@@ -277,16 +259,16 @@ func TestSchemaWithEnumsPanicsOnProgrammerMistakes(t *testing.T) {
 	}
 
 	assertPanics("missing property", func() {
-		schemaWithEnums[ClickInput](map[string][]string{"nonexistent": {"a"}})
+		schemaWithEnums[clickInput](map[string][]string{"nonexistent": {"a"}})
 	})
 	assertPanics("empty enum list", func() {
-		schemaWithEnums[ClickInput](map[string][]string{"button": {}})
+		schemaWithEnums[clickInput](map[string][]string{"button": {}})
 	})
 	assertPanics("non-string property", func() {
-		schemaWithEnums[ClickInput](map[string][]string{"click_count": {"1"}})
+		schemaWithEnums[clickInput](map[string][]string{"click_count": {"1"}})
 	})
 	assertPanics("nullable *string property", func() {
-		schemaWithEnums[DialogInput](map[string][]string{"text": {"a"}})
+		schemaWithEnums[dialogInput](map[string][]string{"text": {"a"}})
 	})
 }
 
@@ -319,13 +301,13 @@ func TestGetConsoleLogsFiltersNonStandardCDPLevels(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `console.assert(false, 'assertion-boom'); console.log('plain-log'); true`,
 	})
 	waitForConsole(t, tabID)
 
-	out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 		"tab":   tabID,
 		"mode":  "drain",
 		"level": "assert",
@@ -384,63 +366,67 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		t.Errorf("get_websocket_frames empty request_id err = %q", err)
 	}
 
-	// Storage keys negative limit.
-	if err := callToolExpectErr(t, "get_storage_keys", map[string]any{"tab": tabID, "limit": -1}); !strings.Contains(err, "limit") {
-		t.Errorf("get_storage_keys negative limit err = %q", err)
+	// Storage negative limit & max_bytes.
+	if err := callToolExpectErr(t, "storage", map[string]any{"action": "get", "tab": tabID, "keys_only": true, "limit": -1}); !strings.Contains(err, "limit") {
+		t.Errorf("storage negative limit err = %q", err)
+	}
+	if err := callToolExpectErr(t, "storage", map[string]any{"action": "get", "tab": tabID, "max_bytes": -1}); !strings.Contains(err, "max_bytes") {
+		t.Errorf("storage negative max_bytes err = %q", err)
 	}
 
 	// Config validation.
-	if err := callToolExpectErr(t, "set_permission", map[string]any{"tab": tabID, "name": "", "setting": "granted"}); !strings.Contains(err, "name") {
-		t.Errorf("set_permission empty name err = %q", err)
+	if err := callToolExpectErr(t, "configure_page", map[string]any{"action": "set_permission", "tab": tabID, "name": "", "setting": "granted"}); !strings.Contains(err, "name") {
+		t.Errorf("configure_page(set_permission) empty name err = %q", err)
 	}
-	if err := callToolExpectErr(t, "remove_script", map[string]any{"tab": tabID, "identifier": ""}); !strings.Contains(err, "identifier") {
-		t.Errorf("remove_script empty identifier err = %q", err)
+	if err := callToolExpectErr(t, "configure_page", map[string]any{"action": "remove_script", "tab": tabID, "identifier": ""}); !strings.Contains(err, "identifier") {
+		t.Errorf("configure_page(remove_script) empty identifier err = %q", err)
 	}
 
-	// Emulation validation: set_geolocation partial/range/accuracy.
+	// Emulation validation: geolocation partial/range/accuracy.
 	geoCases := []struct {
 		name string
 		args map[string]any
 		want string
 	}{
-		{"lat_only", map[string]any{"tab": tabID, "latitude": 10.0}, "latitude and longitude"},
-		{"lon_only", map[string]any{"tab": tabID, "longitude": 10.0}, "latitude and longitude"},
-		{"accuracy_only", map[string]any{"tab": tabID, "accuracy": 5.0}, "accuracy requires"},
-		{"lat_high", map[string]any{"tab": tabID, "latitude": 91.0, "longitude": 0.0}, "latitude"},
-		{"lat_low", map[string]any{"tab": tabID, "latitude": -91.0, "longitude": 0.0}, "latitude"},
-		{"lon_high", map[string]any{"tab": tabID, "latitude": 0.0, "longitude": 181.0}, "longitude"},
-		{"lon_low", map[string]any{"tab": tabID, "latitude": 0.0, "longitude": -181.0}, "longitude"},
-		{"neg_accuracy", map[string]any{"tab": tabID, "latitude": 0.0, "longitude": 0.0, "accuracy": -1.0}, "accuracy"},
+		{"lat_only", map[string]any{"action": "geolocation", "tab": tabID, "latitude": 10.0}, "latitude and longitude"},
+		{"lon_only", map[string]any{"action": "geolocation", "tab": tabID, "longitude": 10.0}, "latitude and longitude"},
+		{"accuracy_only", map[string]any{"action": "geolocation", "tab": tabID, "accuracy": 5.0}, "accuracy requires"},
+		{"lat_high", map[string]any{"action": "geolocation", "tab": tabID, "latitude": 91.0, "longitude": 0.0}, "latitude"},
+		{"lat_low", map[string]any{"action": "geolocation", "tab": tabID, "latitude": -91.0, "longitude": 0.0}, "latitude"},
+		{"lon_high", map[string]any{"action": "geolocation", "tab": tabID, "latitude": 0.0, "longitude": 181.0}, "longitude"},
+		{"lon_low", map[string]any{"action": "geolocation", "tab": tabID, "latitude": 0.0, "longitude": -181.0}, "longitude"},
+		{"neg_accuracy", map[string]any{"action": "geolocation", "tab": tabID, "latitude": 0.0, "longitude": 0.0, "accuracy": -1.0}, "accuracy"},
 	}
 	for _, tc := range geoCases {
-		if err := callToolExpectErr(t, "set_geolocation", tc.args); !strings.Contains(err, tc.want) {
-			t.Errorf("set_geolocation(%s) err = %q, want substring %q", tc.name, err, tc.want)
+		if err := callToolExpectErr(t, "emulate", tc.args); !strings.Contains(err, tc.want) {
+			t.Errorf("emulate(geolocation, %s) err = %q, want substring %q", tc.name, err, tc.want)
 		}
 	}
 
-	// Emulation validation: set_cpu_throttling & emulate_network (including fractional (-1, 0)).
-	if err := callToolExpectErr(t, "set_cpu_throttling", map[string]any{"tab": tabID, "rate": -1.0}); !strings.Contains(err, "rate") {
-		t.Errorf("set_cpu_throttling negative rate err = %q", err)
+	// Emulation validation: cpu_throttling & network (including fractional (-1, 0)).
+	if err := callToolExpectErr(t, "emulate", map[string]any{"action": "cpu_throttling", "tab": tabID, "rate": -1.0}); !strings.Contains(err, "rate") {
+		t.Errorf("emulate(cpu_throttling) negative rate err = %q", err)
 	}
-	if err := callToolExpectErr(t, "emulate_network", map[string]any{"tab": tabID, "latency": -5.0}); !strings.Contains(err, "latency") {
-		t.Errorf("emulate_network negative latency err = %q", err)
+	if err := callToolExpectErr(t, "emulate", map[string]any{"action": "network", "tab": tabID, "latency": -5.0}); !strings.Contains(err, "latency") {
+		t.Errorf("emulate(network) negative latency err = %q", err)
 	}
 	for _, bad := range []float64{-2.0, -0.5} {
-		if err := callToolExpectErr(t, "emulate_network", map[string]any{"tab": tabID, "download_throughput": bad}); !strings.Contains(err, "download_throughput") {
-			t.Errorf("emulate_network download_throughput=%v err = %q", bad, err)
+		if err := callToolExpectErr(t, "emulate", map[string]any{"action": "network", "tab": tabID, "download_throughput": bad}); !strings.Contains(err, "download_throughput") {
+			t.Errorf("emulate(network) download_throughput=%v err = %q", bad, err)
 		}
-		if err := callToolExpectErr(t, "emulate_network", map[string]any{"tab": tabID, "upload_throughput": bad}); !strings.Contains(err, "upload_throughput") {
-			t.Errorf("emulate_network upload_throughput=%v err = %q", bad, err)
+		if err := callToolExpectErr(t, "emulate", map[string]any{"action": "network", "tab": tabID, "upload_throughput": bad}); !strings.Contains(err, "upload_throughput") {
+			t.Errorf("emulate(network) upload_throughput=%v err = %q", bad, err)
 		}
 	}
 	// -1 (explicit disable) must still succeed.
-	callTool[struct{}](t, "emulate_network", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "network",
 		"tab":                 tabID,
 		"download_throughput": -1.0,
 		"upload_throughput":   -1.0,
 	})
 
-	// Negative SelectorInput.Timeout rejected across SelectorInput tools.
+	// Negative selectorInput.Timeout rejected across selectorInput tools.
 	timeoutTools := []struct {
 		name string
 		args map[string]any
@@ -458,6 +444,7 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		{"press_key", map[string]any{"tab": tabID, "key": "Enter", "timeout": -1}},
 		{"upload_files", map[string]any{"tab": tabID, "selector": "input", "paths": []string{"/tmp/a"}, "timeout": -1}},
 		{"drag_and_drop", map[string]any{"tab": tabID, "source_selector": "#a", "target_selector": "#b", "timeout": -1}},
+		{"emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "selector": "h1", "timeout": -1}},
 	}
 	for _, tc := range timeoutTools {
 		if err := callToolExpectErr(t, tc.name, tc.args); !strings.Contains(err, "timeout") {
@@ -493,10 +480,28 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"set_permission", map[string]any{"name": "", "setting": "granted"}, "permission name"},
-		{"remove_script", map[string]any{"identifier": ""}, "identifier"},
-		{"set_geolocation", map[string]any{"latitude": 10.0}, "latitude and longitude"},
-		{"emulate_network", map[string]any{"download_throughput": -0.5}, "download_throughput"},
+		{"configure_page", map[string]any{"action": "set_permission", "name": "", "setting": "granted"}, "permission name"},
+		{"configure_page", map[string]any{"action": "remove_script", "identifier": ""}, "identifier"},
+		{"configure_page", map[string]any{"action": "set_headers", "headers": map[string]string{"Bad Name": "1"}}, "invalid header name"},
+		{"configure_page", map[string]any{"action": "add_script", "source": "1", "headers": map[string]string{}}, "does not accept"},
+		{"emulate", map[string]any{"action": "geolocation", "latitude": 10.0}, "latitude and longitude"},
+		{"emulate", map[string]any{"action": "network", "download_throughput": -0.5}, "download_throughput"},
+		{"emulate", map[string]any{"action": "viewport", "width": 0, "height": 600}, "width and height"},
+		{"emulate", map[string]any{"action": "viewport", "width": 800, "height": 600, "device": "iPhone 15"}, "does not accept"},
+		{"emulate", map[string]any{"action": "viewport", "width": 800, "height": 600, "timeout": 500}, "does not accept"},
+		{"emulate", map[string]any{"action": "pseudo_state", "selector": "#a", "timeout": -1}, "timeout"},
+		{"emulate", map[string]any{"action": "cpu_throttling"}, "rate"},
+		{"emulate", map[string]any{"action": "user_agent"}, "user_agent"},
+		{"emulate", map[string]any{"action": "pseudo_state", "selector": ""}, "selector"},
+		{"emulate", map[string]any{"action": "pseudo_state", "selector": "#a", "states": []string{"bogus"}}, "bogus"},
+		{"emulate", map[string]any{"action": "device", "device": "unknown"}, "unknown"},
+		{"emulate", map[string]any{"action": "device", "device": "reset", "landscape": true}, "landscape"},
+		{"cookies", map[string]any{"action": "get", "limit": -1}, "limit"},
+		{"cookies", map[string]any{"action": "set", "name": "k"}, "value"},
+		{"cookies", map[string]any{"action": "delete", "value": ""}, "action='delete'"},
+		{"storage", map[string]any{"action": "get", "keys_only": true, "key": "a"}, "keys_only"},
+		{"storage", map[string]any{"action": "get", "max_bytes": -1}, "max_bytes"},
+		{"storage", map[string]any{"action": "set", "key": "k"}, "value"},
 		{"get_websocket_frames", map[string]any{"mode": "peek", "request_id": ""}, "request_id"},
 		{"get_console_logs", map[string]any{"mode": "peek", "limit": -1}, "limit"},
 		{"get_network_requests", map[string]any{"mode": "peek", "type": "bogus"}, "bogus"},
@@ -515,16 +520,14 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"intercept", map[string]any{"action": "fail", "url_pattern": "*", "resource_type": "bogus"}, "bogus"},
 		{"click", map[string]any{"selector": ""}, "selector"},
 		{"browser_activate", map[string]any{"browser": ""}, "browser ID"},
-		{"get_indexeddb", map[string]any{"store": "items"}, "requires database"},
-		{"get_indexeddb", map[string]any{"database": "db", "store": "items", "skip": -1}, "skip"},
-		{"delete_indexeddb", map[string]any{"database": ""}, "database"},
-		{"get_cache_storage", map[string]any{"request_url": "https://example.com"}, "requires cache_name"},
-		{"get_cache_storage", map[string]any{"cache_name": "c", "request_url": "https://example.com", "limit": 5}, "cannot be combined"},
-		{"delete_cache_storage", map[string]any{"cache_name": ""}, "cache_name"},
-		{"force_pseudo_state", map[string]any{"selector": ""}, "selector"},
-		{"force_pseudo_state", map[string]any{"selector": "#a", "states": []string{"bogus"}}, "bogus"},
-		{"emulate_device", map[string]any{"device": "unknown"}, "unknown"},
-		{"emulate_device", map[string]any{"device": "reset", "landscape": true}, "landscape"},
+		{"indexeddb", map[string]any{"action": "get", "store": "items"}, "requires database"},
+		{"indexeddb", map[string]any{"action": "get", "database": "db", "store": "items", "skip": -1}, "skip"},
+		{"indexeddb", map[string]any{"action": "delete", "database": ""}, "database"},
+		{"indexeddb", map[string]any{"action": "delete", "database": "db", "limit": 5}, "action='delete'"},
+		{"cache_storage", map[string]any{"action": "get", "request_url": "https://example.com"}, "requires cache_name"},
+		{"cache_storage", map[string]any{"action": "get", "cache_name": "c", "request_url": "https://example.com", "limit": 5}, "cannot be combined"},
+		{"cache_storage", map[string]any{"action": "delete", "cache_name": ""}, "cache_name"},
+		{"cache_storage", map[string]any{"action": "delete", "cache_name": "c", "limit": 5}, "action='delete'"},
 		{"drag_and_drop", map[string]any{"source_selector": "", "target_selector": "#b"}, "source"},
 		{"drag_and_drop", map[string]any{"source_selector": "#a", "target_selector": ""}, "target"},
 		{"drag_and_drop", map[string]any{"source_selector": "#a", "target_selector": "#b", "steps": -1}, "steps"},

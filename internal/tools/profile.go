@@ -5,60 +5,43 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/greatliontech/chromedp-mcp/internal/browser"
 	"github.com/greatliontech/chromedp-mcp/internal/profile"
 )
 
-// ProfileInfo is a single profile entry returned by browser_list_profiles.
-type ProfileInfo struct {
+// profileInfo is a single profile entry returned by browser_list_profiles.
+type profileInfo struct {
 	Name string `json:"name"`
 	Dir  string `json:"dir"`
 }
 
-// BrowserListProfilesOutput is the output for browser_list_profiles.
-type BrowserListProfilesOutput struct {
-	Profiles []ProfileInfo `json:"profiles"`
+// browserListProfilesOutput is the output for browser_list_profiles.
+type browserListProfilesOutput struct {
+	Profiles []profileInfo `json:"profiles"`
 }
 
-func registerProfileTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
-	if len(opts.AllowedProfiles) == 0 {
+func registerProfileTools(s *mcp.Server, opts resolvedOptions) {
+	if len(opts.allowedSet) == 0 {
 		return
-	}
-
-	// Use the explicit user data dir if provided, otherwise auto-detect.
-	userDataDir := opts.UserDataDir
-	if userDataDir == "" {
-		userDataDir = profile.DefaultUserDataDir()
-	}
-
-	// Build the allowed set for fast lookup.
-	allowed := make(map[string]bool, len(opts.AllowedProfiles))
-	for _, name := range opts.AllowedProfiles {
-		allowed[name] = true
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "browser_list_profiles",
 		Description: "List available Chrome/Chromium user profiles that can be used with browser_launch.",
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, BrowserListProfilesOutput, error) {
-		all, err := profile.Discover(userDataDir)
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, browserListProfilesOutput, error) {
+		all, err := profile.Discover(opts.userDataDir)
 		if err != nil {
-			return nil, BrowserListProfilesOutput{}, err
+			return nil, browserListProfilesOutput{}, err
 		}
-		infos := make([]ProfileInfo, 0, len(all))
+		infos := make([]profileInfo, 0, len(all))
 		for _, p := range all {
-			if allowed[p.Name] {
-				infos = append(infos, ProfileInfo{
+			if opts.allowedSet[p.Name] {
+				infos = append(infos, profileInfo{
 					Name: p.Name,
 					Dir:  p.Dir,
 				})
 			}
 		}
-		return nil, BrowserListProfilesOutput{Profiles: infos}, nil
+		return nil, browserListProfilesOutput{Profiles: infos}, nil
 	})
-
-	// Store resolved profile config on opts so browser_launch can use it.
-	opts.userDataDir = userDataDir
-	opts.allowedSet = allowed
 }

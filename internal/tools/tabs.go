@@ -10,35 +10,35 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
-// TabNewInput is the input for tab_new.
-type TabNewInput struct {
+// tabNewInput is the input for tab_new.
+type tabNewInput struct {
 	URL     string `json:"url,omitempty" jsonschema:"URL to navigate to in the new tab"`
 	Browser string `json:"browser,omitempty" jsonschema:"Browser ID. Defaults to active browser."`
 }
 
-// TabNewOutput is the output for tab_new.
-type TabNewOutput struct {
+// tabNewOutput is the output for tab_new.
+type tabNewOutput struct {
 	TabID string `json:"tab_id"`
 	URL   string `json:"url,omitempty"`
 }
 
-// TabListInput is the input for tab_list.
-type TabListInput struct {
+// tabListInput is the input for tab_list.
+type tabListInput struct {
 	Browser string `json:"browser,omitempty" jsonschema:"Browser ID. Defaults to active browser."`
 }
 
-// TabListOutput is the output for tab_list.
-type TabListOutput struct {
+// tabListOutput is the output for tab_list.
+type tabListOutput struct {
 	Tabs []tab.TabInfo `json:"tabs"`
 }
 
-// TabActivateInput is the input for tab_activate.
-type TabActivateInput struct {
+// tabActivateInput is the input for tab_activate.
+type tabActivateInput struct {
 	Tab string `json:"tab" jsonschema:"Tab ID to activate"`
 }
 
-// TabCloseInput is the input for tab_close.
-type TabCloseInput struct {
+// tabCloseInput is the input for tab_close.
+type tabCloseInput struct {
 	Tab string `json:"tab" jsonschema:"Tab ID to close"`
 }
 
@@ -47,16 +47,16 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "tab_new",
 		Description: "Create a new browser tab, optionally navigating to a URL. The new tab becomes the active tab.",
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabNewInput) (*mcp.CallToolResult, TabNewOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input tabNewInput) (*mcp.CallToolResult, tabNewOutput, error) {
 		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
-			return nil, TabNewOutput{}, err
+			return nil, tabNewOutput{}, err
 		}
 		t, err := b.Tabs.NewTab(ctx)
 		if err != nil {
-			return nil, TabNewOutput{}, err
+			return nil, tabNewOutput{}, err
 		}
-		out := TabNewOutput{TabID: t.ID}
+		out := tabNewOutput{TabID: t.ID}
 		if input.URL != "" {
 			tctx, tcancel := tabContext(ctx, t.Context())
 			defer tcancel()
@@ -64,7 +64,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 				// Roll back the freshly created tab so a failed tab_new does not
 				// leak an orphaned blank tab or hijack the active tab.
 				_ = b.Tabs.Close(t.ID)
-				return nil, TabNewOutput{}, err
+				return nil, tabNewOutput{}, err
 			}
 			if finalURL, err := t.URL(ctx); err == nil && finalURL != "" {
 				out.URL = finalURL
@@ -79,23 +79,23 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "tab_list",
 		Description: "List all open tabs with their IDs, URLs, and titles.",
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabListInput) (*mcp.CallToolResult, TabListOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input tabListInput) (*mcp.CallToolResult, tabListOutput, error) {
 		b, err := mgr.Resolve(input.Browser)
 		if err != nil {
-			return nil, TabListOutput{}, err
+			return nil, tabListOutput{}, err
 		}
 		tabs, err := b.Tabs.List(ctx)
 		if err != nil {
-			return nil, TabListOutput{}, err
+			return nil, tabListOutput{}, err
 		}
-		return nil, TabListOutput{Tabs: tabs}, nil
+		return nil, tabListOutput{Tabs: tabs}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tab_activate",
 		Description: "Set a tab as the active tab by ID and bring it to the front.",
 		Annotations: idempotentWriteAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabActivateInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input tabActivateInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := mgr.ActivateTab(ctx, input.Tab); err != nil {
 			return nil, struct{}{}, err
 		}
@@ -106,7 +106,7 @@ func registerTabTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "tab_close",
 		Description: "Close a tab by ID. If the active tab is closed, the most recently used remaining tab becomes active.",
 		Annotations: destructiveAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input TabCloseInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input tabCloseInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := mgr.CloseTab(input.Tab); err != nil {
 			return nil, struct{}{}, err
 		}

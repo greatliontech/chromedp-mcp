@@ -45,7 +45,7 @@ func openWebSocket(t *testing.T, tabID, url string) {
 		await window.__greet;
 		return 'ready';
 	})()`
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":           tabID,
 		"expression":    js,
 		"await_promise": true,
@@ -64,7 +64,7 @@ func findWSConnection(t *testing.T, tabID, urlPattern string) collector.NetworkE
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+		out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":         tabID,
 			"mode":        "peek",
 			"url_pattern": urlPattern,
@@ -87,7 +87,7 @@ func waitForWSFrameCount(t *testing.T, tabID, requestID string, minSent, minRecv
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+		out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":  tabID,
 			"mode": "peek",
 			"type": "websocket",
@@ -143,7 +143,7 @@ func TestWebSocketTypeFilterExcludesHTTP(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Generate at least one HTTP request to populate the HTTP buffer.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
@@ -152,7 +152,7 @@ func TestWebSocketTypeFilterExcludesHTTP(t *testing.T) {
 	openWebSocket(t, tabID, wsURL("/ws-echo"))
 	entry := findWSConnection(t, tabID, "/ws-echo")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 		"type": "websocket",
@@ -177,7 +177,7 @@ func TestGetWebSocketFramesText(t *testing.T) {
 	entry := findWSConnection(t, tabID, "/ws-echo")
 
 	// Send 3 text frames; server echoes each back.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(async () => {
 			window.__ws.send('alpha');
@@ -191,7 +191,7 @@ func TestGetWebSocketFramesText(t *testing.T) {
 	// Server greeting + 3 echoes = 4 received; 3 sent.
 	waitForWSFrameCount(t, tabID, entry.ID, 3, 4)
 
-	frames := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	frames := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"mode":       "peek",
@@ -235,7 +235,7 @@ func TestGetWebSocketFramesBinary(t *testing.T) {
 	entry := findWSConnection(t, tabID, "/ws-echo")
 
 	// Send 4 raw bytes including non-UTF8 sequences.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":           tabID,
 		"expression":    `window.__ws.send(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))`,
 		"await_promise": false,
@@ -244,7 +244,7 @@ func TestGetWebSocketFramesBinary(t *testing.T) {
 	// Greeting + binary echo = 2 received; 1 sent.
 	waitForWSFrameCount(t, tabID, entry.ID, 1, 2)
 
-	frames := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	frames := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"direction":  "sent",
@@ -279,14 +279,14 @@ func TestGetWebSocketFramesDirectionFilter(t *testing.T) {
 	openWebSocket(t, tabID, wsURL("/ws-echo"))
 	entry := findWSConnection(t, tabID, "/ws-echo")
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":           tabID,
 		"expression":    `window.__ws.send('ping')`,
 		"await_promise": false,
 	})
 	waitForWSFrameCount(t, tabID, entry.ID, 1, 2)
 
-	sentOnly := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	sentOnly := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"direction":  "sent",
@@ -299,7 +299,7 @@ func TestGetWebSocketFramesDirectionFilter(t *testing.T) {
 		t.Errorf("direction=sent returned %d received frames, want 0", len(sentOnly.Received))
 	}
 
-	recvOnly := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	recvOnly := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"direction":  "received",
@@ -322,14 +322,14 @@ func TestGetWebSocketFramesPeekVsDrain(t *testing.T) {
 	openWebSocket(t, tabID, wsURL("/ws-echo"))
 	entry := findWSConnection(t, tabID, "/ws-echo")
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":           tabID,
 		"expression":    `(window.__ws.send('one'), window.__ws.send('two'), 'sent')`,
 		"await_promise": false,
 	})
 	waitForWSFrameCount(t, tabID, entry.ID, 2, 3)
 
-	peeked := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	peeked := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"mode":       "peek",
@@ -338,7 +338,7 @@ func TestGetWebSocketFramesPeekVsDrain(t *testing.T) {
 		t.Fatalf("peek Sent len = %d, want >= 2", len(peeked.Sent))
 	}
 	// Second peek returns the same frames.
-	peeked2 := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	peeked2 := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"mode":       "peek",
@@ -348,12 +348,12 @@ func TestGetWebSocketFramesPeekVsDrain(t *testing.T) {
 	}
 
 	// Drain.
-	_ = callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	_ = callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"mode":       "drain",
 	})
-	post := callTool[GetWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
+	post := callTool[getWebSocketFramesOutput](t, "get_websocket_frames", map[string]any{
 		"tab":        tabID,
 		"request_id": entry.ID,
 		"mode":       "peek",
@@ -404,7 +404,7 @@ func TestWebSocketLimitDoesNotHideConnection(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Generate 5 HTTP requests to fill the buffer.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(async () => {
 			for (let i = 0; i < 5; i++) await fetch('/api/data?n=' + i);
@@ -418,7 +418,7 @@ func TestWebSocketLimitDoesNotHideConnection(t *testing.T) {
 	// Ask for limit=3. Even though 5 HTTP entries plus 1 WS entry exist,
 	// the WS entry must be reachable somehow. The unified filter that
 	// includes type=websocket gives it priority.
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"limit": 3,
@@ -447,7 +447,7 @@ func TestWebSocketGetNetworkRequestsDoesNotDrainConnections(t *testing.T) {
 	entry := findWSConnection(t, tabID, "/ws-echo")
 
 	// Drain (peek=false).
-	out1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out1 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 		"type": "websocket",
@@ -464,7 +464,7 @@ func TestWebSocketGetNetworkRequestsDoesNotDrainConnections(t *testing.T) {
 	}
 
 	// Subsequent call should still see it.
-	out2 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out2 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 		"type": "websocket",

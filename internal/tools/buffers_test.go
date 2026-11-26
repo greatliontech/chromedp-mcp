@@ -21,11 +21,11 @@ func TestClearBuffersSelectivePreservesOtherBuffers(t *testing.T) {
 		t.Fatalf("ResolveTabWithBrowser: %v", err)
 	}
 	// Reset all buffers for a clean baseline.
-	callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{"tab": tabID})
+	callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{"tab": tabID})
 
 	// Populate all 7 buffers:
 	// 1. console + 2. errors + 3. network + 6. url_changes via page execution.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(async function() {
 			console.log('buf-msg');
@@ -96,7 +96,7 @@ func TestClearBuffersSelectivePreservesOtherBuffers(t *testing.T) {
 	})
 
 	// Clear ONLY console and network (passing duplicates to verify dedup & canonical order).
-	out := callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{
+	out := callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{
 		"tab":     tabID,
 		"targets": []string{"network", "console", "console"},
 	})
@@ -128,7 +128,7 @@ func TestClearBuffersSelectivePreservesOtherBuffers(t *testing.T) {
 	}
 
 	// Clear errors, websocket, performance, url_changes — downloads still preserved.
-	out2 := callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{
+	out2 := callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{
 		"tab":     tabID,
 		"targets": []string{"url_changes", "performance", "websocket", "errors"},
 	})
@@ -157,7 +157,7 @@ func TestClearBuffersSelectivePreservesOtherBuffers(t *testing.T) {
 	// Verify url_changes preserved its baseline URL (/step1) and main frame ID
 	// after clear: if baseline were wiped, pushState would be dropped and count
 	// would stay 0.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `history.pushState({}, '', '/step2'); true`,
 	})
@@ -183,7 +183,7 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 	}
 
 	// Seed console, downloads, and open a live alert dialog.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `console.log('before-all'); setTimeout(function() { alert('still-open'); }, 10); true`,
 	})
@@ -200,17 +200,17 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+	if !callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for alert dialog")
 	}
 
 	// Omitted targets clears all 7 buffers in canonical order.
-	out := callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{"tab": tabID})
+	out := callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{"tab": tabID})
 	if !slices.Equal(out.Cleared, clearBufferOrder) {
 		t.Fatalf("default Cleared = %v, want %v", out.Cleared, clearBufferOrder)
 	}
@@ -218,12 +218,12 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 		t.Error("default clear_buffers did not clear console and downloads")
 	}
 	// Live dialog state MUST NOT be cleared by clear_buffers.
-	if d := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open {
+	if d := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open {
 		t.Fatal("clear_buffers corrupted open live dialog state")
 	}
 
 	// Explicit ["all", "console"] clears all 7 without duplicates.
-	outAll := callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{
+	outAll := callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{
 		"tab":     tabID,
 		"targets": []string{"all", "console"},
 	})
@@ -234,16 +234,16 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 
 func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 	// Capture harness browser ID and one of its tabs before launching b2.
-	initList := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	initList := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	b1ID := initList.Browsers[0].ID
 	tabInB1 := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabInB1)
 
 	// Launch a second browser and close its initial default tab so it has 0 open tabs.
-	b2Out := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
+	b2Out := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
 	b2ID := b2Out.BrowserID
 	defer func() {
-		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": b2ID})
+		callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b2ID})
 		callTool[struct{}](t, "browser_activate", map[string]any{"browser": b1ID})
 	}()
 	for _, tb := range b2Out.Tabs {
@@ -265,7 +265,7 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 	})
 
 	// Clearing only ["downloads"] must succeed even with 0 open tabs.
-	out := callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{
+	out := callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{
 		"browser": b2ID,
 		"targets": []string{"downloads"},
 	})
@@ -308,7 +308,7 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 	b2.Downloads.HandleDownloadProgress(&cdpbrowser.EventDownloadProgress{
 		GUID: "dl-b2-active", State: cdpbrowser.DownloadProgressStateCompleted,
 	})
-	callTool[ClearBuffersOutput](t, "clear_buffers", map[string]any{
+	callTool[clearBuffersOutput](t, "clear_buffers", map[string]any{
 		"tab":     tabInB1,
 		"targets": []string{"downloads"},
 	})
@@ -321,7 +321,7 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 
 	// Validation is atomic: explicit empty [] and mixed valid+invalid targets must
 	// reject cleanly and NOT clear valid buffers.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabInB1,
 		"expression": `console.log('must-survive'); true`,
 	})

@@ -11,14 +11,14 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
-// MaxObserveWindowMs caps observe_window_ms. The observation window is a
+// maxObserveWindowMs caps observe_window_ms. The observation window is a
 // blocking wait inside the tool handler, so an unbounded value lets one
 // call pin an MCP request open indefinitely. 30s is far above any useful
 // window (the longest value the tool descriptions suggest is 1s) while
 // still bounding a caller that passes the wrong unit.
-const MaxObserveWindowMs = 30_000
+const maxObserveWindowMs = 30_000
 
-// ObservedActivity reports what the page did in response to an action,
+// observedActivity reports what the page did in response to an action,
 // measured over the action's observation window.
 //
 // has_any_effect is the disjunction of NetworkRequests, URLChanged,
@@ -39,7 +39,7 @@ const MaxObserveWindowMs = 30_000
 // its own turnaround took. Observing inline sidesteps it entirely: the
 // window is opened immediately before the action dispatches, so there is
 // no gap for effects to escape through.
-type ObservedActivity struct {
+type observedActivity struct {
 	WindowMs        int  `json:"window_ms"`
 	NetworkRequests int  `json:"network_requests"`
 	DOMMutations    int  `json:"dom_mutations"`
@@ -225,15 +225,15 @@ func openObservation(ctx context.Context, t *tab.Tab, windowMs int) *observation
 // succeeded, and failing the tool call because a measurement came back
 // partial would turn a working action into an error the caller cannot
 // act on. A window cut short is reported via Truncated instead.
-func (o *observation) close(ctx context.Context) *ObservedActivity {
+func (o *observation) close(ctx context.Context) *observedActivity {
 	if o == nil {
 		return nil
 	}
 
-	out := &ObservedActivity{}
+	out := &observedActivity{}
 	// NewTimer + Stop rather than time.After: on the cancellation branch
 	// a time.After timer would stay armed for the rest of the window (up
-	// to MaxObserveWindowMs).
+	// to maxObserveWindowMs).
 	timer := time.NewTimer(time.Duration(o.windowMs) * time.Millisecond)
 	defer timer.Stop()
 	select {
@@ -255,7 +255,7 @@ func (o *observation) close(ctx context.Context) *ObservedActivity {
 	out.DOMMutations, out.DOMMutationsUnavailable, out.DOMMutationsPartial = o.countMutations(ctx)
 
 	// has_any_effect intentionally excludes DOMMutations — see the
-	// ObservedActivity doc for why.
+	// observedActivity doc for why.
 	out.HasAnyEffect = out.NetworkRequests > 0 ||
 		out.URLChanged ||
 		out.ConsoleMessages > 0 ||
@@ -400,8 +400,8 @@ func validateObserveWindow(ms int) error {
 	if ms < 0 {
 		return fmt.Errorf("observe_window_ms must be >= 0; got %d", ms)
 	}
-	if ms > MaxObserveWindowMs {
-		return fmt.Errorf("observe_window_ms must be <= %d; got %d", MaxObserveWindowMs, ms)
+	if ms > maxObserveWindowMs {
+		return fmt.Errorf("observe_window_ms must be <= %d; got %d", maxObserveWindowMs, ms)
 	}
 	return nil
 }

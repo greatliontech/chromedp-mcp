@@ -36,25 +36,25 @@ var (
 	waitForStateValues      = []string{waitStateVisible, waitStateHidden, waitStateAttached, waitStateDetached}
 )
 
-// NavigateInput is the input for navigate.
-type NavigateInput struct {
-	TabInput
+// navigateInput is the input for navigate.
+type navigateInput struct {
+	tabInput
 	Action      string `json:"action,omitempty" jsonschema:"Navigation action: 'goto' (default), 'reload', 'back', or 'forward'."`
 	URL         string `json:"url,omitempty" jsonschema:"URL to navigate to (required for action='goto')."`
 	WaitUntil   string `json:"wait_until,omitempty" jsonschema:"For action='goto': wait condition 'load' (default), 'domcontentloaded', or 'networkidle'."`
 	BypassCache bool   `json:"bypass_cache,omitempty" jsonschema:"For action='reload': bypass browser cache (default false)."`
 }
 
-// NavigateOutput is the output for navigate.
-type NavigateOutput struct {
+// navigateOutput is the output for navigate.
+type navigateOutput struct {
 	URL    string `json:"url"`
 	Title  string `json:"title"`
 	Status int64  `json:"status,omitempty"`
 }
 
-// WaitForInput is the input for wait_for.
-type WaitForInput struct {
-	TabInput
+// waitForInput is the input for wait_for.
+type waitForInput struct {
+	tabInput
 	Selector   string `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector to wait for."`
 	Frame      string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID for selector, text, or expression."`
 	State      string `json:"state,omitempty" jsonschema:"For selector: 'visible' (default), 'hidden', 'attached', or 'detached'."`
@@ -68,38 +68,38 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "navigate",
 		Description: "Navigate a tab: go to a URL ('goto', default), reload ('reload'), or move in history ('back'/'forward'). Returns final URL, page title, and HTTP status (for goto/reload when available).",
-		InputSchema: schemaWithEnums[NavigateInput](map[string][]string{
+		InputSchema: schemaWithEnums[navigateInput](map[string][]string{
 			"action":     navigateActionValues,
 			"wait_until": navigateWaitUntilValues,
 		}),
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input NavigateInput) (*mcp.CallToolResult, NavigateOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input navigateInput) (*mcp.CallToolResult, navigateOutput, error) {
 		if err := validateEnum("action", input.Action, true, navigateActionValues); err != nil {
-			return nil, NavigateOutput{}, err
+			return nil, navigateOutput{}, err
 		}
 		if err := validateEnum("wait_until", input.WaitUntil, true, navigateWaitUntilValues); err != nil {
-			return nil, NavigateOutput{}, err
+			return nil, navigateOutput{}, err
 		}
 		action := input.Action
 		if action == "" {
 			action = navActionGoto
 		}
 		if action == navActionGoto && input.URL == "" {
-			return nil, NavigateOutput{}, fmt.Errorf("url is required for action='goto'")
+			return nil, navigateOutput{}, fmt.Errorf("url is required for action='goto'")
 		}
 		if action != navActionGoto && input.URL != "" {
-			return nil, NavigateOutput{}, fmt.Errorf("url is only valid when action is 'goto'")
+			return nil, navigateOutput{}, fmt.Errorf("url is only valid when action is 'goto'")
 		}
 		if action != navActionGoto && input.WaitUntil != "" {
-			return nil, NavigateOutput{}, fmt.Errorf("wait_until is only valid when action is 'goto'")
+			return nil, navigateOutput{}, fmt.Errorf("wait_until is only valid when action is 'goto'")
 		}
 		if action != navActionReload && input.BypassCache {
-			return nil, NavigateOutput{}, fmt.Errorf("bypass_cache is only valid when action is 'reload'")
+			return nil, navigateOutput{}, fmt.Errorf("bypass_cache is only valid when action is 'reload'")
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, NavigateOutput{}, err
+			return nil, navigateOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -142,14 +142,14 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 			err = chromedp.Do(navCtx, navigateHistory(+1))
 		}
 		if err != nil {
-			return nil, NavigateOutput{}, wrapNavTimeout(err, tctx.Err(), navOp)
+			return nil, navigateOutput{}, wrapNavTimeout(err, tctx.Err(), navOp)
 		}
 
 		url, title, err := tabURLAndTitle(navCtx, t)
 		if err != nil {
-			return nil, NavigateOutput{}, fmt.Errorf("reading tab info after %s: %w", navOp, err)
+			return nil, navigateOutput{}, fmt.Errorf("reading tab info after %s: %w", navOp, err)
 		}
-		out := NavigateOutput{URL: url, Title: title}
+		out := navigateOutput{URL: url, Title: title}
 		if resp != nil {
 			out.Status = resp.Status
 		}
@@ -159,11 +159,11 @@ func registerNavigationTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wait_for",
 		Description: "Wait for a selector state ('visible'|'hidden'|'attached'|'detached'), visible page text, tab URL substring, or truthy JS expression (supports Promises). Provide exactly one condition.",
-		InputSchema: schemaWithEnums[WaitForInput](map[string][]string{
+		InputSchema: schemaWithEnums[waitForInput](map[string][]string{
 			"state": waitForStateValues,
 		}),
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input WaitForInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input waitForInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := validateEnum("state", input.State, true, waitForStateValues); err != nil {
 			return nil, struct{}{}, err
 		}

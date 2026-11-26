@@ -36,7 +36,7 @@ const probeClickStateJS = `function() {
 	};
 }`
 
-func probeClickObject(ctx context.Context, tgt *chromedp.Target, oid runtime.RemoteObjectID) (ClickOutput, error) {
+func probeClickObject(ctx context.Context, tgt *chromedp.Target, oid runtime.RemoteObjectID) (clickOutput, error) {
 	type clickProbe struct {
 		Disabled      bool   `json:"disabled"`
 		AriaDisabled  bool   `json:"aria_disabled"`
@@ -45,9 +45,9 @@ func probeClickObject(ctx context.Context, tgt *chromedp.Target, oid runtime.Rem
 	}
 	raw, err := callOnElement[clickProbe](ctx, tgt, oid, probeClickStateJS, false)
 	if err != nil {
-		return ClickOutput{}, err
+		return clickOutput{}, err
 	}
-	return ClickOutput{
+	return clickOutput{
 		Disabled:      raw.Disabled,
 		AriaDisabled:  raw.AriaDisabled,
 		PointerEvents: raw.PointerEvents,
@@ -58,7 +58,7 @@ func probeClickObject(ctx context.Context, tgt *chromedp.Target, oid runtime.Rem
 // clickWarning returns a pre-dispatch warning string when the target's state
 // suggests the mouse event was likely swallowed (CSS pointer-events:none or
 // hidden element). Disabled and aria-disabled error before reaching dispatch.
-func clickWarning(state ClickOutput) string {
+func clickWarning(state clickOutput) string {
 	switch {
 	case state.PointerEvents == "none":
 		return "element has pointer-events: none; the click was dispatched but the browser will not deliver mouse events to it"
@@ -72,7 +72,7 @@ func clickWarning(state ClickOutput) string {
 // finalizeClickObject re-probes the target element after click dispatch under
 // a short bounded timeout (short-circuiting when a JS dialog is open so clicks
 // opening alerts never stall), preserving the pre-dispatch warning.
-func finalizeClickObject(ctx context.Context, tgt *chromedp.Target, dialog *collector.Dialog, oid runtime.RemoteObjectID, pre ClickOutput) ClickOutput {
+func finalizeClickObject(ctx context.Context, tgt *chromedp.Target, dialog *collector.Dialog, oid runtime.RemoteObjectID, pre clickOutput) clickOutput {
 	warning := clickWarning(pre)
 	if dialog != nil && dialog.Open() {
 		pre.Warning = warning
@@ -118,9 +118,9 @@ func init() {
 	}
 }
 
-// ClickInput is the input for click.
-type ClickInput struct {
-	SelectorInput
+// clickInput is the input for click.
+type clickInput struct {
+	selectorInput
 	Ref             string   `json:"ref,omitempty" jsonschema:"Element ref from snapshot (e.g. 'e4')."`
 	Frame           string   `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector        string   `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector of the element to click."`
@@ -132,19 +132,19 @@ type ClickInput struct {
 	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after action (0=off, max 30000)."`
 }
 
-// ClickOutput reports target state and optional warning/observation after click.
-type ClickOutput struct {
+// clickOutput reports target state and optional warning/observation after click.
+type clickOutput struct {
 	Disabled      bool              `json:"disabled"`
 	AriaDisabled  bool              `json:"aria_disabled"`
 	PointerEvents string            `json:"pointer_events"`
 	Visible       bool              `json:"visible"`
 	Warning       string            `json:"warning,omitempty"`
-	Observed      *ObservedActivity `json:"observed,omitempty"`
+	Observed      *observedActivity `json:"observed,omitempty"`
 }
 
-// TypeInput is the input for type.
-type TypeInput struct {
-	SelectorInput
+// typeInput is the input for type.
+type typeInput struct {
+	selectorInput
 	Ref             string `json:"ref,omitempty" jsonschema:"Element ref from snapshot."`
 	Frame           string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector        string `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector of the input element."`
@@ -155,14 +155,14 @@ type TypeInput struct {
 	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after action (0=off, max 30000)."`
 }
 
-// ActionOutput carries the optional inline observation result from action tools.
-type ActionOutput struct {
-	Observed *ObservedActivity `json:"observed,omitempty"`
+// actionOutput carries the optional inline observation result from action tools.
+type actionOutput struct {
+	Observed *observedActivity `json:"observed,omitempty"`
 }
 
-// SelectOptionInput is the input for select_option.
-type SelectOptionInput struct {
-	SelectorInput
+// selectOptionInput is the input for select_option.
+type selectOptionInput struct {
+	selectorInput
 	Ref             string   `json:"ref,omitempty" jsonschema:"Element ref from snapshot."`
 	Frame           string   `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector        string   `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector of the <select> element."`
@@ -172,9 +172,9 @@ type SelectOptionInput struct {
 	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after action (0=off, max 30000)."`
 }
 
-// ScrollInput is the input for scroll.
-type ScrollInput struct {
-	SelectorInput
+// scrollInput is the input for scroll.
+type scrollInput struct {
+	selectorInput
 	Ref             string `json:"ref,omitempty" jsonschema:"Element ref from snapshot to scroll into view."`
 	Frame           string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector        string `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector to scroll into view. If omitted scrolls window by (x, y)."`
@@ -183,16 +183,16 @@ type ScrollInput struct {
 	ObserveWindowMs int    `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after action (0=off, max 30000)."`
 }
 
-// ScrollOutput reports the resulting scroll position.
-type ScrollOutput struct {
+// scrollOutput reports the resulting scroll position.
+type scrollOutput struct {
 	ScrollX  float64           `json:"scroll_x"`
 	ScrollY  float64           `json:"scroll_y"`
-	Observed *ObservedActivity `json:"observed,omitempty"`
+	Observed *observedActivity `json:"observed,omitempty"`
 }
 
-// HoverInput is the input for hover.
-type HoverInput struct {
-	SelectorInput
+// hoverInput is the input for hover.
+type hoverInput struct {
+	selectorInput
 	Ref             string   `json:"ref,omitempty" jsonschema:"Element ref from snapshot."`
 	Frame           string   `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector        string   `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector of the element to hover over."`
@@ -201,9 +201,9 @@ type HoverInput struct {
 	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after action (0=off, max 30000)."`
 }
 
-// PressKeyInput is the input for press_key.
-type PressKeyInput struct {
-	SelectorInput
+// pressKeyInput is the input for press_key.
+type pressKeyInput struct {
+	selectorInput
 	Ref             string   `json:"ref,omitempty" jsonschema:"Optional element ref from snapshot to focus before pressing the key."`
 	Frame           string   `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID for selector."`
 	Selector        string   `json:"selector,omitempty" jsonschema:"Optional CSS/shadow ('>>>') selector to focus before pressing the key."`
@@ -212,9 +212,9 @@ type PressKeyInput struct {
 	ObserveWindowMs int      `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after action (0=off, max 30000)."`
 }
 
-// UploadFilesInput is the input for upload_files.
-type UploadFilesInput struct {
-	SelectorInput
+// uploadFilesInput is the input for upload_files.
+type uploadFilesInput struct {
+	selectorInput
 	Ref             string   `json:"ref,omitempty" jsonschema:"Element ref from snapshot."`
 	Frame           string   `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Selector        string   `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector of the file input element."`
@@ -241,34 +241,34 @@ func registerClickTool(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "click",
 		Description: "Click an element (by snapshot ref or CSS/shadow selector) or viewport (x, y) coordinates. Errors before dispatch on disabled/aria-disabled elements; warns on pointer-events:none or visibility:hidden.",
-		InputSchema: schemaWithEnums[ClickInput](map[string][]string{
+		InputSchema: schemaWithEnums[clickInput](map[string][]string{
 			"button":    clickButtonValues,
 			"modifiers": pressKeyModifierValues,
 		}),
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ClickInput) (*mcp.CallToolResult, ClickOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp clickInput) (*mcp.CallToolResult, clickOutput, error) {
 		if err := validatePointerTarget(inp.Ref, inp.Selector, inp.Frame, inp.X, inp.Y, true); err != nil {
-			return nil, ClickOutput{}, err
+			return nil, clickOutput{}, err
 		}
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ClickOutput{}, err
+			return nil, clickOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ClickOutput{}, err
+			return nil, clickOutput{}, err
 		}
 		if err := validateEnum("button", inp.Button, true, clickButtonValues); err != nil {
-			return nil, ClickOutput{}, err
+			return nil, clickOutput{}, err
 		}
 		if inp.ClickCount < 0 || inp.ClickCount > 10 {
-			return nil, ClickOutput{}, fmt.Errorf("click_count must be between 0 and 10, got %d", inp.ClickCount)
+			return nil, clickOutput{}, fmt.Errorf("click_count must be between 0 and 10, got %d", inp.ClickCount)
 		}
 		modifiers, err := parseModifiers(inp.Modifiers)
 		if err != nil {
-			return nil, ClickOutput{}, err
+			return nil, clickOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ClickOutput{}, err
+			return nil, clickOutput{}, err
 		}
 
 		var button input.MouseButton
@@ -325,13 +325,13 @@ func registerClickTool(s *mcp.Server, mgr *browser.Manager) {
 			if err := chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
 				return dispatchAt(ctx, tgt, *inp.X, *inp.Y)
 			})); err != nil {
-				return nil, ClickOutput{}, err
+				return nil, clickOutput{}, err
 			}
-			return nil, ClickOutput{Visible: true, Observed: obs.close(tctx)}, nil
+			return nil, clickOutput{Visible: true, Observed: obs.close(tctx)}, nil
 		}
 
 		var (
-			out ClickOutput
+			out clickOutput
 			obs *observation
 		)
 		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
@@ -384,7 +384,7 @@ func registerClickTool(s *mcp.Server, mgr *browser.Manager) {
 	})
 }
 
-func checkClickEnabled(label string, state ClickOutput) error {
+func checkClickEnabled(label string, state clickOutput) error {
 	if state.Disabled {
 		return fmt.Errorf("element %s is disabled; click was not dispatched", label)
 	}
@@ -446,27 +446,27 @@ func registerTypeTool(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "type",
 		Description: "Type text into an input element (by snapshot ref or CSS/shadow selector). 'mode' must be 'replace' (clear first) or 'append' (type at end). Set submit=true to press Enter afterward.",
-		InputSchema: modeSchemaFor[TypeInput](TypeModeReplace, TypeModeAppend),
+		InputSchema: modeSchemaFor[typeInput](typeModeReplace, typeModeAppend),
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp TypeInput) (*mcp.CallToolResult, ActionOutput, error) {
-		if err := validateMode(inp.Mode, TypeModeReplace, TypeModeAppend); err != nil {
-			return nil, ActionOutput{}, err
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp typeInput) (*mcp.CallToolResult, actionOutput, error) {
+		if err := validateMode(inp.Mode, typeModeReplace, typeModeAppend); err != nil {
+			return nil, actionOutput{}, err
 		}
 		if err := validateElementTarget(inp.Ref, inp.Selector, inp.Frame, true); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if inp.Delay < 0 {
-			return nil, ActionOutput{}, fmt.Errorf("delay must be >= 0, got %d", inp.Delay)
+			return nil, actionOutput{}, fmt.Errorf("delay must be >= 0, got %d", inp.Delay)
 		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -490,7 +490,7 @@ func registerTypeTool(s *mcp.Server, mgr *browser.Manager) {
 			if err := focusResolvedElement(ctx, tgt, el); err != nil {
 				return err
 			}
-			if inp.Mode == TypeModeReplace {
+			if inp.Mode == typeModeReplace {
 				stillConnected, err := callOnElement[bool](ctx, tgt, el.ObjectID, clearInputObjectJS, false)
 				if err != nil {
 					return err
@@ -513,7 +513,7 @@ func registerTypeTool(s *mcp.Server, mgr *browser.Manager) {
 				if err := focusResolvedElement(ctx, tgt, el); err != nil {
 					return err
 				}
-			} else if inp.Mode == TypeModeAppend {
+			} else if inp.Mode == typeModeAppend {
 				_, _ = callOnElement[any](ctx, tgt, el.ObjectID, moveCaretToEndJS, false)
 			}
 			// Release handle before keystroke dispatch so a key/submit handler
@@ -551,9 +551,9 @@ func registerTypeTool(s *mcp.Server, mgr *browser.Manager) {
 			})
 		}))
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
-		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
+		return nil, actionOutput{Observed: obs.close(tctx)}, nil
 	})
 }
 
@@ -562,15 +562,15 @@ func registerSelectOptionTool(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "select_option",
 		Description: "Select option(s) on a <select> element (by snapshot ref or CSS/shadow selector). Provide exactly one of values, labels, or indexes; on <select multiple>, replaces selection (pass [] to deselect all).",
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp SelectOptionInput) (*mcp.CallToolResult, ActionOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp selectOptionInput) (*mcp.CallToolResult, actionOutput, error) {
 		if err := validateElementTarget(inp.Ref, inp.Selector, inp.Frame, true); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 
 		criteria := 0
@@ -591,18 +591,18 @@ func registerSelectOptionTool(s *mcp.Server, mgr *browser.Manager) {
 			mode = "indexes"
 			for _, idx := range inp.Indexes {
 				if idx < 0 {
-					return nil, ActionOutput{}, fmt.Errorf("index out of range: must be >= 0, got %d", idx)
+					return nil, actionOutput{}, fmt.Errorf("index out of range: must be >= 0, got %d", idx)
 				}
 			}
 			items = inp.Indexes
 		}
 		if criteria != 1 {
-			return nil, ActionOutput{}, fmt.Errorf("exactly one of values, labels, or indexes must be provided")
+			return nil, actionOutput{}, fmt.Errorf("exactly one of values, labels, or indexes must be provided")
 		}
 
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 
 		// Wrap mode and items inside a non-empty JSON object so encoding/json/v2's
@@ -668,9 +668,9 @@ func registerSelectOptionTool(s *mcp.Server, mgr *browser.Manager) {
 			})
 		}))
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
-		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
+		return nil, actionOutput{Observed: obs.close(tctx)}, nil
 	})
 }
 
@@ -679,19 +679,19 @@ func registerScrollTool(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "scroll",
 		Description: "Scroll an element into view (by snapshot ref or CSS/shadow selector) or scroll the window by (x, y) pixels.",
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp ScrollInput) (*mcp.CallToolResult, ScrollOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp scrollInput) (*mcp.CallToolResult, scrollOutput, error) {
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ScrollOutput{}, err
+			return nil, scrollOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ScrollOutput{}, err
+			return nil, scrollOutput{}, err
 		}
 		if err := validateElementTarget(inp.Ref, inp.Selector, inp.Frame, false); err != nil {
-			return nil, ScrollOutput{}, err
+			return nil, scrollOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ScrollOutput{}, err
+			return nil, scrollOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -699,7 +699,7 @@ func registerScrollTool(s *mcp.Server, mgr *browser.Manager) {
 
 		var (
 			obs          *observation
-			out          ScrollOutput
+			out          scrollOutput
 			haveFramePos bool
 		)
 		if inp.Ref != "" || inp.Selector != "" {
@@ -725,7 +725,7 @@ func registerScrollTool(s *mcp.Server, mgr *browser.Manager) {
 					}
 				}
 				if el.FrameID != "" {
-					pos, err := callOnElement[ScrollOutput](ctx, tgt, el.ObjectID, `function() {
+					pos, err := callOnElement[scrollOutput](ctx, tgt, el.ObjectID, `function() {
 						const win = (this.ownerDocument && this.ownerDocument.defaultView) || window;
 						return {scroll_x: win.scrollX, scroll_y: win.scrollY};
 					}`, false)
@@ -740,28 +740,28 @@ func registerScrollTool(s *mcp.Server, mgr *browser.Manager) {
 		} else {
 			uniqueCtxID, err2 := resolveFrameContext(t, inp.Frame, false)
 			if err2 != nil {
-				return nil, ScrollOutput{}, err2
+				return nil, scrollOutput{}, err2
 			}
 			obs = openObservation(tctx, t, inp.ObserveWindowMs)
 			js := fmt.Sprintf("window.scrollBy(%d, %d)", inp.X, inp.Y)
 			err = chromedp.Do(tctx, chromedp.Evaluate[chromedp.Void](js, evalOptsForFrame(uniqueCtxID)...))
 			if err == nil && inp.Frame != "" {
-				pos, perr := chromedp.Run(tctx, chromedp.Evaluate[ScrollOutput](`({scroll_x: window.scrollX, scroll_y: window.scrollY})`, evalOptsForFrame(uniqueCtxID)...))
+				pos, perr := chromedp.Run(tctx, chromedp.Evaluate[scrollOutput](`({scroll_x: window.scrollX, scroll_y: window.scrollY})`, evalOptsForFrame(uniqueCtxID)...))
 				if perr != nil {
-					return nil, ScrollOutput{}, perr
+					return nil, scrollOutput{}, perr
 				}
 				out = pos
 				haveFramePos = true
 			}
 		}
 		if err != nil {
-			return nil, ScrollOutput{}, err
+			return nil, scrollOutput{}, err
 		}
 
 		if !haveFramePos {
 			metrics, err := chromedp.Call(tctx, page.GetLayoutMetrics, cdp.Empty{})
 			if err != nil {
-				return nil, ScrollOutput{}, err
+				return nil, scrollOutput{}, err
 			}
 			if metrics.CSSVisualViewport != nil {
 				out.ScrollX = metrics.CSSVisualViewport.PageX
@@ -778,19 +778,19 @@ func registerHoverTool(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "hover",
 		Description: "Move the pointer over an element (by snapshot ref or CSS/shadow selector) or viewport (x, y) coordinates.",
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp HoverInput) (*mcp.CallToolResult, ActionOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp hoverInput) (*mcp.CallToolResult, actionOutput, error) {
 		if err := validatePointerTarget(inp.Ref, inp.Selector, inp.Frame, inp.X, inp.Y, true); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -823,9 +823,9 @@ func registerHoverTool(s *mcp.Server, mgr *browser.Manager) {
 			return err
 		}))
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
-		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
+		return nil, actionOutput{Observed: obs.close(tctx)}, nil
 	})
 }
 
@@ -833,26 +833,26 @@ func registerPressKeyTool(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "press_key",
 		Description: "Press a keyboard key (optionally with modifiers), optionally focusing a target element (ref or CSS/shadow selector) first.",
-		InputSchema: schemaWithEnums[PressKeyInput](map[string][]string{
+		InputSchema: schemaWithEnums[pressKeyInput](map[string][]string{
 			"modifiers": pressKeyModifierValues,
 		}),
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp PressKeyInput) (*mcp.CallToolResult, ActionOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp pressKeyInput) (*mcp.CallToolResult, actionOutput, error) {
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateElementTarget(inp.Ref, inp.Selector, inp.Frame, false); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if inp.Frame != "" && inp.Selector == "" {
-			return nil, ActionOutput{}, fmt.Errorf("frame requires selector")
+			return nil, actionOutput{}, fmt.Errorf("frame requires selector")
 		}
 		modifiers, err := parseModifiers(inp.Modifiers)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 
 		var r rune
@@ -863,14 +863,14 @@ func registerPressKeyTool(s *mcp.Server, mgr *browser.Manager) {
 		} else {
 			decoded, size := utf8.DecodeRuneInString(inp.Key)
 			if decoded == utf8.RuneError || size != len(inp.Key) {
-				return nil, ActionOutput{}, fmt.Errorf("unknown key: %q", inp.Key)
+				return nil, actionOutput{}, fmt.Errorf("unknown key: %q", inp.Key)
 			}
 			r = decoded
 		}
 
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		tctx, tcancel := tabContext(ctx, t.Context())
 		defer tcancel()
@@ -904,9 +904,9 @@ func registerPressKeyTool(s *mcp.Server, mgr *browser.Manager) {
 			})
 		}))
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
-		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
+		return nil, actionOutput{Observed: obs.close(tctx)}, nil
 	})
 }
 
@@ -915,27 +915,27 @@ func registerUploadFilesTool(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "upload_files",
 		Description: "Set files on a file input element (by snapshot ref or CSS/shadow selector).",
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp UploadFilesInput) (*mcp.CallToolResult, ActionOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp uploadFilesInput) (*mcp.CallToolResult, actionOutput, error) {
 		if err := validateElementTarget(inp.Ref, inp.Selector, inp.Frame, true); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if len(inp.Paths) == 0 {
-			return nil, ActionOutput{}, fmt.Errorf("paths must not be empty")
+			return nil, actionOutput{}, fmt.Errorf("paths must not be empty")
 		}
 		for _, p := range inp.Paths {
 			if p == "" {
-				return nil, ActionOutput{}, fmt.Errorf("upload path must not be empty")
+				return nil, actionOutput{}, fmt.Errorf("upload path must not be empty")
 			}
 		}
 		b, t, err := mgr.ResolveTabWithBrowser("", inp.Tab)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		// Only validate against the local filesystem when this server
 		// launched Chrome locally; connected browsers may run on a remote
@@ -943,14 +943,14 @@ func registerUploadFilesTool(s *mcp.Server, mgr *browser.Manager) {
 		if b.Mode == browser.ModeLaunch {
 			for _, p := range inp.Paths {
 				if !filepath.IsAbs(p) {
-					return nil, ActionOutput{}, fmt.Errorf("upload path %q must be an absolute path", p)
+					return nil, actionOutput{}, fmt.Errorf("upload path %q must be an absolute path", p)
 				}
 				fi, err := os.Stat(p)
 				if err != nil {
-					return nil, ActionOutput{}, fmt.Errorf("upload path %q: %w", p, err)
+					return nil, actionOutput{}, fmt.Errorf("upload path %q: %w", p, err)
 				}
 				if fi.IsDir() {
-					return nil, ActionOutput{}, fmt.Errorf("upload path %q is a directory, not a file", p)
+					return nil, actionOutput{}, fmt.Errorf("upload path %q is a directory, not a file", p)
 				}
 			}
 		}
@@ -976,8 +976,8 @@ func registerUploadFilesTool(s *mcp.Server, mgr *browser.Manager) {
 			return err
 		}))
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
-		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
+		return nil, actionOutput{Observed: obs.close(tctx)}, nil
 	})
 }

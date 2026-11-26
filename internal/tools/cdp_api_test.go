@@ -27,7 +27,7 @@ func TestScrollPositionApproximatelyCorrect(t *testing.T) {
 	tabID := navigateToFixture(t, "cdp-coords.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   500,
 	})
@@ -44,7 +44,7 @@ func TestScrollPositionHorizontalApproximatelyCorrect(t *testing.T) {
 	tabID := navigateToFixture(t, "cdp-coords.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"x":   300,
 	})
@@ -60,7 +60,7 @@ func TestScrollPositionBothAxesApproximatelyCorrect(t *testing.T) {
 	tabID := navigateToFixture(t, "cdp-coords.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"x":   200,
 		"y":   400,
@@ -78,11 +78,11 @@ func TestScrollPositionIncrementalAccumulates(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll 300, then 200 more. Total should be ~500.
-	callTool[ScrollOutput](t, "scroll", map[string]any{
+	callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   300,
 	})
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   200,
 	})
@@ -101,7 +101,7 @@ func TestScrollIntoViewPositionMatchesElement(t *testing.T) {
 	// ScrollY ≈ elementTop - viewportHeight + elementHeight.
 	// With default viewport 1080px: ~3000 - 1080 + 100 = ~2020.
 	// Allow generous tolerance since viewport may vary.
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":      tabID,
 		"selector": "#bottom-box",
 	})
@@ -139,7 +139,7 @@ func TestHoverCoordinateAccuracy(t *testing.T) {
 		"selector": "#top-box",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('hover-output').textContent",
 	})
@@ -165,7 +165,7 @@ func TestHoverOnScrolledPage(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll #bottom-box into view first. It's at top:3000px, left:200px, 150x100.
-	callTool[ScrollOutput](t, "scroll", map[string]any{
+	callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":      tabID,
 		"selector": "#bottom-box",
 	})
@@ -177,7 +177,7 @@ func TestHoverOnScrolledPage(t *testing.T) {
 		"selector": "#bottom-box",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('hover-output').textContent",
 	})
@@ -206,7 +206,7 @@ func TestRightClickCoordinateAccuracy(t *testing.T) {
 		"button":   "right",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('right-click-output').textContent",
 	})
@@ -231,7 +231,7 @@ func TestRightClickOnScrolledPage(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll to #bottom-box and right-click it.
-	callTool[ScrollOutput](t, "scroll", map[string]any{
+	callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":      tabID,
 		"selector": "#bottom-box",
 	})
@@ -242,7 +242,7 @@ func TestRightClickOnScrolledPage(t *testing.T) {
 		"button":   "right",
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('right-click-output').textContent",
 	})
@@ -261,7 +261,7 @@ func TestMiddleClickOnScrolledPage(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll to #bottom-box and middle-click it.
-	callTool[ScrollOutput](t, "scroll", map[string]any{
+	callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":      tabID,
 		"selector": "#bottom-box",
 	})
@@ -276,7 +276,7 @@ func TestMiddleClickOnScrolledPage(t *testing.T) {
 	// Our fixture only records button===2 (right-click), so we need to
 	// verify via a different approach. Use evaluate to check if the element
 	// received the event.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(function() {
 			var el = document.getElementById('bottom-box');
@@ -299,7 +299,7 @@ func TestElementScreenshotOnScrolledPage(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll to make #scroll-marker visible.
-	callTool[ScrollOutput](t, "scroll", map[string]any{
+	callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":      tabID,
 		"selector": "#scroll-marker",
 	})
@@ -374,7 +374,7 @@ func TestScrollPositionMatchesJS(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll to a known position.
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"x":   150,
 		"y":   750,
@@ -385,7 +385,7 @@ func TestScrollPositionMatchesJS(t *testing.T) {
 		X float64 `json:"x"`
 		Y float64 `json:"y"`
 	}
-	jsOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	jsOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "({x: window.scrollX, y: window.scrollY})",
 	})

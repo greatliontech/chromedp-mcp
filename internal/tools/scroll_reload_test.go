@@ -13,7 +13,7 @@ func TestReloadReturnsOutput(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
+	out := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
 	if out.URL == "" {
 		t.Error("reload output URL should not be empty")
 	}
@@ -31,14 +31,14 @@ func TestReloadBypassCacheWaitsForLoad(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Mutate the DOM to verify reload actually happened.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title = 'pre-reload'",
 	})
 
 	// Reload with bypass_cache. The tool should wait for the page to
 	// fully load before returning — no sleep should be needed.
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":          tabID,
 		"action":       "reload",
 		"bypass_cache": true,
@@ -65,13 +65,13 @@ func TestReloadNormalWaitsForLoad(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Mutate the DOM.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.title = 'before-reload'",
 	})
 
 	// Normal reload should also wait and return correct output.
-	out := callTool[NavigateOutput](t, "navigate", map[string]any{
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":    tabID,
 		"action": "reload",
 	})
@@ -93,11 +93,11 @@ func TestReloadDOMUsableImmediately(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Reload.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
 
 	// Immediately query the DOM — should work without errors because
 	// reload waited for the page to load.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('click-target').textContent",
 	})
@@ -114,7 +114,7 @@ func TestScrollOffsetReturnsPosition(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   500,
 	})
@@ -135,13 +135,13 @@ func TestScrollNegativeReturnsPosition(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll down first.
-	out1 := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out1 := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   500,
 	})
 
 	// Scroll up.
-	out2 := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out2 := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   -200,
 	})
@@ -163,13 +163,13 @@ func TestScrollClampedAtTop(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Scroll down a bit.
-	callTool[ScrollOutput](t, "scroll", map[string]any{
+	callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   100,
 	})
 
 	// Scroll up by more than current position — should clamp at 0.
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"y":   -9999,
 	})
@@ -186,7 +186,7 @@ func TestScrollHorizontalReturnsPosition(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"x":   300,
 	})
@@ -205,7 +205,7 @@ func TestScrollIntoViewReturnsPosition(t *testing.T) {
 
 	// The #scroll-marker is at margin-top: 2000px, so scrolling into view
 	// should result in a non-zero scrollY.
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab":      tabID,
 		"selector": "#scroll-marker",
 	})
@@ -222,7 +222,7 @@ func TestScrollBothAxesReturnsPositions(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ScrollOutput](t, "scroll", map[string]any{
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
 		"tab": tabID,
 		"x":   200,
 		"y":   400,

@@ -12,7 +12,7 @@ func TestGetNetworkRequestsInvalidFieldsDoesNotDrain(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	before := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	before := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -30,7 +30,7 @@ func TestGetNetworkRequestsInvalidFieldsDoesNotDrain(t *testing.T) {
 	}
 
 	// Buffer must still hold every entry because validation runs before draining.
-	after := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	after := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -54,7 +54,7 @@ func TestGetNetworkRequestsInvalidFieldsDoesNotDrain(t *testing.T) {
 	}); !strings.Contains(errText, "limit") {
 		t.Errorf("ws negative limit err = %q, want mention of limit", errText)
 	}
-	afterNeg := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	afterNeg := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -68,14 +68,14 @@ func TestGetNetworkRequestsDrainLimitPaginatesWithoutLoss(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Drain initial navigation entries.
-	callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
 
 	// Fire 3 distinct XHR/fetch requests so we know the exact count in the buffer.
 	for i := 0; i < 3; i++ {
-		callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"expression": fmt.Sprintf("fetch('/api/data?page=%d').then(r => r.text())", i),
 		})
@@ -85,7 +85,7 @@ func TestGetNetworkRequestsDrainLimitPaginatesWithoutLoss(t *testing.T) {
 	// Drain 1 at a time: must return all 3 across 3 calls without silently discarding excess entries.
 	var seen []string
 	for call := 0; call < 3; call++ {
-		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+		out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":         tabID,
 			"mode":        "drain",
 			"url_pattern": "/api/data?page=",
@@ -98,7 +98,7 @@ func TestGetNetworkRequestsDrainLimitPaginatesWithoutLoss(t *testing.T) {
 	}
 
 	// Fourth drain must be empty.
-	rem := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	rem := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "drain",
 		"url_pattern": "/api/data?page=",
@@ -149,7 +149,7 @@ func TestNetworkRequests(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
@@ -178,7 +178,7 @@ func TestGetResponseBody(t *testing.T) {
 	waitForNetwork(t, tabID, "/api/data")
 
 	// Get network requests to find the /api/data request.
-	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	nout := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -193,7 +193,7 @@ func TestGetResponseBody(t *testing.T) {
 		t.Fatal("could not find /api/data request in network log")
 	}
 
-	body := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	body := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": requestID,
 	})
@@ -205,7 +205,7 @@ func TestGetResponseBody(t *testing.T) {
 	}
 
 	// Explicit part="response" matches default behavior.
-	explicit := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	explicit := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": requestID,
 		"part":       "response",
@@ -221,7 +221,7 @@ func TestGetNetworkRequestsFilters(t *testing.T) {
 	waitForNetwork(t, tabID, "/api/data")
 
 	// Filter by URL pattern.
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -236,7 +236,7 @@ func TestGetNetworkRequestsFilters(t *testing.T) {
 	}
 
 	// Filter by status range for 404s.
-	out = callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out = callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
 		"mode":       "peek",
 		"status_min": 400,
@@ -258,11 +258,11 @@ func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 	waitForNetwork(t, tabID, "/api/not-found")
 
 	// Peek should not clear the buffer.
-	out1 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out1 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
-	out2 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out2 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -271,11 +271,11 @@ func TestGetNetworkRequestsDrainVsPeek(t *testing.T) {
 	}
 
 	// Drain should clear the buffer.
-	callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
-	out3 := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out3 := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})
@@ -290,7 +290,7 @@ func TestGetNetworkRequestsTypeFilter(t *testing.T) {
 	waitForNetwork(t, tabID, "/api/data")
 
 	// Filter by fetch type (lowercase enum, case-insensitive match against CDP "Fetch").
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 		"type": "fetch",
@@ -319,7 +319,7 @@ func TestGetNetworkRequestsLimit(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":   tabID,
 		"mode":  "peek",
 		"limit": 1,
@@ -334,7 +334,7 @@ func TestGetNetworkRequestEntryFields(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -366,7 +366,7 @@ func TestGetResponseBodyBinary(t *testing.T) {
 	waitForNetwork(t, tabID, "/image.png")
 
 	// The page loads /image.png. Find its request ID.
-	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	nout := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/image.png",
@@ -382,7 +382,7 @@ func TestGetResponseBodyBinary(t *testing.T) {
 		t.Fatal("could not find /image.png request")
 	}
 
-	body := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	body := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": requestID,
 	})
@@ -412,7 +412,7 @@ func TestNetworkURLPatternNoMatch(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/nonexistent-endpoint-xyz",
@@ -427,7 +427,7 @@ func TestNetworkStatusMinOnly(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
 		"mode":       "peek",
 		"status_min": 400,
@@ -444,7 +444,7 @@ func TestNetworkEntryHeaders(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -467,13 +467,13 @@ func TestGetResponseBodyUnicode(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Navigate to trigger a fetch of /api/unicode.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "fetch('/api/unicode')",
 	})
 	waitForNetwork(t, tabID, "/api/unicode")
 
-	nout := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	nout := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/unicode",
@@ -482,7 +482,7 @@ func TestGetResponseBodyUnicode(t *testing.T) {
 		t.Fatal("no requests for /api/unicode")
 	}
 
-	body := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	body := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": nout.Requests[0].ID,
 	})
@@ -499,7 +499,7 @@ func TestNetworkTypeFilterDocument(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 		"type": "document",
@@ -520,7 +520,7 @@ func TestNetworkTimingFields(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": "/api/data",
@@ -543,13 +543,13 @@ func TestNetworkFailedOnly(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Fetch a URL that will fail (connection refused on a dead port).
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "fetch('http://127.0.0.1:1/nonexistent').catch(function(){})",
 	})
 	waitForNetwork(t, tabID, "/nonexistent")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"failed_only": true,
@@ -570,7 +570,7 @@ func TestNetworkCombinedFilters(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"type":        "fetch",
@@ -599,7 +599,7 @@ func TestNetworkStatusMaxOnly(t *testing.T) {
 	defer closeTab(t, tabID)
 	waitForNetwork(t, tabID, "/api/data")
 
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":        tabID,
 		"mode":       "peek",
 		"status_max": 299,
@@ -616,13 +616,13 @@ func TestNetworkRequestsEmptyArray(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Drain all existing requests.
-	callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "drain",
 	})
 
 	// Now peek — should return empty array.
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":  tabID,
 		"mode": "peek",
 	})

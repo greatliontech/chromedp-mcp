@@ -13,9 +13,9 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
-// EvaluateInput is the input for evaluate.
-type EvaluateInput struct {
-	SelectorInput
+// evaluateInput is the input for evaluate.
+type evaluateInput struct {
+	selectorInput
 	Ref            string `json:"ref,omitempty" jsonschema:"Element ref from snapshot (e.g. 'e4'). Available as 'el' in expression. Mutually exclusive with selector and frame."`
 	Frame          string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames."`
 	Expression     string `json:"expression" jsonschema:"JavaScript expression. Without ref/selector, evaluated as an expression (no top-level 'return'). With ref or selector, runs as a function body with the matched element as 'el' — use 'return' for a value."`
@@ -24,8 +24,8 @@ type EvaluateInput struct {
 	MaxResultBytes int    `json:"max_result_bytes,omitempty" jsonschema:"If > 0, cap serialized result at this many bytes (default 0 = no cap)."`
 }
 
-// EvaluateOutput is the output for evaluate.
-type EvaluateOutput struct {
+// evaluateOutput is the output for evaluate.
+type evaluateOutput struct {
 	Result     json.RawMessage `json:"result"`
 	Truncated  bool            `json:"truncated,omitempty"`
 	TotalBytes int             `json:"total_bytes,omitempty"`
@@ -37,19 +37,19 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 		Description:  "Execute JavaScript in the page (or a frame) and return the result. Without ref/selector, evaluates an expression directly. With ref or selector, runs as a function body with the matched element as 'el' (use 'return' to produce a value).",
 		OutputSchema: evaluateOutputSchema(),
 		Annotations:  mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input EvaluateInput) (*mcp.CallToolResult, EvaluateOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input evaluateInput) (*mcp.CallToolResult, evaluateOutput, error) {
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
-			return nil, EvaluateOutput{}, err
+			return nil, evaluateOutput{}, err
 		}
 		if input.MaxResultBytes < 0 {
-			return nil, EvaluateOutput{}, fmt.Errorf("max_result_bytes must be >= 0, got %d", input.MaxResultBytes)
+			return nil, evaluateOutput{}, fmt.Errorf("max_result_bytes must be >= 0, got %d", input.MaxResultBytes)
 		}
 		if err := validateElementTarget(input.Ref, input.Selector, input.Frame, false); err != nil {
-			return nil, EvaluateOutput{}, err
+			return nil, evaluateOutput{}, err
 		}
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, EvaluateOutput{}, err
+			return nil, evaluateOutput{}, err
 		}
 
 		awaitPromise := input.AwaitPromise == nil || *input.AwaitPromise
@@ -75,7 +75,7 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 		} else {
 			uniqueCtxID, err2 := resolveFrameContext(t, input.Frame, false)
 			if err2 != nil {
-				return nil, EvaluateOutput{}, err2
+				return nil, evaluateOutput{}, err2
 			}
 			var extraOpts []chromedp.EvaluateOption
 			if awaitPromise {
@@ -85,12 +85,12 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 			result, err = chromedp.Run(tctx, chromedp.Evaluate[any](input.Expression, evalOpts...))
 		}
 		if err != nil {
-			return nil, EvaluateOutput{}, err
+			return nil, evaluateOutput{}, err
 		}
 
 		data, err := json.Marshal(result)
 		if err != nil {
-			return nil, EvaluateOutput{}, err
+			return nil, evaluateOutput{}, err
 		}
 		return nil, capEvaluateResult(data, input.MaxResultBytes), nil
 	})
@@ -100,13 +100,13 @@ func registerJSTools(s *mcp.Server, mgr *browser.Manager) {
 // evaluate result. When the cap fires the original Result is replaced with a
 // JSON string containing the truncated prefix so consumers always receive
 // valid JSON.
-func capEvaluateResult(data []byte, maxBytes int) EvaluateOutput {
+func capEvaluateResult(data []byte, maxBytes int) evaluateOutput {
 	if maxBytes <= 0 || len(data) <= maxBytes {
-		return EvaluateOutput{Result: data}
+		return evaluateOutput{Result: data}
 	}
 	prefix, _ := collector.TruncateUTF8Bytes(data, maxBytes)
 	wrapped, _ := json.Marshal(string(prefix))
-	return EvaluateOutput{
+	return evaluateOutput{
 		Result:     wrapped,
 		Truncated:  true,
 		TotalBytes: len(data),

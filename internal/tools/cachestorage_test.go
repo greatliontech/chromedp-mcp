@@ -17,24 +17,24 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tabOut := callTool[TabNewOutput](t, "tab_new", map[string]any{})
+	tabOut := callTool[tabNewOutput](t, "tab_new", map[string]any{})
 	tabID := tabOut.TabID
 	defer closeTab(t, tabID)
 
-	if errText := callToolExpectErr(t, "get_cache_storage", map[string]any{"tab": tabID}); !strings.Contains(errText, "opaque origin") {
-		t.Errorf("get_cache_storage on about:blank err = %q, want opaque origin", errText)
+	if errText := callToolExpectErr(t, "cache_storage", map[string]any{"action": "get", "tab": tabID}); !strings.Contains(errText, "opaque origin") {
+		t.Errorf("cache_storage(get) on about:blank err = %q, want opaque origin", errText)
 	}
 
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	// Empty origin serializes caches as [], never null.
-	rawEmpty := callToolRaw(t, "get_cache_storage", map[string]any{"tab": tabID})
+	rawEmpty := callToolRaw(t, "cache_storage", map[string]any{"action": "get", "tab": tabID})
 	if rawEmpty.IsError || !strings.Contains(contentText(rawEmpty), `"caches":[]`) {
-		t.Fatalf("empty get_cache_storage = %s (isErr=%v), want \"caches\":[]", contentText(rawEmpty), rawEmpty.IsError)
+		t.Fatalf("empty cache_storage(get) = %s (isErr=%v), want \"caches\":[]", contentText(rawEmpty), rawEmpty.IsError)
 	}
 
 	// Populate two caches: v1-assets (4 entries incl. binary) and v2-empty (0 entries).
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(async function() {
 			const c1 = await caches.open('v1-assets');
@@ -55,13 +55,14 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	})
 
 	// Mode 1: list caches.
-	listOut := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{"tab": tabID})
+	listOut := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{"action": "get", "tab": tabID})
 	if len(listOut.Caches) != 2 {
 		t.Fatalf("caches = %+v, want 2 caches", listOut.Caches)
 	}
 
 	// Mode 2 on empty cache: entries must be [], never null.
-	rawEmptyCache := callToolRaw(t, "get_cache_storage", map[string]any{
+	rawEmptyCache := callToolRaw(t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v2-empty",
 	})
@@ -70,7 +71,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Mode 2 pagination on v1-assets (4 entries).
-	page1 := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	page1 := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 		"limit":      2,
@@ -78,7 +80,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	if len(page1.Entries) != 2 || page1.Total != 4 || !page1.HasMore {
 		t.Fatalf("page1 len=%d total=%d has_more=%v, want 2, 4, true", len(page1.Entries), page1.Total, page1.HasMore)
 	}
-	page2 := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	page2 := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 		"skip":       2,
@@ -89,7 +92,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// skip > total must return empty entries cleanly without crashing Chromium's renderer.
-	rawPastEnd := callToolRaw(t, "get_cache_storage", map[string]any{
+	rawPastEnd := callToolRaw(t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 		"skip":       10,
@@ -98,7 +102,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	if rawPastEnd.IsError || !strings.Contains(contentText(rawPastEnd), `"entries":[]`) {
 		t.Fatalf("skip > total returned %s (err=%v), want empty entries []", contentText(rawPastEnd), rawPastEnd.IsError)
 	}
-	pastEnd := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	pastEnd := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 		"skip":       10,
@@ -109,7 +114,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Large limit with non-zero skip must clamp cleanly to the end of the cache.
-	hugeLimit := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	hugeLimit := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 		"skip":       1,
@@ -120,7 +126,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Mode 2 with path_filter.
-	filtered := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	filtered := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":      "get",
 		"tab":         tabID,
 		"cache_name":  "v1-assets",
 		"path_filter": "/api/item-",
@@ -131,7 +138,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 
 	// Mode 3: read UTF-8 response body + metadata.
 	helloURL := srv.URL + "/api/hello"
-	respOut := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	respOut := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":      "get",
 		"tab":         tabID,
 		"cache_name":  "v1-assets",
 		"request_url": helloURL,
@@ -144,7 +152,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Mode 3: byte range slicing.
-	sliced := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	sliced := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":      "get",
 		"tab":         tabID,
 		"cache_name":  "v1-assets",
 		"request_url": helloURL,
@@ -156,7 +165,8 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Mode 3: binary response must be base64-encoded with exact bytes.
-	binOut := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	binOut := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":      "get",
 		"tab":         tabID,
 		"cache_name":  "v1-assets",
 		"request_url": srv.URL + "/bin/raw",
@@ -170,20 +180,22 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Missing cache & missing entry return clear errors.
-	if errText := callToolExpectErr(t, "get_cache_storage", map[string]any{"tab": tabID, "cache_name": "no-such-cache"}); !strings.Contains(errText, "not found") {
+	if errText := callToolExpectErr(t, "cache_storage", map[string]any{"action": "get", "tab": tabID, "cache_name": "no-such-cache"}); !strings.Contains(errText, "not found") {
 		t.Errorf("missing cache err = %q, want not found", errText)
 	}
-	if errText := callToolExpectErr(t, "get_cache_storage", map[string]any{"tab": tabID, "cache_name": "v1-assets", "request_url": srv.URL + "/nope"}); !strings.Contains(errText, "not found") {
+	if errText := callToolExpectErr(t, "cache_storage", map[string]any{"action": "get", "tab": tabID, "cache_name": "v1-assets", "request_url": srv.URL + "/nope"}); !strings.Contains(errText, "not found") {
 		t.Errorf("missing entry err = %q, want not found", errText)
 	}
 
 	// Delete a single entry.
-	callTool[struct{}](t, "delete_cache_storage", map[string]any{
+	callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":      "delete",
 		"tab":         tabID,
 		"cache_name":  "v1-assets",
 		"request_url": srv.URL + "/api/item-1",
 	})
-	afterEntryDel := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{
+	afterEntryDel := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":     "get",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 	})
@@ -192,11 +204,12 @@ func TestCacheStorageLifecyclePaginationBinaryAndDelete(t *testing.T) {
 	}
 
 	// Delete entire cache v1-assets; v2-empty must remain.
-	callTool[struct{}](t, "delete_cache_storage", map[string]any{
+	callTool[cacheStorageOutput](t, "cache_storage", map[string]any{
+		"action":     "delete",
 		"tab":        tabID,
 		"cache_name": "v1-assets",
 	})
-	afterCacheDel := callTool[GetCacheStorageOutput](t, "get_cache_storage", map[string]any{"tab": tabID})
+	afterCacheDel := callTool[cacheStorageOutput](t, "cache_storage", map[string]any{"action": "get", "tab": tabID})
 	if len(afterCacheDel.Caches) != 1 || afterCacheDel.Caches[0].Name != "v2-empty" {
 		t.Fatalf("after deleting v1-assets, caches = %+v, want [v2-empty]", afterCacheDel.Caches)
 	}
@@ -206,31 +219,31 @@ func TestCacheStorageValidation(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	badGet := []struct {
+	badCases := []struct {
 		name string
 		args map[string]any
 		want string
 	}{
-		{"request_url_without_cache", map[string]any{"tab": tabID, "request_url": "https://example.com"}, "requires cache_name"},
-		{"path_filter_without_cache", map[string]any{"tab": tabID, "path_filter": "/a"}, "require cache_name"},
-		{"skip_without_cache", map[string]any{"tab": tabID, "skip": 1}, "require cache_name"},
-		{"limit_without_cache", map[string]any{"tab": tabID, "limit": 10}, "require cache_name"},
-		{"negative_skip", map[string]any{"tab": tabID, "cache_name": "c", "skip": -1}, "skip"},
-		{"negative_limit", map[string]any{"tab": tabID, "cache_name": "c", "limit": -1}, "limit"},
-		{"range_without_request_url", map[string]any{"tab": tabID, "cache_name": "c", "range_start": 1}, "require request_url"},
-		{"bad_range_order", map[string]any{"tab": tabID, "cache_name": "c", "request_url": "https://example.com", "range_start": 10, "range_end": 5}, "range_end"},
-		{"request_url_with_limit", map[string]any{"tab": tabID, "cache_name": "c", "request_url": "https://example.com", "limit": 5}, "cannot be combined"},
-		{"request_url_with_path_filter", map[string]any{"tab": tabID, "cache_name": "c", "request_url": "https://example.com", "path_filter": "/a"}, "cannot be combined"},
+		{"request_url_without_cache", map[string]any{"action": "get", "tab": tabID, "request_url": "https://example.com"}, "requires cache_name"},
+		{"path_filter_without_cache", map[string]any{"action": "get", "tab": tabID, "path_filter": "/a"}, "require cache_name"},
+		{"skip_without_cache", map[string]any{"action": "get", "tab": tabID, "skip": 1}, "require cache_name"},
+		{"limit_without_cache", map[string]any{"action": "get", "tab": tabID, "limit": 10}, "require cache_name"},
+		{"negative_skip", map[string]any{"action": "get", "tab": tabID, "cache_name": "c", "skip": -1}, "skip"},
+		{"negative_limit", map[string]any{"action": "get", "tab": tabID, "cache_name": "c", "limit": -1}, "limit"},
+		{"range_without_request_url", map[string]any{"action": "get", "tab": tabID, "cache_name": "c", "range_start": 1}, "require request_url"},
+		{"bad_range_order", map[string]any{"action": "get", "tab": tabID, "cache_name": "c", "request_url": "https://example.com", "range_start": 10, "range_end": 5}, "range_end"},
+		{"request_url_with_limit", map[string]any{"action": "get", "tab": tabID, "cache_name": "c", "request_url": "https://example.com", "limit": 5}, "cannot be combined"},
+		{"request_url_with_path_filter", map[string]any{"action": "get", "tab": tabID, "cache_name": "c", "request_url": "https://example.com", "path_filter": "/a"}, "cannot be combined"},
+		{"delete_empty_cache", map[string]any{"action": "delete", "tab": tabID, "cache_name": ""}, "cache_name"},
+		{"delete_stray_limit", map[string]any{"action": "delete", "tab": tabID, "cache_name": "c", "limit": 5}, "action='delete'"},
+		{"delete_stray_range", map[string]any{"action": "delete", "tab": tabID, "cache_name": "c", "range_start": 1}, "action='delete'"},
 	}
-	for _, tc := range badGet {
+	for _, tc := range badCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if errText := callToolExpectErr(t, "get_cache_storage", tc.args); !strings.Contains(errText, tc.want) {
+			if errText := callToolExpectErr(t, "cache_storage", tc.args); !strings.Contains(errText, tc.want) {
 				t.Errorf("%s err = %q, want substring %q", tc.name, errText, tc.want)
 			}
 		})
-	}
-	if errText := callToolExpectErr(t, "delete_cache_storage", map[string]any{"tab": tabID, "cache_name": ""}); !strings.Contains(errText, "cache_name") {
-		t.Errorf("delete_cache_storage empty cache_name err = %q, want cache_name", errText)
 	}
 }
 

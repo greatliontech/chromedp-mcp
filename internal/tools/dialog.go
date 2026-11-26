@@ -20,53 +20,53 @@ const (
 
 var dialogActionValues = []string{dialogActionGet, dialogActionAccept, dialogActionDismiss}
 
-// DialogInput is the input for dialog.
-type DialogInput struct {
-	TabInput
+// dialogInput is the input for dialog.
+type dialogInput struct {
+	tabInput
 	Action          string  `json:"action" jsonschema:"Dialog action: 'get' (inspect without blocking), 'accept', or 'dismiss'."`
 	Text            *string `json:"text,omitempty" jsonschema:"For action='accept' on a prompt dialog: text to submit (omit to keep default; empty string submits empty)."`
 	ObserveWindowMs int     `json:"observe_window_ms,omitempty" jsonschema:"Observe activity for N ms after handling the dialog (0=off, max 30000)."`
 }
 
-// DialogOutput is the output for dialog.
-type DialogOutput struct {
+// dialogOutput is the output for dialog.
+type dialogOutput struct {
 	Open     bool                   `json:"open"`
 	Dialog   *collector.DialogState `json:"dialog,omitempty"`
-	Observed *ObservedActivity      `json:"observed,omitempty"`
+	Observed *observedActivity      `json:"observed,omitempty"`
 }
 
 func registerDialogTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "dialog",
 		Description: "Inspect ('get') or handle ('accept'/'dismiss') a JavaScript modal dialog (alert, confirm, prompt, beforeunload) without blocking on the renderer.",
-		InputSchema: schemaWithEnums[DialogInput](map[string][]string{
+		InputSchema: schemaWithEnums[dialogInput](map[string][]string{
 			"action": dialogActionValues,
 		}),
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp DialogInput) (*mcp.CallToolResult, DialogOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp dialogInput) (*mcp.CallToolResult, dialogOutput, error) {
 		if err := validateEnum("action", inp.Action, false, dialogActionValues); err != nil {
-			return nil, DialogOutput{}, err
+			return nil, dialogOutput{}, err
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, DialogOutput{}, err
+			return nil, dialogOutput{}, err
 		}
 		if inp.Action != dialogActionAccept && inp.Text != nil {
-			return nil, DialogOutput{}, fmt.Errorf("text is only valid when action is 'accept'")
+			return nil, dialogOutput{}, fmt.Errorf("text is only valid when action is 'accept'")
 		}
 		if inp.Action == dialogActionGet && inp.ObserveWindowMs > 0 {
-			return nil, DialogOutput{}, fmt.Errorf("observe_window_ms is not valid when action is 'get'")
+			return nil, dialogOutput{}, fmt.Errorf("observe_window_ms is not valid when action is 'get'")
 		}
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, DialogOutput{}, err
+			return nil, dialogOutput{}, err
 		}
 
 		if inp.Action == dialogActionGet {
 			cur := t.Dialog.Current()
 			if cur == nil {
-				return nil, DialogOutput{Open: false}, nil
+				return nil, dialogOutput{Open: false}, nil
 			}
-			return nil, DialogOutput{Open: true, Dialog: cur}, nil
+			return nil, dialogOutput{Open: true, Dialog: cur}, nil
 		}
 
 		accept := inp.Action == dialogActionAccept
@@ -87,7 +87,7 @@ func registerDialogTools(s *mcp.Server, mgr *browser.Manager) {
 			Accept:     accept,
 			PromptText: promptText,
 		}); err != nil {
-			return nil, DialogOutput{}, err
+			return nil, dialogOutput{}, err
 		}
 		// Clear the tracked dialog generation synchronously so immediate
 		// follow-up calls never race the async Page.javascriptDialogClosed event,
@@ -97,7 +97,7 @@ func registerDialogTools(s *mcp.Server, mgr *browser.Manager) {
 		// dialog opened during observe_window_ms is reflected in the response.
 		observed := obs.close(tctx)
 		next := t.Dialog.Current()
-		return nil, DialogOutput{
+		return nil, dialogOutput{
 			Open:     next != nil,
 			Dialog:   next,
 			Observed: observed,

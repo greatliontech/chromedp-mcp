@@ -83,7 +83,7 @@ func TestWaitForExpressionAsyncPredicate(t *testing.T) {
 		"timeout":    5000,
 	})
 
-	res := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	res := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.__fetchOk === true",
 	})

@@ -367,7 +367,7 @@ func contentText(r *mcp.CallToolResult) string {
 // (including synchronous inline scripts) is fully loaded when this returns.
 func navigateToFixture(t *testing.T, fixture string) string {
 	t.Helper()
-	out := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": fixtureURL(fixture),
 	})
 	if out.TabID == "" {
@@ -405,7 +405,7 @@ func waitForConsole(t *testing.T, tabID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		out := callTool[GetConsoleLogsOutput](t, "get_console_logs", map[string]any{
+		out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
 			"tab":  tabID,
 			"mode": "peek",
 		})
@@ -423,7 +423,7 @@ func waitForJSErrors(t *testing.T, tabID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		out := callTool[GetJSErrorsOutput](t, "get_js_errors", map[string]any{
+		out := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 			"tab":  tabID,
 			"mode": "peek",
 		})
@@ -441,7 +441,7 @@ func waitForNetwork(t *testing.T, tabID, urlPattern string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+		out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 			"tab":         tabID,
 			"mode":        "peek",
 			"url_pattern": urlPattern,

@@ -24,7 +24,7 @@ func TestJSQuoteEdgeCases(t *testing.T) {
 		if strings.ContainsRune(q, '\u2028') || strings.ContainsRune(q, '\u2029') {
 			t.Errorf("jsQuote(%q) did not escape line/paragraph separator: %s", s, q)
 		}
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"expression": q,
 		})
@@ -42,7 +42,7 @@ func TestEvaluateSelectorTrailingLineCommentAndValidation(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "return el.textContent // trailing line comment must not break IIFE",
@@ -88,7 +88,7 @@ func TestEvaluate(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "1 + 2",
 	})
@@ -101,7 +101,7 @@ func TestEvaluateOnSelector(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "return el.textContent",
@@ -155,7 +155,7 @@ func TestEvaluateReturnsVariousTypes(t *testing.T) {
 		{`({a: 1})`, `{"a":1}`},
 	}
 	for _, tc := range tests {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"expression": tc.expr,
 		})
@@ -170,7 +170,7 @@ func TestEvaluateAwaitPromise(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "new Promise(resolve => setTimeout(() => resolve('resolved!'), 50))",
 	})
@@ -183,7 +183,7 @@ func TestEvaluateAwaitPromiseFalse(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":           tabID,
 		"expression":    "new Promise(resolve => resolve(42))",
 		"await_promise": false,
@@ -198,7 +198,7 @@ func TestEvaluateUndefined(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "undefined",
 	})
@@ -212,14 +212,14 @@ func TestEvaluateOnSelectorSideEffect(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Modify the element via the expression.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "el.textContent = 'Modified'; return el.textContent;",
 	})
 
 	// Verify the modification.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('title').textContent",
 	})
@@ -241,7 +241,7 @@ func TestEvaluateOnSelectorReturnTypes(t *testing.T) {
 		{"return el.id === 'title';", "true"},
 	}
 	for _, tc := range tests {
-		out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab":        tabID,
 			"selector":   "#title",
 			"expression": tc.expr,
@@ -297,7 +297,7 @@ func TestEvaluateNestedObject(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `({a: {b: {c: [1,2,3]}}})`,
 	})
@@ -324,7 +324,7 @@ func TestEvaluateOnSelectorElementProperties(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Test classList.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   ".content",
 		"expression": "return Array.from(el.classList);",
@@ -334,7 +334,7 @@ func TestEvaluateOnSelectorElementProperties(t *testing.T) {
 	}
 
 	// Test getAttribute.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "return el.getAttribute('id');",
@@ -348,7 +348,7 @@ func TestEvaluateOnSelectorNoReturn(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#title",
 		"expression": "el.textContent;", // No return statement.
@@ -364,7 +364,7 @@ func TestEvaluateOnSelectorFirstMatch(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// .content matches two <p> elements. Should use the first one.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   ".content",
 		"expression": "return el.textContent;",
@@ -379,7 +379,7 @@ func TestEvaluateAwaitPromiseDefault(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Omit await_promise — default is true, so the Promise should be awaited.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "new Promise(function(resolve) { setTimeout(function() { resolve(99); }, 50); })",
 	})
@@ -393,7 +393,7 @@ func TestEvaluateSelectorWithSpecialChars(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Test with a selector containing quotes so JS string escaping is exercised.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "[data-value=\"test's\"]",
 		"expression": "return el.textContent;",

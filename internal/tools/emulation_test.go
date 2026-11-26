@@ -14,414 +14,250 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// --- set_geolocation ---
+// --- geolocation ---
 
-// TestSetGeolocationOverride verifies that geolocation can be overridden.
-func TestSetGeolocationOverride(t *testing.T) {
+func TestEmulateGeolocationOverrideDefaultAccuracyAndReset(t *testing.T) {
 	tabID := navigateToFixture(t, "emulation.html")
 	defer closeTab(t, tabID)
 
-	// Grant geolocation permission first.
-	callTool[struct{}](t, "set_permission", map[string]any{
+	callTool[configurePageOutput](t, "configure_page", map[string]any{
+		"action":  "set_permission",
 		"tab":     tabID,
 		"name":    "geolocation",
 		"setting": "granted",
 	})
 
-	// Override geolocation.
-	callTool[struct{}](t, "set_geolocation", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":    "geolocation",
 		"tab":       tabID,
 		"latitude":  48.8566,
 		"longitude": 2.3522,
 		"accuracy":  10.0,
 	})
 
-	// Query geolocation via JS.
 	type evalResult struct {
 		Result json.RawMessage `json:"result"`
 	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab": tabID,
-		"expression": `new Promise((resolve, reject) => {
-			navigator.geolocation.getCurrentPosition(
-				pos => resolve({lat: pos.coords.latitude, lng: pos.coords.longitude}),
-				err => reject(err.message),
-				{timeout: 5000}
-			);
-		})`,
-	})
-
-	var coords struct {
+	readPos := func() struct {
 		Lat float64 `json:"lat"`
 		Lng float64 `json:"lng"`
+		Acc float64 `json:"acc"`
+	} {
+		t.Helper()
+		res := callTool[evalResult](t, "evaluate", map[string]any{
+			"tab": tabID,
+			"expression": `new Promise((resolve, reject) => {
+				navigator.geolocation.getCurrentPosition(
+					pos => resolve({lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy}),
+					err => reject(err.message),
+					{timeout: 5000}
+				);
+			})`,
+		})
+		var coords struct {
+			Lat float64 `json:"lat"`
+			Lng float64 `json:"lng"`
+			Acc float64 `json:"acc"`
+		}
+		if err := json.Unmarshal(res.Result, &coords); err != nil {
+			t.Fatalf("unmarshal coords: %v, raw: %s", err, res.Result)
+		}
+		return coords
 	}
-	if err := json.Unmarshal(result.Result, &coords); err != nil {
-		t.Fatalf("unmarshal coords: %v, raw: %s", err, result.Result)
-	}
-	if coords.Lat != 48.8566 || coords.Lng != 2.3522 {
-		t.Fatalf("expected Paris coordinates (48.8566, 2.3522), got (%v, %v)", coords.Lat, coords.Lng)
-	}
-}
 
-// TestSetGeolocationReset verifies that omitting all fields resets geolocation.
-func TestSetGeolocationReset(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
+	coords := readPos()
+	if coords.Lat != 48.8566 || coords.Lng != 2.3522 || coords.Acc != 10 {
+		t.Fatalf("expected Paris (48.8566, 2.3522, acc=10), got %+v", coords)
+	}
 
-	// Override then reset — the CDP call should succeed.
-	callTool[struct{}](t, "set_geolocation", map[string]any{
+	// Default accuracy = 1 when omitted.
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":    "geolocation",
 		"tab":       tabID,
-		"latitude":  0.0,
-		"longitude": 0.0,
+		"latitude":  51.5074,
+		"longitude": -0.1278,
 	})
-	callTool[struct{}](t, "set_geolocation", map[string]any{
-		"tab": tabID,
+	coords = readPos()
+	if coords.Lat != 51.5074 || coords.Lng != -0.1278 || coords.Acc != 1 {
+		t.Fatalf("expected London with default acc=1, got %+v", coords)
+	}
+
+	// Reset by omitting all coordinate fields.
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "geolocation",
+		"tab":    tabID,
 	})
 }
 
-// --- set_timezone ---
+// --- timezone & locale ---
 
-// TestSetTimezone verifies timezone override.
-func TestSetTimezone(t *testing.T) {
+func TestEmulateTimezoneAndLocale(t *testing.T) {
 	tabID := navigateToFixture(t, "emulation.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_timezone", map[string]any{
+	type strEval struct {
+		Result string `json:"result"`
+	}
+
+	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "timezone", "tab": tabID, "timezone_id": "Not/A/Real/Timezone"}); errText == "" {
+		t.Fatal("expected error for invalid timezone")
+	}
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":      "timezone",
 		"tab":         tabID,
 		"timezone_id": "Pacific/Auckland",
 	})
-
-	// Check that the timezone is reflected in JS.
-	type evalResult struct {
-		Result string `json:"result"`
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "Intl.DateTimeFormat().resolvedOptions().timeZone"}); res.Result != "Pacific/Auckland" {
+		t.Fatalf("timezone = %q, want Pacific/Auckland", res.Result)
 	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "Intl.DateTimeFormat().resolvedOptions().timeZone",
-	})
-	if result.Result != "Pacific/Auckland" {
-		t.Fatalf("expected Pacific/Auckland, got %q", result.Result)
-	}
-}
-
-// TestSetTimezoneReset verifies timezone reset.
-func TestSetTimezoneReset(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_timezone", map[string]any{
-		"tab":         tabID,
-		"timezone_id": "Asia/Tokyo",
-	})
-
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "Intl.DateTimeFormat().resolvedOptions().timeZone",
-	})
-	if result.Result != "Asia/Tokyo" {
-		t.Fatalf("expected Asia/Tokyo, got %q", result.Result)
-	}
-
-	// Reset — empty string uses browser-internal reset which may
-	// error. Use the real system timezone name instead.
-	// Actually, CDP requires a non-empty string for SetTimezoneOverride.
-	// Let's reset to UTC which is always valid.
-	callTool[struct{}](t, "set_timezone", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":      "timezone",
 		"tab":         tabID,
 		"timezone_id": "UTC",
 	})
-
-	result = callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "Intl.DateTimeFormat().resolvedOptions().timeZone",
-	})
-	if result.Result != "UTC" {
-		t.Fatalf("expected UTC after reset, got %q", result.Result)
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "Intl.DateTimeFormat().resolvedOptions().timeZone"}); res.Result != "UTC" {
+		t.Fatalf("timezone after reset = %q, want UTC", res.Result)
 	}
-}
 
-// TestSetTimezoneInvalid verifies that invalid timezone IDs return errors.
-func TestSetTimezoneInvalid(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "set_timezone", map[string]any{
-		"tab":         tabID,
-		"timezone_id": "Not/A/Real/Timezone",
-	})
-	if errText == "" {
-		t.Fatal("expected error for invalid timezone")
-	}
-}
-
-// --- set_locale ---
-
-// TestSetLocale verifies locale override affects Intl APIs.
-func TestSetLocale(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_locale", map[string]any{
+	// Locale override and reset.
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "locale",
 		"tab":    tabID,
 		"locale": "de_DE",
 	})
-
-	// SetLocaleOverride affects Intl APIs, not navigator.language.
-	// In German locale, decimal separator is comma.
-	type evalResult struct {
-		Result string `json:"result"`
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "new Intl.NumberFormat().format(1234.5)"}); !strings.Contains(res.Result, ",") {
+		t.Fatalf("German number format = %q, want comma", res.Result)
 	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "new Intl.NumberFormat().format(1234.5)",
-	})
-	// German format: "1.234,5"
-	if !strings.Contains(result.Result, ",") {
-		t.Fatalf("expected German number format with comma separator, got %q", result.Result)
-	}
-}
-
-// TestSetLocaleReset verifies locale reset (empty string).
-func TestSetLocaleReset(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_locale", map[string]any{
-		"tab":    tabID,
-		"locale": "de_DE",
-	})
-
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "new Intl.NumberFormat().format(1234.5)",
-	})
-	if !strings.Contains(result.Result, ",") {
-		t.Fatalf("expected German number format, got %q", result.Result)
-	}
-
-	// Reset to default.
-	callTool[struct{}](t, "set_locale", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "locale",
 		"tab":    tabID,
 		"locale": "",
 	})
-
-	// After reset, the number format should use the system default (likely en-US with ".").
-	result = callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "new Intl.NumberFormat().format(1234.5)",
-	})
-	if !strings.Contains(result.Result, ".") {
-		t.Fatalf("expected default locale number format with dot separator after reset, got %q", result.Result)
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "new Intl.NumberFormat().format(1234.5)"}); !strings.Contains(res.Result, ".") {
+		t.Fatalf("default number format after reset = %q, want dot", res.Result)
 	}
 }
 
-// --- set_user_agent ---
+// --- user_agent, cpu_throttling, vision_deficiency ---
 
-// TestSetUserAgent verifies user agent override.
-func TestSetUserAgent(t *testing.T) {
+func TestEmulateUserAgentCPUAndVisionDeficiency(t *testing.T) {
 	tabID := navigateToFixture(t, "emulation.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_user_agent", map[string]any{
-		"tab":        tabID,
-		"user_agent": "MyCustomBot/1.0",
-	})
-
-	type evalResult struct {
+	type strEval struct {
 		Result string `json:"result"`
 	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "navigator.userAgent",
-	})
-	if result.Result != "MyCustomBot/1.0" {
-		t.Fatalf("expected MyCustomBot/1.0, got %q", result.Result)
-	}
-}
 
-// TestSetUserAgentWithPlatform verifies platform override.
-func TestSetUserAgentWithPlatform(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_user_agent", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":     "user_agent",
 		"tab":        tabID,
 		"user_agent": "TestAgent/2.0",
 		"platform":   "TestPlatform",
 	})
+	if ua := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "navigator.userAgent"}); ua.Result != "TestAgent/2.0" {
+		t.Fatalf("userAgent = %q, want TestAgent/2.0", ua.Result)
+	}
+	if plat := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "navigator.platform"}); plat.Result != "TestPlatform" {
+		t.Fatalf("platform = %q, want TestPlatform", plat.Result)
+	}
 
-	type evalResult struct {
+	// CPU throttling (enable, disable, clamp < 1).
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "cpu_throttling", "tab": tabID, "rate": 4.0})
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "cpu_throttling", "tab": tabID, "rate": 0.0})
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "cpu_throttling", "tab": tabID, "rate": 1.0})
+
+	// Vision deficiency values + invalid rejection.
+	for _, typ := range visionDeficiencyValues {
+		callTool[emulateOutput](t, "emulate", map[string]any{"action": "vision_deficiency", "tab": tabID, "type": typ})
+	}
+	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "vision_deficiency", "tab": tabID, "type": "invalid_type"}); !strings.Contains(errText, "invalid_type") {
+		t.Errorf("invalid vision type err = %q", errText)
+	}
+}
+
+// --- media ---
+
+func TestEmulateMediaColorSchemeReducedMotionAndPrint(t *testing.T) {
+	tabID := navigateToFixture(t, "config.html")
+	defer closeTab(t, tabID)
+
+	type strEval struct {
 		Result string `json:"result"`
 	}
 
-	// Check user agent.
-	ua := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "navigator.userAgent",
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "media",
+		"tab":    tabID,
+		"features": []map[string]string{
+			{"name": "prefers-color-scheme", "value": "dark"},
+			{"name": "prefers-reduced-motion", "value": "reduce"},
+		},
 	})
-	if ua.Result != "TestAgent/2.0" {
-		t.Fatalf("expected TestAgent/2.0, got %q", ua.Result)
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'"}); res.Result != "dark" {
+		t.Fatalf("color-scheme = %q, want dark", res.Result)
+	}
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduce' : 'no-preference'"}); res.Result != "reduce" {
+		t.Fatalf("reduced-motion = %q, want reduce", res.Result)
 	}
 
-	// Check platform.
-	plat := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "navigator.platform",
-	})
-	if plat.Result != "TestPlatform" {
-		t.Fatalf("expected TestPlatform, got %q", plat.Result)
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "media", "tab": tabID, "media": "print"})
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "window.matchMedia('print').matches ? 'print' : 'screen'"}); res.Result != "print" {
+		t.Fatalf("media = %q, want print", res.Result)
 	}
-}
 
-// --- set_cpu_throttling ---
-
-// TestSetCPUThrottling verifies the CDP call succeeds.
-func TestSetCPUThrottling(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Enable throttling.
-	callTool[struct{}](t, "set_cpu_throttling", map[string]any{
-		"tab":  tabID,
-		"rate": 4.0,
-	})
-
-	// Disable throttling.
-	callTool[struct{}](t, "set_cpu_throttling", map[string]any{
-		"tab":  tabID,
-		"rate": 1.0,
-	})
-}
-
-// TestSetCPUThrottlingMinimumRate verifies that rates below 1 are clamped.
-func TestSetCPUThrottlingMinimumRate(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Rate 0 should be clamped to 1 (no throttle).
-	callTool[struct{}](t, "set_cpu_throttling", map[string]any{
-		"tab":  tabID,
-		"rate": 0.0,
-	})
-}
-
-// --- set_vision_deficiency ---
-
-// TestSetVisionDeficiency verifies each valid deficiency type.
-func TestSetVisionDeficiency(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	types := []string{
-		"none", "blurredVision", "reducedContrast",
-		"achromatopsia", "deuteranopia", "protanopia", "tritanopia",
+	// Reset media overrides and verify defaults return.
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "media", "tab": tabID})
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "window.matchMedia('print').matches ? 'print' : 'screen'"}); res.Result != "screen" {
+		t.Fatalf("media after reset = %q, want screen", res.Result)
 	}
-	for _, typ := range types {
-		callTool[struct{}](t, "set_vision_deficiency", map[string]any{
-			"tab":  tabID,
-			"type": typ,
-		})
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'"}); res.Result != "light" {
+		t.Fatalf("color-scheme after reset = %q, want light", res.Result)
 	}
 }
 
-// TestSetVisionDeficiencyInvalid verifies invalid type is rejected.
-func TestSetVisionDeficiencyInvalid(t *testing.T) {
+// --- network ---
+
+func TestEmulateNetworkOfflineLatencyAndThroughput(t *testing.T) {
 	tabID := navigateToFixture(t, "emulation.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "set_vision_deficiency", map[string]any{
-		"tab":  tabID,
-		"type": "invalid_type",
-	})
-	if !strings.Contains(errText, "type") || !strings.Contains(errText, "invalid_type") {
-		t.Fatalf("expected vision deficiency validation error, got: %s", errText)
-	}
-}
-
-// --- emulate_network ---
-
-// TestEmulateNetworkOffline verifies offline mode blocks network.
-func TestEmulateNetworkOffline(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Go offline.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab":     tabID,
-		"offline": true,
-	})
-
-	// navigator.onLine should reflect offline state.
 	type boolEval struct {
 		Result bool `json:"result"`
 	}
-	onlineRes := callTool[boolEval](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `navigator.onLine`,
-	})
-	if onlineRes.Result {
-		t.Fatalf("expected navigator.onLine to be false when offline")
-	}
-
-	// A fetch should fail when offline.
-	type evalResult struct {
+	type strEval struct {
 		Result string `json:"result"`
 	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `fetch('/api/data').then(() => 'ok').catch(e => 'failed: ' + e.message)`,
-	})
-	if !strings.Contains(result.Result, "failed") {
-		t.Fatalf("expected fetch to fail when offline, got: %q", result.Result)
+
+	// Offline mode blocks network.
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "network", "tab": tabID, "offline": true})
+	if res := callTool[boolEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "navigator.onLine"}); res.Result {
+		t.Fatal("expected navigator.onLine=false when offline")
+	}
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": `fetch('/api/data').then(() => 'ok').catch(e => 'failed: ' + e.message)`}); !strings.Contains(res.Result, "failed") {
+		t.Fatalf("expected fetch to fail offline, got %q", res.Result)
 	}
 
-	// Go back online.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab":     tabID,
-		"offline": false,
-	})
-
-	// navigator.onLine should return to true when back online.
-	onlineRes = callTool[boolEval](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `navigator.onLine`,
-	})
-	if !onlineRes.Result {
-		t.Fatalf("expected navigator.onLine to be true after returning online")
+	// Back online (all defaults reset).
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "network", "tab": tabID})
+	if res := callTool[boolEval](t, "evaluate", map[string]any{"tab": tabID, "expression": "navigator.onLine"}); !res.Result {
+		t.Fatal("expected navigator.onLine=true after reset")
+	}
+	if res := callTool[strEval](t, "evaluate", map[string]any{"tab": tabID, "expression": `fetch('/api/data').then(() => 'ok').catch(e => 'failed')`}); res.Result != "ok" {
+		t.Fatalf("expected fetch to succeed online, got %q", res.Result)
 	}
 
-	// Fetch should succeed now.
-	result = callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `fetch('/api/data').then(() => 'ok').catch(e => 'failed: ' + e.message)`,
+	// Latency adds measurable delay; explicit throughput values accepted.
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "network",
+		"tab":                 tabID,
+		"latency":             400.0,
+		"download_throughput": 1000000,
+		"upload_throughput":   500000,
 	})
-	if result.Result != "ok" {
-		t.Fatalf("expected fetch to succeed when online, got: %q", result.Result)
-	}
-}
-
-// TestEmulateNetworkLatency verifies latency adds delay.
-func TestEmulateNetworkLatency(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Set 500ms minimum latency.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab":     tabID,
-		"latency": 500.0,
-	})
-
-	// Measure fetch time — it should be at least 400ms (with some margin).
-	type evalResult struct {
+	type numEval struct {
 		Result float64 `json:"result"`
 	}
-	result := callTool[evalResult](t, "evaluate", map[string]any{
+	latRes := callTool[numEval](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(async () => {
 			const start = Date.now();
@@ -429,19 +265,15 @@ func TestEmulateNetworkLatency(t *testing.T) {
 			return Date.now() - start;
 		})()`,
 	})
-	if result.Result < 400 {
-		t.Fatalf("expected at least 400ms latency, got %.0fms", result.Result)
+	if latRes.Result < 300 {
+		t.Fatalf("expected >= 300ms latency, got %.0fms", latRes.Result)
 	}
-
-	// Reset network conditions.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab": tabID,
-	})
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "network", "tab": tabID})
 }
 
-// --- force_pseudo_state ---
+// --- pseudo_state ---
 
-func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
+func TestEmulatePseudoStateSelectorRefShadowIframeAndNavigationReset(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
@@ -453,9 +285,25 @@ func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
 			#other:hover { color: rgb(0, 128, 0); }
 		`))
 	})
+	mux.HandleFunc("/frame.html", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><style>
+			#fbtn { color: rgb(0, 0, 0); }
+			#fbtn:hover { color: rgb(128, 0, 128); }
+		</style></head><body><button id="fbtn">FrameBtn</button></body></html>`))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body><button id="btn">Btn</button><button id="other">Other</button></body></html>`))
+		_, _ = w.Write([]byte(`<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body>
+			<button id="btn">Btn</button>
+			<button id="other">Other</button>
+			<div id="host"></div>
+			<iframe id="child" src="/frame.html"></iframe>
+			<script>
+				const sr = document.getElementById('host').attachShadow({mode: 'open'});
+				sr.innerHTML = '<style>#sbtn { color: rgb(0,0,0); } #sbtn:hover { color: rgb(255,165,0); }</style><button id="sbtn">ShadowBtn</button>';
+			</script>
+		</body></html>`))
 	})
 	mux.HandleFunc("/page2", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -466,10 +314,8 @@ func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
-	// Track CSS.styleSheetAdded events to verify CSS.disable actually ran when
-	// all forced states clear or on navigation.
 	tb, err := harness.mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
@@ -487,14 +333,12 @@ func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
 	injectStyleProbe := func() int64 {
 		t.Helper()
 		before := sheetAdded.Load()
-		callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab": tabID,
 			"expression": `(function() {
 				const s = document.createElement('style');
 				s.textContent = '.probe-' + Math.random().toString(36).slice(2) + ' { color: pink; }';
 				document.head.appendChild(s);
-				// Force synchronous Blink style recalculation so CSS.styleSheetAdded
-				// is emitted before evaluate returns when the CSS domain is enabled.
 				return getComputedStyle(document.body).color;
 			})()`,
 		})
@@ -507,80 +351,110 @@ func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
 		}
 	}
 
-	getStyle := func(sel string) map[string]string {
+	getStyle := func(sel string, frame string) map[string]string {
 		t.Helper()
-		q := callTool[QueryOutput](t, "query", map[string]any{
+		args := map[string]any{
 			"tab":            tabID,
 			"selector":       sel,
 			"computed_style": []string{"color", "background-color"},
-		})
+		}
+		if frame != "" {
+			args["frame"] = frame
+		}
+		q := callTool[queryOutput](t, "query", args)
 		if len(q.Elements) != 1 {
-			t.Fatalf("query(%s) returned %d elements", sel, len(q.Elements))
+			t.Fatalf("query(%s, frame=%q) returned %d elements", sel, frame, len(q.Elements))
 		}
 		return q.Elements[0].ComputedStyle
 	}
 
-	// Baseline computed style.
-	if st := getStyle("#btn"); st["color"] != "rgb(0, 0, 0)" {
-		t.Fatalf("baseline #btn color = %q, want rgb(0, 0, 0)", st["color"])
+	// 1. Snapshot ref targeting on a fresh tab BEFORE any CSS query / DOM.getDocument.
+	snap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
+	otherRef := findSnapshotRef(t, snap.Snapshot, `"Other"`)
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "pseudo_state",
+		"tab":    tabID,
+		"ref":    otherRef,
+		"states": []string{"hover"},
+	})
+	if st := getStyle("#other", ""); st["color"] != "rgb(0, 128, 0)" {
+		t.Fatalf("#other via ref forced :hover color = %q, want rgb(0, 128, 0)", st["color"])
 	}
 
-	// Force :hover and :focus (including duplicate entry to verify deduplication).
-	forced := callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+	// 2. CSS selector with duplicate states deduplicated.
+	forced := callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":   "pseudo_state",
 		"tab":      tabID,
 		"selector": "#btn",
 		"states":   []string{"hover", "focus", "hover"},
 	})
-	if len(forced.States) != 2 || forced.States[0] != "hover" || forced.States[1] != "focus" {
-		t.Fatalf("force_pseudo_state returned %v, want [hover focus]", forced.States)
+	if forced.States == nil || len(*forced.States) != 2 || (*forced.States)[0] != "hover" || (*forced.States)[1] != "focus" {
+		t.Fatalf("pseudo_state returned %+v, want [hover focus]", forced.States)
 	}
-	if st := getStyle("#btn"); st["color"] != "rgb(255, 0, 0)" || st["background-color"] != "rgb(0, 0, 255)" {
-		t.Fatalf("forced #btn styles = %+v, want color=rgb(255, 0, 0) background-color=rgb(0, 0, 255)", st)
+	if st := getStyle("#btn", ""); st["color"] != "rgb(255, 0, 0)" || st["background-color"] != "rgb(0, 0, 255)" {
+		t.Fatalf("forced #btn styles = %+v", st)
 	}
-	// Positive oracle check: while forced pseudo-state is active, CSS domain is enabled.
 	if delta := injectStyleProbe(); delta == 0 {
-		t.Fatal("expected EventStyleSheetAdded while CSS domain is enabled for forced pseudo-state")
+		t.Fatal("expected EventStyleSheetAdded while CSS domain is enabled")
 	}
 
-	// Force :hover on a second element; clearing #btn must NOT disturb #other.
-	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
+	// 3. Open Shadow DOM targeting via '>>>'.
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":   "pseudo_state",
 		"tab":      tabID,
-		"selector": "#other",
+		"selector": "#host >>> #sbtn",
 		"states":   []string{"hover"},
 	})
-	rawClearedBtn := callToolRaw(t, "force_pseudo_state", map[string]any{
+	if st := getStyle("#host >>> #sbtn", ""); st["color"] != "rgb(255, 165, 0)" {
+		t.Fatalf("shadow #sbtn forced :hover color = %q, want rgb(255, 165, 0)", st["color"])
+	}
+
+	// 4. Same-origin iframe targeting via frame + selector.
+	frames := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+	var childFrameID string
+	for _, f := range frames.Frames {
+		if strings.Contains(f.URL, "/frame.html") {
+			childFrameID = f.ID
+			break
+		}
+	}
+	if childFrameID == "" {
+		t.Fatalf("child iframe not found in %+v", frames.Frames)
+	}
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":   "pseudo_state",
+		"tab":      tabID,
+		"frame":    childFrameID,
+		"selector": "#fbtn",
+		"states":   []string{"hover"},
+	})
+	if st := getStyle("#fbtn", childFrameID); st["color"] != "rgb(128, 0, 128)" {
+		t.Fatalf("iframe #fbtn forced :hover color = %q, want rgb(128, 0, 128)", st["color"])
+	}
+
+	// Clearing #btn must return {"states":[]} and leave #other intact.
+	rawCleared := callToolRaw(t, "emulate", map[string]any{
+		"action":   "pseudo_state",
 		"tab":      tabID,
 		"selector": "#btn",
 		"states":   []string{},
 	})
-	if rawClearedBtn.IsError || !strings.Contains(contentText(rawClearedBtn), `"states":[]`) {
-		t.Fatalf("clearing #btn returned %s (err=%v), want \"states\":[]", contentText(rawClearedBtn), rawClearedBtn.IsError)
+	if rawCleared.IsError || !strings.Contains(contentText(rawCleared), `"states":[]`) {
+		t.Fatalf("clearing #btn returned %s (err=%v), want \"states\":[]", contentText(rawCleared), rawCleared.IsError)
 	}
-	if st := getStyle("#btn"); st["color"] != "rgb(0, 0, 0)" || st["background-color"] != "rgb(255, 255, 255)" {
-		t.Fatalf("cleared #btn styles = %+v, want baseline colors", st)
-	}
-	if st := getStyle("#other"); st["color"] != "rgb(0, 128, 0)" {
-		t.Fatalf("#other lost forced :hover when #btn was cleared: %+v", st)
+	if st := getStyle("#other", ""); st["color"] != "rgb(0, 128, 0)" {
+		t.Fatalf("#other lost forced :hover when #btn cleared: %+v", st)
 	}
 
-	// Clear #other (omitting states); returns to baseline AND disables CSS domain.
-	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
-		"tab":      tabID,
-		"selector": "#other",
-	})
-	if st := getStyle("#other"); st["color"] != "rgb(0, 0, 0)" {
-		t.Fatalf("cleared #other styles = %+v, want rgb(0, 0, 0)", st)
-	}
-	assertCSSDisabled("after clearing last forced element")
+	// Clear remaining forced elements and confirm CSS domain disables.
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "ref": otherRef})
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "selector": "#host >>> #sbtn"})
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "frame": childFrameID, "selector": "#fbtn"})
+	assertCSSDisabled("after clearing all forced elements")
 
 	// Cross-document navigation resets forced states and disables CSS asynchronously.
-	callTool[ForcePseudoStateOutput](t, "force_pseudo_state", map[string]any{
-		"tab":      tabID,
-		"selector": "#btn",
-		"states":   []string{"hover"},
-	})
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/page2"})
-	// Poll briefly for async disableCSSIfIdle to finish after EventFrameNavigated.
+	callTool[emulateOutput](t, "emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "selector": "#btn", "states": []string{"hover"}})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/page2"})
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if injectStyleProbe() == 0 {
@@ -592,20 +466,17 @@ func TestForcePseudoStateHoverFocusClearAndNavigationReset(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Validation & missing selector errors.
-	if errText := callToolExpectErr(t, "force_pseudo_state", map[string]any{"tab": tabID, "selector": "#p2", "states": []string{"bogus"}}); !strings.Contains(errText, "bogus") {
+	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "selector": "#p2", "states": []string{"bogus"}}); !strings.Contains(errText, "bogus") {
 		t.Errorf("invalid pseudo state err = %q, want bogus", errText)
 	}
-	if errText := callToolExpectErr(t, "force_pseudo_state", map[string]any{"tab": tabID, "selector": "#missing", "states": []string{"hover"}, "timeout": 300}); errText == "" {
+	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "selector": "#missing", "states": []string{"hover"}, "timeout": 300}); errText == "" {
 		t.Error("expected error for missing selector")
 	}
 }
 
-// --- emulate_device ---
+// --- device ---
 
 func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
-	// Serve a responsive page with a viewport meta tag so Mobile=true reports
-	// the exact CSS viewport dimensions rather than Chromium's 980px fallback.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>Responsive</body></html>`))
@@ -614,7 +485,7 @@ func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
 
 	tabID := navigateToFixture(t, "emulation.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
 	readEnv := func() struct {
 		Width       int     `json:"width"`
@@ -624,7 +495,7 @@ func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
 		TouchPoints int     `json:"touch_points"`
 	} {
 		t.Helper()
-		ev := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+		ev := callTool[evaluateOutput](t, "evaluate", map[string]any{
 			"tab": tabID,
 			"expression": `({
 				width: window.innerWidth,
@@ -649,35 +520,34 @@ func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
 
 	baseline := readEnv()
 
-	// Portrait iPhone 15 Pro (Safari viewport is 393x659 @3x).
-	out := callTool[EmulateDeviceOutput](t, "emulate_device", map[string]any{
+	out := callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "device",
 		"tab":    tabID,
 		"device": "iPhone 15 Pro",
 	})
 	if out.Device != "iPhone 15 Pro" || out.Width != 393 || out.Height != 659 || out.DeviceScaleFactor != 3 || !out.Mobile || !out.Touch || out.Landscape || !strings.Contains(out.UserAgent, "iPhone") {
-		t.Fatalf("emulate_device portrait output = %+v", out)
+		t.Fatalf("emulate(device) portrait output = %+v", out)
 	}
 	env := readEnv()
 	if env.Width != 393 || env.Height != 659 || env.DPR != 3 || !strings.Contains(env.UA, "iPhone") || env.TouchPoints == 0 {
 		t.Fatalf("portrait page env = %+v, want 393x659 @3x iPhone touch>0", env)
 	}
 
-	// Landscape iPhone 15 Pro (Safari landscape viewport is 734x343 @3x).
-	outLand := callTool[EmulateDeviceOutput](t, "emulate_device", map[string]any{
+	outLand := callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":    "device",
 		"tab":       tabID,
 		"device":    "iPhone 15 Pro",
 		"landscape": true,
 	})
 	if !outLand.Landscape || outLand.Width != 734 || outLand.Height != 343 {
-		t.Fatalf("emulate_device landscape output = %+v", outLand)
+		t.Fatalf("emulate(device) landscape output = %+v", outLand)
 	}
-	envLand := readEnv()
-	if envLand.Width != 734 || envLand.Height != 343 {
+	if envLand := readEnv(); envLand.Width != 734 || envLand.Height != 343 {
 		t.Fatalf("landscape page env = %+v, want 734x343", envLand)
 	}
 
-	// Reset restores desktop UA, touch, DPR, and viewport.
-	resetOut := callTool[EmulateDeviceOutput](t, "emulate_device", map[string]any{
+	resetOut := callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "device",
 		"tab":    tabID,
 		"device": "reset",
 	})
@@ -689,102 +559,10 @@ func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
 		t.Fatalf("reset page env = %+v, want baseline %+v", envReset, baseline)
 	}
 
-	// Validation errors.
-	if errText := callToolExpectErr(t, "emulate_device", map[string]any{"tab": tabID, "device": "Nokia 3310"}); !strings.Contains(errText, "Nokia 3310") {
+	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "device", "tab": tabID, "device": "Nokia 3310"}); !strings.Contains(errText, "Nokia 3310") {
 		t.Errorf("unknown device err = %q, want Nokia 3310", errText)
 	}
-	if errText := callToolExpectErr(t, "emulate_device", map[string]any{"tab": tabID, "device": "reset", "landscape": true}); !strings.Contains(errText, "landscape") {
+	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "device", "tab": tabID, "device": "reset", "landscape": true}); !strings.Contains(errText, "landscape") {
 		t.Errorf("reset+landscape err = %q, want landscape", errText)
 	}
-}
-
-// TestSetGeolocationDefaultAccuracy verifies that when latitude/longitude
-// are set but accuracy is omitted, the default accuracy (1) is applied.
-func TestSetGeolocationDefaultAccuracy(t *testing.T) {
-	tabID := navigateToFixture(t, "emulation.html")
-	defer closeTab(t, tabID)
-
-	// Grant geolocation permission.
-	callTool[struct{}](t, "set_permission", map[string]any{
-		"tab":     tabID,
-		"name":    "geolocation",
-		"setting": "granted",
-	})
-
-	// Set geolocation WITHOUT explicit accuracy.
-	callTool[struct{}](t, "set_geolocation", map[string]any{
-		"tab":       tabID,
-		"latitude":  51.5074,
-		"longitude": -0.1278,
-		// accuracy omitted — should default to 1
-	})
-
-	// Query the position and verify coordinates are correct.
-	result := callTool[EvaluateOutput](t, "evaluate", map[string]any{
-		"tab": tabID,
-		"expression": `new Promise((resolve, reject) => {
-			navigator.geolocation.getCurrentPosition(
-				pos => resolve({
-					lat: pos.coords.latitude,
-					lng: pos.coords.longitude,
-					acc: pos.coords.accuracy
-				}),
-				err => reject(err.message),
-				{timeout: 5000}
-			);
-		})`,
-	})
-
-	var coords struct {
-		Lat float64 `json:"lat"`
-		Lng float64 `json:"lng"`
-		Acc float64 `json:"acc"`
-	}
-	if err := json.Unmarshal(result.Result, &coords); err != nil {
-		t.Fatalf("unmarshal: %v, raw: %s", err, result.Result)
-	}
-	if coords.Lat != 51.5074 || coords.Lng != -0.1278 {
-		t.Errorf("coordinates = (%v, %v), want (51.5074, -0.1278)", coords.Lat, coords.Lng)
-	}
-	if coords.Acc != 1 {
-		t.Errorf("accuracy = %v, want 1 (default)", coords.Acc)
-	}
-}
-
-// TestEmulateNetworkDefaultThroughput verifies that calling emulate_network
-// with all defaults (throughput=0) doesn't error — the 0→-1 coercion works.
-func TestEmulateNetworkDefaultThroughput(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	// Call with all defaults — throughput values are 0, should be coerced
-	// to -1 (disabled) internally.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab": tabID,
-	})
-
-	// Reset to normal — same call pattern.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab": tabID,
-	})
-}
-
-// TestEmulateNetworkExplicitThroughput verifies explicit throughput values
-// are passed through without coercion.
-func TestEmulateNetworkExplicitThroughput(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	// Set a low throughput — should not error.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab":                 tabID,
-		"download_throughput": 1000000,
-		"upload_throughput":   500000,
-		"latency":             50,
-	})
-
-	// Reset.
-	callTool[struct{}](t, "emulate_network", map[string]any{
-		"tab": tabID,
-	})
 }

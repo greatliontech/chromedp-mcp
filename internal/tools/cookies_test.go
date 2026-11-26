@@ -6,6 +6,40 @@ import (
 	"time"
 )
 
+func getCookiesHelper(t *testing.T, args map[string]any) cookiesOutput {
+	t.Helper()
+	m := map[string]any{"action": "get"}
+	for k, v := range args {
+		m[k] = v
+	}
+	return callTool[cookiesOutput](t, "cookies", m)
+}
+
+func setCookieHelper(t *testing.T, args map[string]any) {
+	t.Helper()
+	m := map[string]any{"action": "set"}
+	for k, v := range args {
+		m[k] = v
+	}
+	callTool[cookiesOutput](t, "cookies", m)
+}
+
+func deleteCookiesHelper(t *testing.T, args map[string]any) {
+	t.Helper()
+	m := map[string]any{"action": "delete"}
+	for k, v := range args {
+		m[k] = v
+	}
+	callTool[cookiesOutput](t, "cookies", m)
+}
+
+func cookieSlice(out cookiesOutput) []cookieInfo {
+	if out.Cookies == nil {
+		return nil
+	}
+	return *out.Cookies
+}
+
 func TestCookieDomainMatchingUnits(t *testing.T) {
 	matchCases := []struct {
 		cookieDomain string
@@ -59,35 +93,36 @@ func TestCookieDomainMatchingUnits(t *testing.T) {
 func TestSetCookieOmittedDomainUsesActiveTabURL(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
+	setCookieHelper(t, map[string]any{
 		"tab":   tabID,
 		"name":  "active_url_cookie",
 		"value": "v1",
 	})
 
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
 	found := false
-	for _, c := range out.Cookies {
+	for _, c := range cookieSlice(out) {
 		if c.Name == "active_url_cookie" && c.Value == "v1" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("cookie set without domain was not found in get_cookies: %+v", out.Cookies)
+		t.Fatalf("cookie set without domain was not found: %+v", cookieSlice(out))
 	}
 
 	// Non-HTTP page without domain must fail cleanly.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": "about:blank",
 	})
-	errText := callToolExpectErr(t, "set_cookie", map[string]any{
-		"tab":   tabID,
-		"name":  "blank_cookie",
-		"value": "v2",
+	errText := callToolExpectErr(t, "cookies", map[string]any{
+		"action": "set",
+		"tab":    tabID,
+		"name":   "blank_cookie",
+		"value":  "v2",
 	})
 	if !strings.Contains(errText, "domain") {
 		t.Errorf("expected domain error on about:blank, got: %s", errText)
@@ -98,214 +133,169 @@ func TestSetCookieValidation(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	errText := callToolExpectErr(t, "set_cookie", map[string]any{
+	badCases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"empty_name", map[string]any{"action": "set", "tab": tabID, "name": "", "value": "v", "domain": "127.0.0.1"}, "name"},
+		{"missing_value", map[string]any{"action": "set", "tab": tabID, "name": "k", "domain": "127.0.0.1"}, "value"},
+		{"neg_expires", map[string]any{"action": "set", "tab": tabID, "name": "neg_exp", "value": "v", "domain": "127.0.0.1", "expires": -10}, "expires"},
+		{"bad_same_site", map[string]any{"action": "set", "tab": tabID, "name": "bad_ss", "value": "v", "domain": "127.0.0.1", "same_site": "Bogus"}, "same_site"},
+		{"get_stray_name", map[string]any{"action": "get", "tab": tabID, "name": "x"}, "action='get'"},
+		{"get_stray_value", map[string]any{"action": "get", "tab": tabID, "value": ""}, "action='get'"},
+		{"get_neg_limit", map[string]any{"action": "get", "tab": tabID, "limit": -1}, "limit"},
+		{"set_stray_urls", map[string]any{"action": "set", "tab": tabID, "name": "k", "value": "v", "urls": []string{}}, "does not accept"},
+		{"delete_stray_value", map[string]any{"action": "delete", "tab": tabID, "value": ""}, "action='delete'"},
+		{"delete_stray_urls", map[string]any{"action": "delete", "tab": tabID, "urls": []string{}}, "action='delete'"},
+	}
+	for _, tc := range badCases {
+		t.Run(tc.name, func(t *testing.T) {
+			errText := callToolExpectErr(t, "cookies", tc.args)
+			if !strings.Contains(errText, tc.want) {
+				t.Errorf("%s err = %q, want substring %q", tc.name, errText, tc.want)
+			}
+		})
+	}
+}
+
+func TestCookiesLimitAndTotalReporting(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+	deleteCookiesHelper(t, map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
+
+	for _, name := range []string{"c1", "c2", "c3"} {
+		setCookieHelper(t, map[string]any{
+			"tab":    tabID,
+			"name":   name,
+			"value":  "val-" + name,
+			"domain": "127.0.0.1",
+		})
+	}
+	// Empty string value is valid for action='set'.
+	setCookieHelper(t, map[string]any{
 		"tab":    tabID,
-		"name":   "",
-		"value":  "v",
+		"name":   "c4_empty",
+		"value":  "",
 		"domain": "127.0.0.1",
 	})
-	if !strings.Contains(errText, "name") {
-		t.Errorf("expected empty name error, got: %s", errText)
+
+	capped := getCookiesHelper(t, map[string]any{"tab": tabID, "limit": 2})
+	if len(cookieSlice(capped)) != 2 || capped.Total == nil || *capped.Total != 4 || !capped.Truncated {
+		t.Fatalf("capped cookies = len=%d total=%v truncated=%v, want 2/4/true",
+			len(cookieSlice(capped)), capped.Total, capped.Truncated)
 	}
 
-	errText = callToolExpectErr(t, "set_cookie", map[string]any{
-		"tab":     tabID,
-		"name":    "neg_exp",
-		"value":   "v",
-		"domain":  "127.0.0.1",
-		"expires": -10,
-	})
-	if !strings.Contains(errText, "expires") {
-		t.Errorf("expected negative expires error, got: %s", errText)
-	}
-
-	errText = callToolExpectErr(t, "set_cookie", map[string]any{
-		"tab":       tabID,
-		"name":      "bad_ss",
-		"value":     "v",
-		"domain":    "127.0.0.1",
-		"same_site": "Bogus",
-	})
-	if !strings.Contains(errText, "same_site") {
-		t.Errorf("expected invalid same_site error, got: %s", errText)
+	all := getCookiesHelper(t, map[string]any{"tab": tabID})
+	if len(cookieSlice(all)) != 4 || all.Total == nil || *all.Total != 4 || all.Truncated {
+		t.Fatalf("all cookies = len=%d total=%v truncated=%v, want 4/4/false",
+			len(cookieSlice(all)), all.Total, all.Truncated)
 	}
 }
 
 func TestDeleteCookiesScopedByDomainPreservesOthers(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "c_alpha",
-		"value":  "1",
-		"domain": "alpha.test",
-	})
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "c_beta",
-		"value":  "2",
-		"domain": "beta.test",
-	})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "c_alpha", "value": "1", "domain": "alpha.test"})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "c_beta", "value": "2", "domain": "beta.test"})
 
-	// Delete all cookies for alpha.test only (name omitted).
-	callTool[struct{}](t, "delete_cookies", map[string]any{
-		"tab":    tabID,
-		"domain": "alpha.test",
-	})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID, "domain": "alpha.test"})
 
-	alpha := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{"http://alpha.test/"},
-	})
-	if len(alpha.Cookies) != 0 {
-		t.Errorf("expected alpha.test cookies deleted, got: %+v", alpha.Cookies)
+	alpha := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{"http://alpha.test/"}})
+	if len(cookieSlice(alpha)) != 0 {
+		t.Errorf("expected alpha.test cookies deleted, got: %+v", cookieSlice(alpha))
 	}
 
-	beta := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{"http://beta.test/"},
-	})
-	if len(beta.Cookies) != 1 || beta.Cookies[0].Name != "c_beta" {
-		t.Errorf("expected beta.test cookie preserved, got: %+v", beta.Cookies)
+	beta := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{"http://beta.test/"}})
+	if len(cookieSlice(beta)) != 1 || cookieSlice(beta)[0].Name != "c_beta" {
+		t.Errorf("expected beta.test cookie preserved, got: %+v", cookieSlice(beta))
 	}
 }
 
 func TestDeleteCookiesScopedByPathPreservesOtherPathsAndDomains(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":   tabID,
-		"name":  "local_admin",
-		"value": "1",
-		"path":  "/admin",
-	})
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":   tabID,
-		"name":  "local_root",
-		"value": "2",
-		"path":  "/",
-	})
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "other_admin",
-		"value":  "3",
-		"domain": "other.test",
-		"path":   "/admin",
-	})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "local_admin", "value": "1", "path": "/admin"})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "local_root", "value": "2", "path": "/"})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "other_admin", "value": "3", "domain": "other.test", "path": "/admin"})
 
-	// Path-only delete on 127.0.0.1 must remove local_admin even while tab is on
-	// /page2.html, while keeping local_root and other.test's /admin cookie.
-	callTool[struct{}](t, "delete_cookies", map[string]any{
-		"tab":  tabID,
-		"path": "/admin",
-	})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID, "path": "/admin"})
 
-	localAdmin := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{harness.httpSrv.URL + "/admin"},
-	})
-	for _, c := range localAdmin.Cookies {
+	localAdmin := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{harness.httpSrv.URL + "/admin"}})
+	for _, c := range cookieSlice(localAdmin) {
 		if c.Name == "local_admin" {
 			t.Errorf("expected local_admin deleted, still present: %+v", c)
 		}
 	}
 	foundRoot := false
-	for _, c := range localAdmin.Cookies {
+	for _, c := range cookieSlice(localAdmin) {
 		if c.Name == "local_root" {
 			foundRoot = true
 		}
 	}
 	if !foundRoot {
-		t.Errorf("expected local_root preserved, got: %+v", localAdmin.Cookies)
+		t.Errorf("expected local_root preserved, got: %+v", cookieSlice(localAdmin))
 	}
 
-	other := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{"http://other.test/admin"},
-	})
-	if len(other.Cookies) != 1 || other.Cookies[0].Name != "other_admin" {
-		t.Errorf("expected other.test/admin cookie preserved, got: %+v", other.Cookies)
+	other := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{"http://other.test/admin"}})
+	if len(cookieSlice(other)) != 1 || cookieSlice(other)[0].Name != "other_admin" {
+		t.Errorf("expected other.test/admin cookie preserved, got: %+v", cookieSlice(other))
 	}
 }
 
 func TestDeleteCookiesNameAndPathWithoutDomain(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":   tabID,
-		"name":  "admin_tok",
-		"value": "secret",
-		"path":  "/admin",
-	})
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":   tabID,
-		"name":  "admin_tok",
-		"value": "root",
-		"path":  "/",
-	})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "admin_tok", "value": "secret", "path": "/admin"})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "admin_tok", "value": "root", "path": "/"})
 
-	// Tab is on /page2.html, NOT /admin. Deleting by name+path without domain
-	// must still match and delete the /admin cookie while preserving / root.
-	callTool[struct{}](t, "delete_cookies", map[string]any{
-		"tab":  tabID,
-		"name": "admin_tok",
-		"path": "/admin",
-	})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "admin_tok", "path": "/admin"})
 
-	got := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{harness.httpSrv.URL + "/admin"},
-	})
-	for _, c := range got.Cookies {
+	got := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{harness.httpSrv.URL + "/admin"}})
+	for _, c := range cookieSlice(got) {
 		if c.Name == "admin_tok" && c.Path == "/admin" {
 			t.Fatalf("expected /admin cookie deleted, still present: %+v", c)
 		}
 	}
 	foundRoot := false
-	for _, c := range got.Cookies {
+	for _, c := range cookieSlice(got) {
 		if c.Name == "admin_tok" && c.Path == "/" {
 			foundRoot = true
 		}
 	}
 	if !foundRoot {
-		t.Fatalf("expected / cookie preserved, got: %+v", got.Cookies)
+		t.Fatalf("expected / cookie preserved, got: %+v", cookieSlice(got))
 	}
 }
 
 func TestDeleteCookiesRejectsWhitespaceAndDotDomain(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "keep_me",
-		"value":  "1",
-		"domain": "alpha.test",
-	})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "keep_me", "value": "1", "domain": "alpha.test"})
 
 	for _, bad := range []string{"   ", "."} {
-		errText := callToolExpectErr(t, "delete_cookies", map[string]any{
+		errText := callToolExpectErr(t, "cookies", map[string]any{
+			"action": "delete",
 			"tab":    tabID,
 			"domain": bad,
 		})
 		if !strings.Contains(errText, "invalid cookie domain") {
-			t.Errorf("delete_cookies(domain=%q) error = %q, want invalid cookie domain", bad, errText)
+			t.Errorf("cookies(delete, domain=%q) error = %q, want invalid cookie domain", bad, errText)
 		}
 	}
 
-	got := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{"http://alpha.test/"},
-	})
-	if len(got.Cookies) != 1 || got.Cookies[0].Name != "keep_me" {
-		t.Fatalf("invalid domain call wiped cookies: got %+v", got.Cookies)
+	got := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{"http://alpha.test/"}})
+	if len(cookieSlice(got)) != 1 || cookieSlice(got)[0].Name != "keep_me" {
+		t.Fatalf("invalid domain call wiped cookies: got %+v", cookieSlice(got))
 	}
 }
 
@@ -313,39 +303,32 @@ func TestCookies(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	// Set a cookie.
-	callTool[struct{}](t, "set_cookie", map[string]any{
+	setCookieHelper(t, map[string]any{
 		"tab":    tabID,
 		"name":   "test_cookie",
 		"value":  "test_value",
 		"domain": "127.0.0.1",
 	})
 
-	// Get cookies.
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab": tabID,
-	})
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
 	found := false
-	for _, c := range out.Cookies {
+	for _, c := range cookieSlice(out) {
 		if c.Name == "test_cookie" && c.Value == "test_value" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("set cookie not found in get_cookies output")
+		t.Error("set cookie not found in cookies(get) output")
 	}
 
-	// Delete the cookie.
-	callTool[struct{}](t, "delete_cookies", map[string]any{
+	deleteCookiesHelper(t, map[string]any{
 		"tab":    tabID,
 		"name":   "test_cookie",
 		"domain": "127.0.0.1",
 	})
 
-	out = callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab": tabID,
-	})
-	for _, c := range out.Cookies {
+	out = getCookiesHelper(t, map[string]any{"tab": tabID})
+	for _, c := range cookieSlice(out) {
 		if c.Name == "test_cookie" {
 			t.Error("cookie still exists after delete")
 		}
@@ -356,27 +339,14 @@ func TestClearCookies(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	// Set two cookies.
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "cookie_a",
-		"value":  "val_a",
-		"domain": "127.0.0.1",
-	})
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "cookie_b",
-		"value":  "val_b",
-		"domain": "127.0.0.1",
-	})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "cookie_a", "value": "val_a", "domain": "127.0.0.1"})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "cookie_b", "value": "val_b", "domain": "127.0.0.1"})
 
-	// Clear all cookies.
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	// Verify none remain.
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	if len(out.Cookies) != 0 {
-		t.Errorf("after delete_cookies, expected 0 cookies, got %d", len(out.Cookies))
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
+	if len(cookieSlice(out)) != 0 {
+		t.Errorf("after clear, expected 0 cookies, got %d", len(cookieSlice(out)))
 	}
 }
 
@@ -384,20 +354,21 @@ func TestCookieFields(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
+	setCookieHelper(t, map[string]any{
 		"tab":       tabID,
 		"name":      "field_test",
 		"value":     "field_value",
 		"domain":    "127.0.0.1",
 		"http_only": true,
 	})
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	var found *CookieInfo
-	for i := range out.Cookies {
-		if out.Cookies[i].Name == "field_test" {
-			found = &out.Cookies[i]
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
+	var found *cookieInfo
+	list := cookieSlice(out)
+	for i := range list {
+		if list[i].Name == "field_test" {
+			found = &list[i]
 			break
 		}
 	}
@@ -422,16 +393,11 @@ func TestSetCookieDefaultPath(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "path_test",
-		"value":  "pv",
-		"domain": "127.0.0.1",
-	})
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "path_test", "value": "pv", "domain": "127.0.0.1"})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
+	for _, c := range cookieSlice(out) {
 		if c.Name == "path_test" {
 			if c.Path != "/" {
 				t.Errorf("default path = %q, want '/'", c.Path)
@@ -445,9 +411,9 @@ func TestSetCookieDefaultPath(t *testing.T) {
 func TestSetCookieCustomPath(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
+	setCookieHelper(t, map[string]any{
 		"tab":    tabID,
 		"name":   "path_cookie",
 		"value":  "pv",
@@ -455,8 +421,8 @@ func TestSetCookieCustomPath(t *testing.T) {
 		"path":   "/subdir",
 	})
 
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
+	out := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{harness.httpSrv.URL + "/subdir"}})
+	for _, c := range cookieSlice(out) {
 		if c.Name == "path_cookie" {
 			if c.Path != "/subdir" {
 				t.Errorf("cookie path = %q, want '/subdir'", c.Path)
@@ -464,339 +430,146 @@ func TestSetCookieCustomPath(t *testing.T) {
 			return
 		}
 	}
-	// The cookie may not be returned for the current URL since it's scoped to /subdir.
-	// That's actually correct behaviour — just verify no error occurred.
+	t.Error("cookie 'path_cookie' not found for /subdir")
 }
 
-func TestSetCookieSameSite(t *testing.T) {
+func TestSetCookieSameSiteAndExpires(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
+	expiry := float64(time.Now().Add(time.Hour).Unix())
+	setCookieHelper(t, map[string]any{
 		"tab":       tabID,
-		"name":      "ss_cookie",
+		"name":      "ss_lax",
 		"value":     "ssv",
 		"domain":    "127.0.0.1",
 		"same_site": "Lax",
+		"expires":   expiry,
+	})
+	setCookieHelper(t, map[string]any{
+		"tab":       tabID,
+		"name":      "ss_strict",
+		"value":     "sv",
+		"domain":    "127.0.0.1",
+		"same_site": "Strict",
 	})
 
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
-		if c.Name == "ss_cookie" {
-			if c.SameSite != "Lax" {
-				t.Errorf("same_site = %q, want 'Lax'", c.SameSite)
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
+	seenLax, seenStrict := false, false
+	for _, c := range cookieSlice(out) {
+		switch c.Name {
+		case "ss_lax":
+			seenLax = true
+			if c.SameSite != "Lax" || c.Expires <= 0 || c.Size <= 0 {
+				t.Errorf("ss_lax = %+v", c)
 			}
-			return
+		case "ss_strict":
+			seenStrict = true
+			if c.SameSite != "Strict" {
+				t.Errorf("ss_strict same_site = %q, want Strict", c.SameSite)
+			}
 		}
 	}
-	t.Error("cookie 'ss_cookie' not found")
-}
-
-func TestSetCookieWithExpires(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	// Set expiry 1 hour from now.
-	expiry := float64(time.Now().Add(time.Hour).Unix())
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":     tabID,
-		"name":    "exp_cookie",
-		"value":   "ev",
-		"domain":  "127.0.0.1",
-		"expires": expiry,
-	})
-
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
-		if c.Name == "exp_cookie" {
-			if c.Expires <= 0 {
-				t.Errorf("expires = %f, want > 0", c.Expires)
-			}
-			return
-		}
+	if !seenLax || !seenStrict {
+		t.Fatalf("missing expected cookies: lax=%v strict=%v", seenLax, seenStrict)
 	}
-	t.Error("cookie 'exp_cookie' not found")
 }
 
 func TestDeleteCookieWithoutDomain(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "no_domain_del",
-		"value":  "val",
-		"domain": "127.0.0.1",
-	})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "no_domain_del", "value": "val", "domain": "127.0.0.1"})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "no_domain_del"})
 
-	// Delete without specifying domain on an HTTP(S) page defaults to the
-	// active tab's URL and deletes the cookie.
-	callTool[struct{}](t, "delete_cookies", map[string]any{
-		"tab":  tabID,
-		"name": "no_domain_del",
-	})
-	after := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range after.Cookies {
+	after := getCookiesHelper(t, map[string]any{"tab": tabID})
+	for _, c := range cookieSlice(after) {
 		if c.Name == "no_domain_del" {
 			t.Fatalf("cookie %q was not deleted when domain was omitted on HTTP page", c.Name)
 		}
 	}
 
-	// On a non-HTTP page (about:blank), omitting domain must return an error.
-	callTool[NavigateOutput](t, "navigate", map[string]any{
-		"tab": tabID,
-		"url": "about:blank",
-	})
-	errText := callToolExpectErr(t, "delete_cookies", map[string]any{
-		"tab":  tabID,
-		"name": "no_domain_del",
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": "about:blank"})
+	errText := callToolExpectErr(t, "cookies", map[string]any{
+		"action": "delete",
+		"tab":    tabID,
+		"name":   "no_domain_del",
 	})
 	if !strings.Contains(errText, "domain") {
 		t.Errorf("expected error about domain requirement on about:blank, got: %s", errText)
 	}
 }
 
-func TestDeleteNonexistentCookie(t *testing.T) {
+func TestDeleteNonexistentAndIdempotentClear(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	// Should not error.
-	callTool[struct{}](t, "delete_cookies", map[string]any{
-		"tab":    tabID,
-		"name":   "nonexistent_cookie_xyz",
-		"domain": "127.0.0.1",
-	})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "nonexistent_cookie_xyz", "domain": "127.0.0.1"})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID})
+	deleteCookiesHelper(t, map[string]any{"tab": tabID})
 }
 
-func TestClearCookiesIdempotent(t *testing.T) {
+func TestCookieOverwriteAndPathDelete(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	// Clear when nothing exists — should not error.
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-}
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "overwrite_test", "value": "v1", "domain": "127.0.0.1"})
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "overwrite_test", "value": "v2", "domain": "127.0.0.1"})
 
-func TestCookieSizeField(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "size_test",
-		"value":  "somevalue",
-		"domain": "127.0.0.1",
-	})
-
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
-		if c.Name == "size_test" {
-			if c.Size <= 0 {
-				t.Errorf("cookie size = %d, want > 0", c.Size)
-			}
-			return
-		}
-	}
-	t.Error("cookie 'size_test' not found")
-}
-
-func TestCookieOverwrite(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	// Set cookie with value "v1".
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "overwrite_test",
-		"value":  "v1",
-		"domain": "127.0.0.1",
-	})
-
-	// Overwrite with value "v2".
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "overwrite_test",
-		"value":  "v2",
-		"domain": "127.0.0.1",
-	})
-
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
+	out := getCookiesHelper(t, map[string]any{"tab": tabID})
 	var found int
 	var lastValue string
-	for _, c := range out.Cookies {
+	for _, c := range cookieSlice(out) {
 		if c.Name == "overwrite_test" {
 			found++
 			lastValue = c.Value
 		}
 	}
-	if found != 1 {
-		t.Errorf("expected exactly 1 cookie named 'overwrite_test', found %d", found)
+	if found != 1 || lastValue != "v2" {
+		t.Errorf("overwrite_test found=%d val=%q, want 1/v2", found, lastValue)
 	}
-	if lastValue != "v2" {
-		t.Errorf("cookie value = %q, want 'v2'", lastValue)
-	}
-}
 
-func TestSetCookieSameSiteStrict(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":       tabID,
-		"name":      "strict_cookie",
-		"value":     "sv",
-		"domain":    "127.0.0.1",
-		"same_site": "Strict",
-	})
-
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
-		if c.Name == "strict_cookie" {
-			if c.SameSite != "Strict" {
-				t.Errorf("same_site = %q, want 'Strict'", c.SameSite)
-			}
-			return
-		}
-	}
-	t.Error("cookie 'strict_cookie' not found")
-}
-
-func TestDeleteCookieWithPath(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	defer callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "path_del_test",
-		"value":  "pv",
-		"domain": "127.0.0.1",
-		"path":   "/",
-	})
-
-	// Delete with name + domain + path.
-	callTool[struct{}](t, "delete_cookies", map[string]any{
-		"tab":    tabID,
-		"name":   "path_del_test",
-		"domain": "127.0.0.1",
-		"path":   "/",
-	})
-
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	for _, c := range out.Cookies {
-		if c.Name == "path_del_test" {
+	deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "overwrite_test", "domain": "127.0.0.1", "path": "/"})
+	out = getCookiesHelper(t, map[string]any{"tab": tabID})
+	for _, c := range cookieSlice(out) {
+		if c.Name == "overwrite_test" {
 			t.Error("cookie should have been deleted")
 		}
 	}
 }
 
-func TestGetCookiesNoCookies(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	// Clear any existing cookies first.
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	if out.Cookies == nil {
-		t.Error("cookies should be an empty array, not nil")
-	}
-	if len(out.Cookies) != 0 {
-		t.Errorf("expected 0 cookies after clear, got %d", len(out.Cookies))
-	}
-}
-
-func TestGetCookiesWithURLs(t *testing.T) {
+func TestGetCookiesNoCookiesAndURLFilter(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	// Set a cookie scoped to the test server.
-	callTool[struct{}](t, "set_cookie", map[string]any{
-		"tab":    tabID,
-		"name":   "url_test_cookie",
-		"value":  "hello",
-		"domain": "127.0.0.1",
-		"path":   "/",
-	})
-	defer func() {
-		callTool[struct{}](t, "delete_cookies", map[string]any{
-			"tab":    tabID,
-			"name":   "url_test_cookie",
-			"domain": "127.0.0.1",
-		})
-	}()
+	deleteCookiesHelper(t, map[string]any{"tab": tabID})
 
-	// Get cookies with explicit URLs — should return the cookie.
-	out := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{fixtureURL("index.html")},
-	})
+	rawEmpty := callToolRaw(t, "cookies", map[string]any{"action": "get", "tab": tabID})
+	if rawEmpty.IsError || !strings.Contains(contentText(rawEmpty), `"cookies":[]`) {
+		t.Fatalf("empty cookies(get) = %s (err=%v), want \"cookies\":[]", contentText(rawEmpty), rawEmpty.IsError)
+	}
+
+	setCookieHelper(t, map[string]any{"tab": tabID, "name": "url_test_cookie", "value": "hello", "domain": "127.0.0.1", "path": "/"})
+	defer deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "url_test_cookie", "domain": "127.0.0.1"})
+
+	out := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{fixtureURL("index.html")}})
 	found := false
-	for _, c := range out.Cookies {
-		if c.Name == "url_test_cookie" {
+	for _, c := range cookieSlice(out) {
+		if c.Name == "url_test_cookie" && c.Value == "hello" {
 			found = true
-			if c.Value != "hello" {
-				t.Errorf("cookie value = %q, want %q", c.Value, "hello")
-			}
 		}
 	}
 	if !found {
-		t.Error("get_cookies with urls did not return the expected cookie")
+		t.Error("cookies(get) with matching urls did not return url_test_cookie")
 	}
 
-	// Get cookies with a URL that doesn't match — should NOT return the cookie.
-	out2 := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{
-		"tab":  tabID,
-		"urls": []string{"https://example.com/"},
-	})
-	for _, c := range out2.Cookies {
+	out2 := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{"https://example.com/"}})
+	for _, c := range cookieSlice(out2) {
 		if c.Name == "url_test_cookie" {
-			t.Error("get_cookies with non-matching URL should not return the cookie")
+			t.Error("cookies(get) with non-matching URL should not return url_test_cookie")
 		}
 	}
-}
-
-// TestDeleteCookiesClearAll verifies that omitting name clears all cookies.
-func TestDeleteCookiesClearAll(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	// Set cookies via JS (simpler, no domain issues).
-	type evalResult struct {
-		Result string `json:"result"`
-	}
-	callTool[evalResult](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.cookie = 'a=1'; document.cookie = 'b=2'; 'ok'",
-	})
-
-	// Verify they exist.
-	cookies := callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	if len(cookies.Cookies) < 2 {
-		t.Fatalf("expected at least 2 cookies, got %d", len(cookies.Cookies))
-	}
-
-	// Delete all (no name).
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-
-	// Verify all cleared.
-	cookies = callTool[GetCookiesOutput](t, "get_cookies", map[string]any{"tab": tabID})
-	if len(cookies.Cookies) != 0 {
-		t.Fatalf("expected 0 cookies after clear-all, got %d", len(cookies.Cookies))
-	}
-}
-
-// TestDeleteCookiesClearAllIdempotent verifies double clear-all is fine.
-func TestDeleteCookiesClearAllIdempotent(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
-	callTool[struct{}](t, "delete_cookies", map[string]any{"tab": tabID})
 }

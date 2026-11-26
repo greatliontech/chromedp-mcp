@@ -9,10 +9,10 @@ import (
 
 // findRequest returns the first network entry whose URL contains the
 // substring, or fails the test.
-func findRequest(t *testing.T, tabID, urlPattern string) GetNetworkRequestsOutput {
+func findRequest(t *testing.T, tabID, urlPattern string) getNetworkRequestsOutput {
 	t.Helper()
 	waitForNetwork(t, tabID, urlPattern)
-	out := callTool[GetNetworkRequestsOutput](t, "get_network_requests", map[string]any{
+	out := callTool[getNetworkRequestsOutput](t, "get_network_requests", map[string]any{
 		"tab":         tabID,
 		"mode":        "peek",
 		"url_pattern": urlPattern,
@@ -30,7 +30,7 @@ func TestRequestBodyInlinedSmallPOST(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	body := `{"hello":"world","n":42}`
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": fmt.Sprintf(
 			`fetch('/submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:%q})`,
@@ -66,7 +66,7 @@ func TestRequestBodyTruncatedLargePOST(t *testing.T) {
 	// but omit PostDataEntries from the requestWillBeSent event, so the
 	// inline body should be empty and only fetchable via get_network_body.
 	const total = 8192
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": fmt.Sprintf(
 			`fetch('/submit', {method:'POST', body:'A'.repeat(%d)})`,
@@ -85,7 +85,7 @@ func TestRequestBodyTruncatedLargePOST(t *testing.T) {
 			len(r.RequestBody), r.RequestBodyTruncated)
 	}
 
-	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	full := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": r.ID,
 		"part":       "request",
@@ -117,7 +117,7 @@ func TestRequestBodyBinaryPOST(t *testing.T) {
 		jsArray += fmt.Sprintf("%d", b)
 	}
 	jsArray += "]"
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": fmt.Sprintf(
 			`fetch('/submit', {method:'POST', body:new Uint8Array(%s)})`,
@@ -148,7 +148,7 @@ func TestRequestBodyAbsentForGETIntegration(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `fetch('/api/data')`,
 	})
@@ -173,7 +173,7 @@ func TestGetRequestBodyForSmallPOST(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	body := `name=alpha&value=1`
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": fmt.Sprintf(
 			`fetch('/submit', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:%q})`,
@@ -184,7 +184,7 @@ func TestGetRequestBodyForSmallPOST(t *testing.T) {
 	out := findRequest(t, tabID, "/submit")
 	r := out.Requests[0]
 
-	full := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	full := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":        tabID,
 		"request_id": r.ID,
 		"part":       "request",
@@ -196,7 +196,7 @@ func TestGetRequestBodyForSmallPOST(t *testing.T) {
 		t.Errorf("get_network_body(part=request) body = %q, want %q", full.Body, body)
 	}
 
-	sliced := callTool[BodySliceOutput](t, "get_network_body", map[string]any{
+	sliced := callTool[bodySliceOutput](t, "get_network_body", map[string]any{
 		"tab":         tabID,
 		"request_id":  r.ID,
 		"part":        "request",

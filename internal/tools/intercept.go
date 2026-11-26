@@ -20,9 +20,9 @@ const (
 	interceptOpClear  = "clear"
 )
 
-// InterceptInput is the input for intercept.
-type InterceptInput struct {
-	TabInput
+// interceptInput is the input for intercept.
+type interceptInput struct {
+	tabInput
 	Action string `json:"action" jsonschema:"Interception action: 'fulfill' (add mock response rule), 'modify' (add request rewrite rule), 'fail' (add request block/abort rule), 'remove' (remove one rule by id), 'list' (list active rules), or 'clear' (remove all rules). Required."`
 
 	// Rule ID (for action='remove')
@@ -51,8 +51,8 @@ type InterceptInput struct {
 	ErrorReason string `json:"error_reason,omitempty" jsonschema:"CDP network error reason for action='fail' (default 'Failed'; e.g. 'BlockedByClient' to block URLs)."`
 }
 
-// InterceptOutput is the output for intercept.
-type InterceptOutput struct {
+// interceptOutput is the output for intercept.
+type interceptOutput struct {
 	ID      string                         `json:"id,omitempty"`
 	Rules   *[]collector.InterceptRuleInfo `json:"rules,omitempty"`
 	Removed *int                           `json:"removed,omitempty"`
@@ -141,7 +141,7 @@ func isBodylessStatus(status int) bool {
 	return (status >= 100 && status <= 199) || status == 204 || status == 205 || status == 304
 }
 
-func hasInterceptRuleFields(input InterceptInput) bool {
+func hasInterceptRuleFields(input interceptInput) bool {
 	return input.URLPattern != "" ||
 		input.Method != "" ||
 		input.ResourceType != "" ||
@@ -156,7 +156,7 @@ func hasInterceptRuleFields(input InterceptInput) bool {
 		input.ErrorReason != ""
 }
 
-func buildInterceptRule(input InterceptInput) (collector.InterceptRule, error) {
+func buildInterceptRule(input interceptInput) (collector.InterceptRule, error) {
 	if input.ID != "" {
 		return collector.InterceptRule{}, fmt.Errorf("id is only valid when action is 'remove'")
 	}
@@ -261,76 +261,76 @@ func registerInterceptTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "intercept",
 		Description: "Manage network request interception rules on a tab (via CDP Fetch domain). Add rules with action='fulfill' (mock), 'modify' (rewrite), or 'fail' (block/abort); remove one with 'remove'; inspect with 'list'; or remove all with 'clear'. Rules evaluate in insertion order (first match wins); Fetch interception enables lazily on the first rule and disables automatically when none remain.",
-		InputSchema: schemaWithEnums[InterceptInput](map[string][]string{
+		InputSchema: schemaWithEnums[interceptInput](map[string][]string{
 			"action":        interceptToolActionValues,
 			"resource_type": networkResourceTypeValues,
 			"error_reason":  interceptErrorReasonValues,
 		}),
 		Annotations: destructiveAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input InterceptInput) (*mcp.CallToolResult, InterceptOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input interceptInput) (*mcp.CallToolResult, interceptOutput, error) {
 		if err := validateEnum("action", input.Action, false, interceptToolActionValues); err != nil {
-			return nil, InterceptOutput{}, err
+			return nil, interceptOutput{}, err
 		}
 
 		switch input.Action {
 		case interceptOpRemove:
 			if input.ID == "" {
-				return nil, InterceptOutput{}, fmt.Errorf("rule id is required for action='remove'")
+				return nil, interceptOutput{}, fmt.Errorf("rule id is required for action='remove'")
 			}
 			if hasInterceptRuleFields(input) {
-				return nil, InterceptOutput{}, fmt.Errorf("action='remove' only accepts id (not rule definition fields)")
+				return nil, interceptOutput{}, fmt.Errorf("action='remove' only accepts id (not rule definition fields)")
 			}
 			t, err := mgr.ResolveTab("", input.Tab)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
 			if err := t.RemoveInterceptRule(ctx, input.ID); err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
-			return nil, InterceptOutput{}, nil
+			return nil, interceptOutput{}, nil
 
 		case interceptOpList:
 			if input.ID != "" || hasInterceptRuleFields(input) {
-				return nil, InterceptOutput{}, fmt.Errorf("action='list' does not accept id or rule definition fields")
+				return nil, interceptOutput{}, fmt.Errorf("action='list' does not accept id or rule definition fields")
 			}
 			t, err := mgr.ResolveTab("", input.Tab)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
 			rules := t.ListInterceptRules()
 			if rules == nil {
 				rules = []collector.InterceptRuleInfo{}
 			}
-			return nil, InterceptOutput{Rules: &rules}, nil
+			return nil, interceptOutput{Rules: &rules}, nil
 
 		case interceptOpClear:
 			if input.ID != "" || hasInterceptRuleFields(input) {
-				return nil, InterceptOutput{}, fmt.Errorf("action='clear' does not accept id or rule definition fields")
+				return nil, interceptOutput{}, fmt.Errorf("action='clear' does not accept id or rule definition fields")
 			}
 			t, err := mgr.ResolveTab("", input.Tab)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
 			removed, err := t.ClearInterceptRules(ctx)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
-			return nil, InterceptOutput{Removed: &removed}, nil
+			return nil, interceptOutput{Removed: &removed}, nil
 
 		default:
 			rule, err := buildInterceptRule(input)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
 			t, err := mgr.ResolveTab("", input.Tab)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
 			ruleID, err := t.AddInterceptRule(ctx, rule)
 			if err != nil {
-				return nil, InterceptOutput{}, err
+				return nil, interceptOutput{}, err
 			}
-			return nil, InterceptOutput{ID: ruleID}, nil
+			return nil, interceptOutput{ID: ruleID}, nil
 		}
 	})
 }

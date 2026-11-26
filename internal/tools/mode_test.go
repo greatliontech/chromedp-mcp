@@ -11,10 +11,10 @@ func TestValidateModeAccepted(t *testing.T) {
 		mode    string
 		allowed []string
 	}{
-		{ModePeek, []string{ModePeek, ModeDrain}},
-		{ModeDrain, []string{ModePeek, ModeDrain}},
-		{TypeModeReplace, []string{TypeModeReplace, TypeModeAppend}},
-		{TypeModeAppend, []string{TypeModeReplace, TypeModeAppend}},
+		{modePeek, []string{modePeek, modeDrain}},
+		{modeDrain, []string{modePeek, modeDrain}},
+		{typeModeReplace, []string{typeModeReplace, typeModeAppend}},
+		{typeModeAppend, []string{typeModeReplace, typeModeAppend}},
 	}
 	for _, tc := range cases {
 		if err := validateMode(tc.mode, tc.allowed...); err != nil {
@@ -26,7 +26,7 @@ func TestValidateModeAccepted(t *testing.T) {
 // TestValidateModeEmpty verifies an empty mode is rejected (no silent
 // default into destructive behavior).
 func TestValidateModeEmpty(t *testing.T) {
-	err := validateMode("", ModePeek, ModeDrain)
+	err := validateMode("", modePeek, modeDrain)
 	if err == nil {
 		t.Fatal("validateMode(\"\", ...) returned nil; want error")
 	}
@@ -38,7 +38,7 @@ func TestValidateModeEmpty(t *testing.T) {
 // TestValidateModeInvalid verifies unknown values are rejected with a
 // message that surfaces the offending value.
 func TestValidateModeInvalid(t *testing.T) {
-	err := validateMode("clear", ModePeek, ModeDrain)
+	err := validateMode("clear", modePeek, modeDrain)
 	if err == nil {
 		t.Fatal("validateMode(\"clear\", ...) returned nil; want error")
 	}
@@ -51,10 +51,10 @@ func TestValidateModeInvalid(t *testing.T) {
 // mode-set is rejected when validated against the other set — a buffer
 // "drain" must not accidentally be accepted by the type tool.
 func TestValidateModeCrossModeRejected(t *testing.T) {
-	if err := validateMode(ModePeek, TypeModeReplace, TypeModeAppend); err == nil {
+	if err := validateMode(modePeek, typeModeReplace, typeModeAppend); err == nil {
 		t.Error("validateMode(ModePeek, type-modes) returned nil; want error")
 	}
-	if err := validateMode(TypeModeReplace, ModePeek, ModeDrain); err == nil {
+	if err := validateMode(typeModeReplace, modePeek, modeDrain); err == nil {
 		t.Error("validateMode(TypeModeReplace, buffer-modes) returned nil; want error")
 	}
 }

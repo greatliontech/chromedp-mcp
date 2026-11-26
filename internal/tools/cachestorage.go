@@ -15,26 +15,29 @@ import (
 
 const defaultCacheStoragePageSize = 50
 
-// GetCacheStorageInput is the input for get_cache_storage.
-type GetCacheStorageInput struct {
-	TabInput
-	CacheName  string `json:"cache_name,omitempty" jsonschema:"Cache name. Omit to list all caches on the current page's origin."`
-	RequestURL string `json:"request_url,omitempty" jsonschema:"Exact request URL of a cached entry to read its response body (requires cache_name)."`
-	PathFilter string `json:"path_filter,omitempty" jsonschema:"Optional case-insensitive substring filter on entry URL paths when listing entries (requires cache_name; cannot be combined with request_url)."`
-	Skip       int    `json:"skip,omitempty" jsonschema:"Number of entries to skip when listing entries (default 0, requires cache_name; cannot be combined with request_url)."`
-	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum entries to return when listing entries (default 50, requires cache_name; cannot be combined with request_url)."`
-	RangeStart int64  `json:"range_start,omitempty" jsonschema:"Byte offset to start slicing the cached response body (default 0, requires request_url)."`
-	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"Byte offset (exclusive) to end slicing the cached response body (0 = end of body, requires request_url)."`
+var cacheStorageActionValues = []string{"get", "delete"}
+
+// cacheStorageInput is the input for cache_storage.
+type cacheStorageInput struct {
+	tabInput
+	Action     string `json:"action" jsonschema:"Cache Storage action: 'get' (list caches/entries or read cached response) or 'delete' (delete cache or entry). Required."`
+	CacheName  string `json:"cache_name,omitempty" jsonschema:"Cache name. Required for action='delete'; omit on action='get' to list all caches on the current origin."`
+	RequestURL string `json:"request_url,omitempty" jsonschema:"Exact request URL of a cached entry (requires cache_name). On action='get', reads its response body; on action='delete', deletes only that entry."`
+	PathFilter string `json:"path_filter,omitempty" jsonschema:"For action='get': case-insensitive substring filter on entry URL paths when listing entries (requires cache_name; cannot combine with request_url)."`
+	Skip       int    `json:"skip,omitempty" jsonschema:"For action='get': entries to skip when listing entries (default 0, requires cache_name; cannot combine with request_url)."`
+	Limit      int    `json:"limit,omitempty" jsonschema:"For action='get': maximum entries to return when listing entries (default 50, requires cache_name; cannot combine with request_url)."`
+	RangeStart int64  `json:"range_start,omitempty" jsonschema:"For action='get': byte offset to start slicing cached response body (default 0, requires request_url)."`
+	RangeEnd   int64  `json:"range_end,omitempty" jsonschema:"For action='get': exclusive byte offset to end slicing cached response body (0 = end of body, requires request_url)."`
 }
 
-// CacheStorageInfo describes a single Cache Storage cache on the origin.
-type CacheStorageInfo struct {
+// cacheStorageInfo describes a single Cache Storage cache on the origin.
+type cacheStorageInfo struct {
 	Name           string `json:"name"`
 	SecurityOrigin string `json:"security_origin,omitempty"`
 }
 
-// CacheStorageEntryInfo describes metadata for one cached entry.
-type CacheStorageEntryInfo struct {
+// cacheStorageEntryInfo describes metadata for one cached entry.
+type cacheStorageEntryInfo struct {
 	RequestURL      string            `json:"request_url"`
 	RequestMethod   string            `json:"request_method"`
 	ResponseStatus  int64             `json:"response_status"`
@@ -45,12 +48,12 @@ type CacheStorageEntryInfo struct {
 	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
 }
 
-// GetCacheStorageOutput is the mode-specific output for get_cache_storage.
-type GetCacheStorageOutput struct {
-	Caches []CacheStorageInfo `json:"caches,omitempty"`
+// cacheStorageOutput is the mode-specific output for cache_storage.
+type cacheStorageOutput struct {
+	Caches []cacheStorageInfo `json:"caches,omitempty"`
 
 	CacheName string                  `json:"cache_name,omitempty"`
-	Entries   []CacheStorageEntryInfo `json:"entries,omitempty"`
+	Entries   []cacheStorageEntryInfo `json:"entries,omitempty"`
 	Total     int64                   `json:"total,omitempty"`
 	HasMore   bool                    `json:"has_more,omitempty"`
 
@@ -66,19 +69,20 @@ type GetCacheStorageOutput struct {
 }
 
 // MarshalJSON emits clean per-mode JSON with non-null empty arrays ([]):
-//   - list-caches mode:  {"caches": [...]}
-//   - list-entries mode: {"cache_name": "...", "entries": [...], "total": N, "has_more": bool}
+//   - delete mode:        {}
+//   - list-caches mode:   {"caches": [...]}
+//   - list-entries mode:  {"cache_name": "...", "entries": [...], "total": N, "has_more": bool}
 //   - read-response mode: {"cache_name": "...", "request_url": "...", "status": N, ..., "body": "...", "base64_encoded": bool, "total_bytes": N, "truncated": bool}
-func (o GetCacheStorageOutput) MarshalJSON() ([]byte, error) {
+func (o cacheStorageOutput) MarshalJSON() ([]byte, error) {
 	if o.Caches != nil {
 		return json.Marshal(struct {
-			Caches []CacheStorageInfo `json:"caches"`
+			Caches []cacheStorageInfo `json:"caches"`
 		}{Caches: o.Caches})
 	}
 	if o.Entries != nil {
 		return json.Marshal(struct {
 			CacheName string                  `json:"cache_name"`
-			Entries   []CacheStorageEntryInfo `json:"entries"`
+			Entries   []cacheStorageEntryInfo `json:"entries"`
 			Total     int64                   `json:"total"`
 			HasMore   bool                    `json:"has_more"`
 		}{
@@ -88,36 +92,32 @@ func (o GetCacheStorageOutput) MarshalJSON() ([]byte, error) {
 			HasMore:   o.HasMore,
 		})
 	}
-	return json.Marshal(struct {
-		CacheName       string            `json:"cache_name"`
-		RequestURL      string            `json:"request_url"`
-		Status          int64             `json:"status"`
-		StatusText      string            `json:"status_text,omitempty"`
-		ResponseType    string            `json:"response_type,omitempty"`
-		ResponseHeaders map[string]string `json:"response_headers,omitempty"`
-		Body            string            `json:"body"`
-		Base64Encoded   bool              `json:"base64_encoded"`
-		TotalBytes      int64             `json:"total_bytes"`
-		Truncated       bool              `json:"truncated"`
-	}{
-		CacheName:       o.CacheName,
-		RequestURL:      o.RequestURL,
-		Status:          o.Status,
-		StatusText:      o.StatusText,
-		ResponseType:    o.ResponseType,
-		ResponseHeaders: o.ResponseHeaders,
-		Body:            o.Body,
-		Base64Encoded:   o.Base64Encoded,
-		TotalBytes:      o.TotalBytes,
-		Truncated:       o.Truncated,
-	})
-}
-
-// DeleteCacheStorageInput is the input for delete_cache_storage.
-type DeleteCacheStorageInput struct {
-	TabInput
-	CacheName  string `json:"cache_name" jsonschema:"Cache name to delete or remove an entry from. Required."`
-	RequestURL string `json:"request_url,omitempty" jsonschema:"Optional exact request URL to delete from the cache. Omit to delete the entire cache."`
+	if o.RequestURL != "" {
+		return json.Marshal(struct {
+			CacheName       string            `json:"cache_name"`
+			RequestURL      string            `json:"request_url"`
+			Status          int64             `json:"status"`
+			StatusText      string            `json:"status_text,omitempty"`
+			ResponseType    string            `json:"response_type,omitempty"`
+			ResponseHeaders map[string]string `json:"response_headers,omitempty"`
+			Body            string            `json:"body"`
+			Base64Encoded   bool              `json:"base64_encoded"`
+			TotalBytes      int64             `json:"total_bytes"`
+			Truncated       bool              `json:"truncated"`
+		}{
+			CacheName:       o.CacheName,
+			RequestURL:      o.RequestURL,
+			Status:          o.Status,
+			StatusText:      o.StatusText,
+			ResponseType:    o.ResponseType,
+			ResponseHeaders: o.ResponseHeaders,
+			Body:            o.Body,
+			Base64Encoded:   o.Base64Encoded,
+			TotalBytes:      o.TotalBytes,
+			Truncated:       o.Truncated,
+		})
+	}
+	return []byte("{}"), nil
 }
 
 func cacheHeadersToMap(headers []*cachestorage.Header) map[string]string {
@@ -162,40 +162,89 @@ func paginateRange(total, skip, pageSize int) (start, end int, hasMore bool) {
 
 func registerCacheStorageTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "get_cache_storage",
-		Description: "Inspect Cache Storage (window.caches) on the current page's origin. Omit cache_name to list caches; pass cache_name to list entries; pass cache_name and request_url to read a cached response body (supports range_start/range_end slicing).",
-		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetCacheStorageInput) (*mcp.CallToolResult, GetCacheStorageOutput, error) {
+		Name:        "cache_storage",
+		Description: "Inspect or delete Cache Storage (window.caches) on the current page's origin. action='get' lists caches (omit cache_name), lists paginated entries (cache_name only), or reads a cached response body with range slicing (cache_name + request_url); action='delete' deletes an entire cache or one entry.",
+		InputSchema: schemaWithEnums[cacheStorageInput](map[string][]string{
+			"action": cacheStorageActionValues,
+		}),
+		Annotations: destructiveAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input cacheStorageInput) (*mcp.CallToolResult, cacheStorageOutput, error) {
+		if err := validateEnum("action", input.Action, false, cacheStorageActionValues); err != nil {
+			return nil, cacheStorageOutput{}, err
+		}
+
+		if input.Action == "delete" {
+			if input.CacheName == "" {
+				return nil, cacheStorageOutput{}, fmt.Errorf("cache_name is required for action='delete'")
+			}
+			if input.PathFilter != "" || input.Skip != 0 || input.Limit != 0 || input.RangeStart != 0 || input.RangeEnd != 0 {
+				return nil, cacheStorageOutput{}, fmt.Errorf("action='delete' does not accept path_filter, skip, limit, range_start, or range_end")
+			}
+			t, err := mgr.ResolveTab("", input.Tab)
+			if err != nil {
+				return nil, cacheStorageOutput{}, err
+			}
+			tctx, cancel := tabContext(ctx, t.Context())
+			defer cancel()
+
+			err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				origin, err := resolveOriginTarget(ctx, tgt)
+				if err != nil {
+					return err
+				}
+				cache, err := findCacheByName(ctx, tgt, origin, input.CacheName)
+				if err != nil {
+					return err
+				}
+				if input.RequestURL != "" {
+					_, err = cdp.Call(ctx, tgt, cachestorage.DeleteEntry, cachestorage.DeleteEntryParams{
+						CacheID: cache.CacheID,
+						Request: input.RequestURL,
+					})
+					return err
+				}
+				_, err = cdp.Call(ctx, tgt, cachestorage.DeleteCache, cachestorage.DeleteCacheParams{
+					CacheID: cache.CacheID,
+				})
+				return err
+			}))
+			if err != nil {
+				return nil, cacheStorageOutput{}, fmt.Errorf("cache_storage: %w", err)
+			}
+			return nil, cacheStorageOutput{}, nil
+		}
+
+		// action == "get"
 		if input.RequestURL != "" && input.CacheName == "" {
-			return nil, GetCacheStorageOutput{}, fmt.Errorf("request_url requires cache_name")
+			return nil, cacheStorageOutput{}, fmt.Errorf("request_url requires cache_name")
 		}
 		if (input.PathFilter != "" || input.Skip > 0 || input.Limit > 0) && input.CacheName == "" {
-			return nil, GetCacheStorageOutput{}, fmt.Errorf("path_filter, skip, and limit require cache_name")
+			return nil, cacheStorageOutput{}, fmt.Errorf("path_filter, skip, and limit require cache_name")
 		}
 		if input.Skip < 0 {
-			return nil, GetCacheStorageOutput{}, fmt.Errorf("skip must be >= 0, got %d", input.Skip)
+			return nil, cacheStorageOutput{}, fmt.Errorf("skip must be >= 0, got %d", input.Skip)
 		}
 		if err := validateLimit(input.Limit); err != nil {
-			return nil, GetCacheStorageOutput{}, err
+			return nil, cacheStorageOutput{}, err
 		}
 		if err := validateRange(input.RangeStart, input.RangeEnd); err != nil {
-			return nil, GetCacheStorageOutput{}, err
+			return nil, cacheStorageOutput{}, err
 		}
 		if (input.RangeStart > 0 || input.RangeEnd > 0) && input.RequestURL == "" {
-			return nil, GetCacheStorageOutput{}, fmt.Errorf("range_start and range_end require request_url")
+			return nil, cacheStorageOutput{}, fmt.Errorf("range_start and range_end require request_url")
 		}
 		if input.RequestURL != "" && (input.PathFilter != "" || input.Skip > 0 || input.Limit > 0) {
-			return nil, GetCacheStorageOutput{}, fmt.Errorf("request_url cannot be combined with path_filter, skip, or limit")
+			return nil, cacheStorageOutput{}, fmt.Errorf("request_url cannot be combined with path_filter, skip, or limit")
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, GetCacheStorageOutput{}, err
+			return nil, cacheStorageOutput{}, err
 		}
 		tctx, cancel := tabContext(ctx, t.Context())
 		defer cancel()
 
-		var out GetCacheStorageOutput
+		var out cacheStorageOutput
 		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
 			origin, err := resolveOriginTarget(ctx, tgt)
 			if err != nil {
@@ -211,12 +260,12 @@ func registerCacheStorageTools(s *mcp.Server, mgr *browser.Manager) {
 				if err != nil {
 					return err
 				}
-				caches := make([]CacheStorageInfo, 0, len(res.Caches))
+				caches := make([]cacheStorageInfo, 0, len(res.Caches))
 				for _, c := range res.Caches {
 					if c == nil {
 						continue
 					}
-					caches = append(caches, CacheStorageInfo{
+					caches = append(caches, cacheStorageInfo{
 						Name:           c.CacheName,
 						SecurityOrigin: c.SecurityOrigin,
 					})
@@ -252,12 +301,12 @@ func registerCacheStorageTools(s *mcp.Server, mgr *browser.Manager) {
 				start, end, hasMore := paginateRange(len(all), input.Skip, pageSize)
 				window := all[start:end]
 
-				entries := make([]CacheStorageEntryInfo, 0, len(window))
+				entries := make([]cacheStorageEntryInfo, 0, len(window))
 				for _, e := range window {
 					if e == nil {
 						continue
 					}
-					entries = append(entries, CacheStorageEntryInfo{
+					entries = append(entries, cacheStorageEntryInfo{
 						RequestURL:      e.RequestURL,
 						RequestMethod:   e.RequestMethod,
 						ResponseStatus:  e.ResponseStatus,
@@ -324,50 +373,8 @@ func registerCacheStorageTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil
 		}))
 		if err != nil {
-			return nil, GetCacheStorageOutput{}, fmt.Errorf("get_cache_storage: %w", err)
+			return nil, cacheStorageOutput{}, fmt.Errorf("cache_storage: %w", err)
 		}
 		return nil, out, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "delete_cache_storage",
-		Description: "Delete an entire Cache Storage cache or a single cached request entry on the current page's origin.",
-		Annotations: destructiveAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteCacheStorageInput) (*mcp.CallToolResult, struct{}, error) {
-		if input.CacheName == "" {
-			return nil, struct{}{}, fmt.Errorf("cache_name is required")
-		}
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		tctx, cancel := tabContext(ctx, t.Context())
-		defer cancel()
-
-		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-			origin, err := resolveOriginTarget(ctx, tgt)
-			if err != nil {
-				return err
-			}
-			cache, err := findCacheByName(ctx, tgt, origin, input.CacheName)
-			if err != nil {
-				return err
-			}
-			if input.RequestURL != "" {
-				_, err = cdp.Call(ctx, tgt, cachestorage.DeleteEntry, cachestorage.DeleteEntryParams{
-					CacheID: cache.CacheID,
-					Request: input.RequestURL,
-				})
-				return err
-			}
-			_, err = cdp.Call(ctx, tgt, cachestorage.DeleteCache, cachestorage.DeleteCacheParams{
-				CacheID: cache.CacheID,
-			})
-			return err
-		}))
-		if err != nil {
-			return nil, struct{}{}, fmt.Errorf("delete_cache_storage: %w", err)
-		}
-		return nil, struct{}{}, nil
 	})
 }

@@ -14,9 +14,9 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
-// DragAndDropInput is the input for drag_and_drop.
-type DragAndDropInput struct {
-	SelectorInput
+// dragAndDropInput is the input for drag_and_drop.
+type dragAndDropInput struct {
+	selectorInput
 	SourceRef       string   `json:"source_ref,omitempty" jsonschema:"Snapshot ref of the element to drag."`
 	SourceSelector  string   `json:"source_selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector of the element to drag."`
 	SourceFrame     string   `json:"source_frame,omitempty" jsonschema:"Optional same-origin frame ID for source_selector."`
@@ -36,21 +36,21 @@ func registerDragTools(s *mcp.Server, mgr *browser.Manager) {
 		Name:        "drag_and_drop",
 		Description: "Drag from a source (ref, CSS/shadow selector, or viewport coordinates) onto a target (ref, CSS/shadow selector, or coordinates). Supports both HTML5 draggable elements (DataTransfer via CDP drag interception) and pointer-based drags.",
 		Annotations: mutatingAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, inp DragAndDropInput) (*mcp.CallToolResult, ActionOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, inp dragAndDropInput) (*mcp.CallToolResult, actionOutput, error) {
 		if err := validatePointerTarget(inp.SourceRef, inp.SourceSelector, inp.SourceFrame, inp.SourceX, inp.SourceY, true); err != nil {
-			return nil, ActionOutput{}, fmt.Errorf("source: %w", err)
+			return nil, actionOutput{}, fmt.Errorf("source: %w", err)
 		}
 		if err := validatePointerTarget(inp.TargetRef, inp.TargetSelector, inp.TargetFrame, inp.TargetX, inp.TargetY, true); err != nil {
-			return nil, ActionOutput{}, fmt.Errorf("target: %w", err)
+			return nil, actionOutput{}, fmt.Errorf("target: %w", err)
 		}
 		if err := validateSelectorTimeout(inp.Timeout); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		if inp.Steps < 0 || inp.Steps > 100 {
-			return nil, ActionOutput{}, fmt.Errorf("steps must be between 0 and 100, got %d", inp.Steps)
+			return nil, actionOutput{}, fmt.Errorf("steps must be between 0 and 100, got %d", inp.Steps)
 		}
 		if err := validateObserveWindow(inp.ObserveWindowMs); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 		steps := inp.Steps
 		if steps == 0 {
@@ -59,7 +59,7 @@ func registerDragTools(s *mcp.Server, mgr *browser.Manager) {
 
 		t, err := mgr.ResolveTab("", inp.Tab)
 		if err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
 
 		tctx, tcancel := tabContext(ctx, t.Context())
@@ -93,7 +93,7 @@ func registerDragTools(s *mcp.Server, mgr *browser.Manager) {
 				}
 				return nil
 			})); err != nil {
-				return nil, ActionOutput{}, err
+				return nil, actionOutput{}, err
 			}
 		}
 
@@ -370,8 +370,8 @@ func registerDragTools(s *mcp.Server, mgr *browser.Manager) {
 			mouseDown = false
 			return nil
 		}); err != nil {
-			return nil, ActionOutput{}, err
+			return nil, actionOutput{}, err
 		}
-		return nil, ActionOutput{Observed: obs.close(tctx)}, nil
+		return nil, actionOutput{Observed: obs.close(tctx)}, nil
 	})
 }

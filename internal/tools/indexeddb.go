@@ -17,58 +17,60 @@ import (
 
 const defaultIndexedDBPageSize = 50
 
-// GetIndexedDBInput is the input for get_indexeddb.
-type GetIndexedDBInput struct {
-	TabInput
-	Database string `json:"database,omitempty" jsonschema:"Database name. If omitted, lists all IndexedDB database names for the current page's origin."`
-	Store    string `json:"store,omitempty" jsonschema:"Object store name (requires database). If omitted with database set, returns the database schema (version and object stores). If set, returns paginated records from the store."`
-	Index    string `json:"index,omitempty" jsonschema:"Optional index name within the object store to read records through (requires store)."`
-	Skip     int    `json:"skip,omitempty" jsonschema:"Number of records to skip for pagination (default 0, requires store)."`
-	Limit    int    `json:"limit,omitempty" jsonschema:"Maximum records to return (default 50, requires store)."`
+var indexedDBActionValues = []string{"get", "delete"}
+
+// indexedDBInput is the input for indexeddb.
+type indexedDBInput struct {
+	tabInput
+	Action   string `json:"action" jsonschema:"IndexedDB action: 'get' (inspect databases/stores/records) or 'delete' (delete database or clear store). Required."`
+	Database string `json:"database,omitempty" jsonschema:"Database name. Required for action='delete'; omit on action='get' to list all databases on the current origin."`
+	Store    string `json:"store,omitempty" jsonschema:"Object store name (requires database). On action='get', reads paginated records; on action='delete', clears the store instead of deleting the database."`
+	Index    string `json:"index,omitempty" jsonschema:"For action='get': optional index name within the object store (requires store)."`
+	Skip     int    `json:"skip,omitempty" jsonschema:"For action='get': records to skip for pagination (default 0, requires store)."`
+	Limit    int    `json:"limit,omitempty" jsonschema:"For action='get': maximum records to return (default 50, requires store)."`
 }
 
-// IndexedDBIndexInfo describes an index on an IndexedDB object store.
-type IndexedDBIndexInfo struct {
+// indexedDBIndexInfo describes an index on an IndexedDB object store.
+type indexedDBIndexInfo struct {
 	Name       string `json:"name"`
 	KeyPath    any    `json:"key_path,omitempty"`
 	Unique     bool   `json:"unique"`
 	MultiEntry bool   `json:"multi_entry"`
 }
 
-// IndexedDBStoreInfo describes an object store inside an IndexedDB database.
-type IndexedDBStoreInfo struct {
+// indexedDBStoreInfo describes an object store inside an IndexedDB database.
+type indexedDBStoreInfo struct {
 	Name          string               `json:"name"`
 	KeyPath       any                  `json:"key_path,omitempty"`
 	AutoIncrement bool                 `json:"auto_increment"`
-	Indexes       []IndexedDBIndexInfo `json:"indexes"`
+	Indexes       []indexedDBIndexInfo `json:"indexes"`
 }
 
-// IndexedDBEntry represents a single record read from an IndexedDB object store.
-// Key, PrimaryKey, and Value hold arbitrary decoded JSON values (numbers,
-// strings, arrays, objects, booleans, or null).
-type IndexedDBEntry struct {
+// indexedDBEntry represents a single record read from an IndexedDB object store.
+type indexedDBEntry struct {
 	Key        any `json:"key"`
 	PrimaryKey any `json:"primary_key"`
 	Value      any `json:"value"`
 }
 
-// GetIndexedDBOutput is the mode-specific output for get_indexeddb.
-type GetIndexedDBOutput struct {
+// indexedDBOutput is the mode-specific output for indexeddb.
+type indexedDBOutput struct {
 	Databases []string             `json:"databases,omitempty"`
 	Database  string               `json:"database,omitempty"`
 	Version   float64              `json:"version,omitempty"`
-	Stores    []IndexedDBStoreInfo `json:"stores,omitempty"`
+	Stores    []indexedDBStoreInfo `json:"stores,omitempty"`
 	Store     string               `json:"store,omitempty"`
 	Index     string               `json:"index,omitempty"`
-	Entries   []IndexedDBEntry     `json:"entries,omitempty"`
+	Entries   []indexedDBEntry     `json:"entries,omitempty"`
 	HasMore   bool                 `json:"has_more,omitempty"`
 }
 
 // MarshalJSON emits clean per-mode JSON with non-null empty arrays ([]):
-//   - list-databases mode:  {"databases": [...]}
+//   - delete mode:           {}
+//   - list-databases mode:   {"databases": [...]}
 //   - inspect-database mode: {"database": "...", "version": N, "stores": [...]}
-//   - read-records mode:    {"database": "...", "store": "...", "index"?: "...", "entries": [...], "has_more": bool}
-func (o GetIndexedDBOutput) MarshalJSON() ([]byte, error) {
+//   - read-records mode:     {"database": "...", "store": "...", "index"?: "...", "entries": [...], "has_more": bool}
+func (o indexedDBOutput) MarshalJSON() ([]byte, error) {
 	if o.Databases != nil {
 		return json.Marshal(struct {
 			Databases []string `json:"databases"`
@@ -78,37 +80,29 @@ func (o GetIndexedDBOutput) MarshalJSON() ([]byte, error) {
 		return json.Marshal(struct {
 			Database string               `json:"database"`
 			Version  float64              `json:"version"`
-			Stores   []IndexedDBStoreInfo `json:"stores"`
+			Stores   []indexedDBStoreInfo `json:"stores"`
 		}{
 			Database: o.Database,
 			Version:  o.Version,
 			Stores:   o.Stores,
 		})
 	}
-	entries := o.Entries
-	if entries == nil {
-		entries = []IndexedDBEntry{}
+	if o.Entries != nil {
+		return json.Marshal(struct {
+			Database string           `json:"database"`
+			Store    string           `json:"store"`
+			Index    string           `json:"index,omitempty"`
+			Entries  []indexedDBEntry `json:"entries"`
+			HasMore  bool             `json:"has_more"`
+		}{
+			Database: o.Database,
+			Store:    o.Store,
+			Index:    o.Index,
+			Entries:  o.Entries,
+			HasMore:  o.HasMore,
+		})
 	}
-	return json.Marshal(struct {
-		Database string           `json:"database"`
-		Store    string           `json:"store"`
-		Index    string           `json:"index,omitempty"`
-		Entries  []IndexedDBEntry `json:"entries"`
-		HasMore  bool             `json:"has_more"`
-	}{
-		Database: o.Database,
-		Store:    o.Store,
-		Index:    o.Index,
-		Entries:  entries,
-		HasMore:  o.HasMore,
-	})
-}
-
-// DeleteIndexedDBInput is the input for delete_indexeddb.
-type DeleteIndexedDBInput struct {
-	TabInput
-	Database string `json:"database" jsonschema:"Database name to delete or clear a store within. Required."`
-	Store    string `json:"store,omitempty" jsonschema:"Optional object store name. If provided, clears all records in that store; if omitted, deletes the entire database."`
+	return []byte("{}"), nil
 }
 
 func formatKeyPath(kp *indexeddb.KeyPath) any {
@@ -240,37 +234,86 @@ func decodeRawJSON(raw []byte) any {
 
 func registerIndexedDBTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "get_indexeddb",
-		Description: "Inspect IndexedDB on the current page's origin. Omit database to list database names; pass database to inspect its object stores and indexes; pass database and store to read paginated records.",
-		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input GetIndexedDBInput) (*mcp.CallToolResult, GetIndexedDBOutput, error) {
+		Name:        "indexeddb",
+		Description: "Inspect or delete IndexedDB data on the current page's origin. action='get' lists databases (omit database), inspects object stores/indexes (database only), or reads paginated records (database + store); action='delete' deletes a database or clears a single object store.",
+		InputSchema: schemaWithEnums[indexedDBInput](map[string][]string{
+			"action": indexedDBActionValues,
+		}),
+		Annotations: destructiveAnnotations(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input indexedDBInput) (*mcp.CallToolResult, indexedDBOutput, error) {
+		if err := validateEnum("action", input.Action, false, indexedDBActionValues); err != nil {
+			return nil, indexedDBOutput{}, err
+		}
+
+		if input.Action == "delete" {
+			if input.Database == "" {
+				return nil, indexedDBOutput{}, fmt.Errorf("database is required for action='delete'")
+			}
+			if input.Index != "" || input.Skip != 0 || input.Limit != 0 {
+				return nil, indexedDBOutput{}, fmt.Errorf("action='delete' does not accept index, skip, or limit")
+			}
+			t, err := mgr.ResolveTab("", input.Tab)
+			if err != nil {
+				return nil, indexedDBOutput{}, err
+			}
+			tctx, cancel := tabContext(ctx, t.Context())
+			defer cancel()
+
+			err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
+				origin, err := resolveOriginTarget(ctx, tgt)
+				if err != nil {
+					return err
+				}
+				if input.Store != "" {
+					_, err = cdp.Call(ctx, tgt, indexeddb.ClearObjectStore, indexeddb.ClearObjectStoreParams{
+						StorageKey:      origin.storageKey,
+						SecurityOrigin:  origin.securityOrigin,
+						DatabaseName:    input.Database,
+						ObjectStoreName: input.Store,
+					})
+					return err
+				}
+				_, err = cdp.Call(ctx, tgt, indexeddb.DeleteDatabase, indexeddb.DeleteDatabaseParams{
+					StorageKey:     origin.storageKey,
+					SecurityOrigin: origin.securityOrigin,
+					DatabaseName:   input.Database,
+				})
+				return err
+			}))
+			if err != nil {
+				return nil, indexedDBOutput{}, fmt.Errorf("indexeddb: %w", err)
+			}
+			return nil, indexedDBOutput{}, nil
+		}
+
+		// action == "get"
 		if input.Store != "" && input.Database == "" {
-			return nil, GetIndexedDBOutput{}, fmt.Errorf("store requires database")
+			return nil, indexedDBOutput{}, fmt.Errorf("store requires database")
 		}
 		if input.Index != "" && input.Store == "" {
-			return nil, GetIndexedDBOutput{}, fmt.Errorf("index requires store")
+			return nil, indexedDBOutput{}, fmt.Errorf("index requires store")
 		}
 		if input.Skip < 0 {
-			return nil, GetIndexedDBOutput{}, fmt.Errorf("skip must be >= 0, got %d", input.Skip)
+			return nil, indexedDBOutput{}, fmt.Errorf("skip must be >= 0, got %d", input.Skip)
 		}
 		if input.Skip > 0 && input.Store == "" {
-			return nil, GetIndexedDBOutput{}, fmt.Errorf("skip requires store")
+			return nil, indexedDBOutput{}, fmt.Errorf("skip requires store")
 		}
 		if err := validateLimit(input.Limit); err != nil {
-			return nil, GetIndexedDBOutput{}, err
+			return nil, indexedDBOutput{}, err
 		}
 		if input.Limit > 0 && input.Store == "" {
-			return nil, GetIndexedDBOutput{}, fmt.Errorf("limit requires store")
+			return nil, indexedDBOutput{}, fmt.Errorf("limit requires store")
 		}
 
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, GetIndexedDBOutput{}, err
+			return nil, indexedDBOutput{}, err
 		}
 		tctx, cancel := tabContext(ctx, t.Context())
 		defer cancel()
 
-		var out GetIndexedDBOutput
+		var out indexedDBOutput
 		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
 			origin, err := resolveOriginTarget(ctx, tgt)
 			if err != nil {
@@ -318,24 +361,24 @@ func registerIndexedDBTools(s *mcp.Server, mgr *browser.Manager) {
 				if db == nil {
 					return fmt.Errorf("database %q not found", input.Database)
 				}
-				stores := make([]IndexedDBStoreInfo, 0, len(db.ObjectStores))
+				stores := make([]indexedDBStoreInfo, 0, len(db.ObjectStores))
 				for _, st := range db.ObjectStores {
 					if st == nil {
 						continue
 					}
-					indexes := make([]IndexedDBIndexInfo, 0, len(st.Indexes))
+					indexes := make([]indexedDBIndexInfo, 0, len(st.Indexes))
 					for _, idx := range st.Indexes {
 						if idx == nil {
 							continue
 						}
-						indexes = append(indexes, IndexedDBIndexInfo{
+						indexes = append(indexes, indexedDBIndexInfo{
 							Name:       idx.Name,
 							KeyPath:    formatKeyPath(idx.KeyPath),
 							Unique:     idx.Unique,
 							MultiEntry: idx.MultiEntry,
 						})
 					}
-					stores = append(stores, IndexedDBStoreInfo{
+					stores = append(stores, indexedDBStoreInfo{
 						Name:          st.Name,
 						KeyPath:       formatKeyPath(st.KeyPath),
 						AutoIncrement: st.AutoIncrement,
@@ -367,7 +410,7 @@ func registerIndexedDBTools(s *mcp.Server, mgr *browser.Manager) {
 			}
 			defer releaseDataEntries(ctx, tgt, res.ObjectStoreDataEntries)
 
-			entries := make([]IndexedDBEntry, 0, len(res.ObjectStoreDataEntries))
+			entries := make([]indexedDBEntry, 0, len(res.ObjectStoreDataEntries))
 			for _, e := range res.ObjectStoreDataEntries {
 				if e == nil {
 					continue
@@ -384,7 +427,7 @@ func registerIndexedDBTools(s *mcp.Server, mgr *browser.Manager) {
 				if err != nil {
 					return err
 				}
-				entries = append(entries, IndexedDBEntry{
+				entries = append(entries, indexedDBEntry{
 					Key:        keyVal,
 					PrimaryKey: pkVal,
 					Value:      val,
@@ -398,50 +441,8 @@ func registerIndexedDBTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil
 		}))
 		if err != nil {
-			return nil, GetIndexedDBOutput{}, fmt.Errorf("get_indexeddb: %w", err)
+			return nil, indexedDBOutput{}, fmt.Errorf("indexeddb: %w", err)
 		}
 		return nil, out, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "delete_indexeddb",
-		Description: "Delete an IndexedDB database or clear all records from one of its object stores on the current page's origin.",
-		Annotations: destructiveAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input DeleteIndexedDBInput) (*mcp.CallToolResult, struct{}, error) {
-		if input.Database == "" {
-			return nil, struct{}{}, fmt.Errorf("database is required")
-		}
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-		tctx, cancel := tabContext(ctx, t.Context())
-		defer cancel()
-
-		err = chromedp.Do(tctx, chromedp.Func(func(ctx context.Context, tgt *chromedp.Target) error {
-			origin, err := resolveOriginTarget(ctx, tgt)
-			if err != nil {
-				return err
-			}
-			if input.Store != "" {
-				_, err = cdp.Call(ctx, tgt, indexeddb.ClearObjectStore, indexeddb.ClearObjectStoreParams{
-					StorageKey:      origin.storageKey,
-					SecurityOrigin:  origin.securityOrigin,
-					DatabaseName:    input.Database,
-					ObjectStoreName: input.Store,
-				})
-				return err
-			}
-			_, err = cdp.Call(ctx, tgt, indexeddb.DeleteDatabase, indexeddb.DeleteDatabaseParams{
-				StorageKey:     origin.storageKey,
-				SecurityOrigin: origin.securityOrigin,
-				DatabaseName:   input.Database,
-			})
-			return err
-		}))
-		if err != nil {
-			return nil, struct{}{}, fmt.Errorf("delete_indexeddb: %w", err)
-		}
-		return nil, struct{}{}, nil
 	})
 }

@@ -124,7 +124,8 @@ func TestScreenshotMaxDimension(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	// Set a large viewport so the screenshot will be big.
-	callToolRaw(t, "set_viewport", map[string]any{
+	callToolRaw(t, "emulate", map[string]any{
+		"action": "viewport",
 		"tab":    tabID,
 		"width":  1920,
 		"height": 1080,
@@ -307,7 +308,7 @@ func TestScreenshotScrolledElementAndViewportCapturesActualPixels(t *testing.T) 
 	defer closeTab(t, tabID)
 
 	// Build a 2600px tall page: solid red box at y=0..200, solid blue box at y=2000..2200.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(() => {
 			document.body.style.margin = '0';
@@ -366,7 +367,8 @@ func TestScreenshotMaxDimensionRespectsDPR(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "viewport",
 		"tab":                 tabID,
 		"width":               800,
 		"height":              600,
@@ -388,7 +390,8 @@ func TestScreenshotMaxDimensionRespectsDPR(t *testing.T) {
 	if ceilPx := math.Ceil(float64(float32(s)) * 503 * 2.0); ceilPx > 500 {
 		t.Fatalf("downscaleFactor(503, 400, 2, 500) = %v: float32 ceil = %v, want <= 500", s, ceilPx)
 	}
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "viewport",
 		"tab":                 tabID,
 		"width":               503,
 		"height":              400,
@@ -410,7 +413,7 @@ func TestScreenshotElementWithHTMLMargin(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab": tabID,
 		"expression": `(() => {
 			document.documentElement.style.margin = '60px 0 0 40px';
@@ -437,7 +440,7 @@ func TestScreenshotElementWithHTMLMargin(t *testing.T) {
 }
 
 // TestScreenshotValidationAndSelectorTimeout verifies upfront input validation
-// and bounded selector timeouts on screenshot, pdf, and set_viewport.
+// and bounded selector timeouts on screenshot, pdf, and emulate(viewport).
 func TestScreenshotValidationAndSelectorTimeout(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -457,8 +460,8 @@ func TestScreenshotValidationAndSelectorTimeout(t *testing.T) {
 	if err := callToolExpectErr(t, "pdf", map[string]any{"tab": tabID, "scale": -1}); !strings.Contains(err, "scale") {
 		t.Errorf("pdf scale=-1 err = %q", err)
 	}
-	if err := callToolExpectErr(t, "set_viewport", map[string]any{"tab": tabID, "width": 0, "height": 600}); !strings.Contains(err, "width and height") {
-		t.Errorf("set_viewport width=0 err = %q", err)
+	if err := callToolExpectErr(t, "emulate", map[string]any{"action": "viewport", "tab": tabID, "width": 0, "height": 600}); !strings.Contains(err, "width and height") {
+		t.Errorf("emulate(viewport) width=0 err = %q", err)
 	}
 
 	// Selector timeout must be bounded by input.Timeout and wrapped by selectorError.
@@ -528,14 +531,15 @@ func TestSetViewport(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "viewport",
 		"tab":    tabID,
 		"width":  375,
 		"height": 667,
 	})
 
 	// Verify via JS.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.innerWidth",
 	})
@@ -720,7 +724,8 @@ func TestSetViewportDeviceScaleFactor(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "viewport",
 		"tab":                 tabID,
 		"width":               800,
 		"height":              600,
@@ -728,7 +733,7 @@ func TestSetViewportDeviceScaleFactor(t *testing.T) {
 	})
 
 	// Verify width.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.innerWidth",
 	})
@@ -737,7 +742,7 @@ func TestSetViewportDeviceScaleFactor(t *testing.T) {
 	}
 
 	// Verify height.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.innerHeight",
 	})
@@ -746,7 +751,7 @@ func TestSetViewportDeviceScaleFactor(t *testing.T) {
 	}
 
 	// Verify device pixel ratio matches scale factor.
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.devicePixelRatio",
 	})
@@ -759,7 +764,8 @@ func TestSetViewportMobile(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "viewport",
 		"tab":    tabID,
 		"width":  390,
 		"height": 844,
@@ -768,7 +774,7 @@ func TestSetViewportMobile(t *testing.T) {
 
 	// In mobile mode, screen.width/height reflects the device metrics
 	// regardless of layout viewport.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "screen.width",
 	})
@@ -776,7 +782,7 @@ func TestSetViewportMobile(t *testing.T) {
 		t.Errorf("screen.width = %s, want 390", out.Result)
 	}
 
-	out = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "screen.height",
 	})
@@ -875,14 +881,15 @@ func TestSetViewportDefaultScaleFactor(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "viewport",
 		"tab":    tabID,
 		"width":  1024,
 		"height": 768,
 		// device_scale_factor omitted — should default to 1.0.
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.devicePixelRatio",
 	})
@@ -950,14 +957,15 @@ func TestSetViewportScaleFactorZero(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "set_viewport", map[string]any{
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "viewport",
 		"tab":                 tabID,
 		"width":               800,
 		"height":              600,
 		"device_scale_factor": 0,
 	})
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "window.devicePixelRatio",
 	})
@@ -1190,7 +1198,7 @@ func TestScreenshotRefShadowFrameAndAtomicWrite(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 	callTool[struct{}](t, "wait_for", map[string]any{
 		"tab":        tabID,
 		"expression": `document.getElementById('f').contentDocument?.getElementById('if-red') && document.getElementById('f-scaled').contentDocument?.getElementById('sc-purple')`,
@@ -1225,7 +1233,7 @@ func TestScreenshotRefShadowFrameAndAtomicWrite(t *testing.T) {
 	}
 
 	// 2. Screenshot via snapshot ref of the Shadow DOM button.
-	snap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
+	snap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
 	blueRef := findSnapshotRef(t, snap.Snapshot, `"Shadow Blue"`)
 	imgRef := decodePNG(callToolRaw(t, "screenshot", map[string]any{
 		"tab": tabID,
@@ -1238,7 +1246,7 @@ func TestScreenshotRefShadowFrameAndAtomicWrite(t *testing.T) {
 
 	// 3. Screenshot of elements inside same-origin iframes (border/padding,
 	//    offscreen-inside-iframe scroll-into-view, and CSS scale(0.5)).
-	frames := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+	frames := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 	var childID, scaledID string
 	for _, fr := range frames.Frames {
 		if strings.HasSuffix(fr.URL, "/frame.html") {
@@ -1260,7 +1268,7 @@ func TestScreenshotRefShadowFrameAndAtomicWrite(t *testing.T) {
 		t.Errorf("iframe screenshot center pixel = (%#x,%#x,%#x), want red (bounds=%v)", r, g, b, imgFrame.Bounds())
 	}
 
-	fSnap := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "frame": childID})
+	fSnap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "frame": childID})
 	redRef := findSnapshotRef(t, fSnap.Snapshot, `"Frame Red"`)
 	imgFrameRef := decodePNG(callToolRaw(t, "screenshot", map[string]any{
 		"tab": tabID,

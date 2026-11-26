@@ -3,371 +3,286 @@ package tools
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
-// --- get_storage ---
-
-func TestGetStorage_SingleKey(t *testing.T) {
+func TestStorage_SingleKeyAllEntriesAndMissing(t *testing.T) {
 	tabID := navigateToFixture(t, "storage.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "ls-key1",
+	out := callTool[storageOutput](t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
+		"key":    "ls-key1",
 	})
-	if out.Value == nil {
-		t.Fatal("expected non-nil value for ls-key1")
+	if out.Value == nil || *out.Value != "ls-value1" {
+		t.Fatalf("storage(get, ls-key1) = %v, want ls-value1", out.Value)
 	}
-	if *out.Value != "ls-value1" {
-		t.Errorf("get_storage value = %q, want %q", *out.Value, "ls-value1")
-	}
-}
 
-func TestGetStorage_AllEntries(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
+	all := callTool[storageOutput](t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
 	})
-	if out.Entries == nil {
+	if all.Entries == nil {
 		t.Fatal("expected non-nil entries")
 	}
-	// The fixture sets ls-key1, ls-key2, ls-json. There may be more
-	// from other tests sharing the origin, so check at least these.
 	for _, key := range []string{"ls-key1", "ls-key2", "ls-json"} {
-		if _, ok := out.Entries[key]; !ok {
+		if _, ok := all.Entries[key]; !ok {
 			t.Errorf("expected key %q in entries", key)
 		}
 	}
-	if out.Entries["ls-key1"] != "ls-value1" {
-		t.Errorf("entries[ls-key1] = %q, want %q", out.Entries["ls-key1"], "ls-value1")
+
+	missing := callTool[storageOutput](t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
+		"key":    "nonexistent-key",
+	})
+	if missing.Value != nil {
+		t.Errorf("expected nil value for missing key, got %q", *missing.Value)
+	}
+
+	ss := callTool[storageOutput](t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
+		"type":   "session",
+		"key":    "ss-key1",
+	})
+	if ss.Value == nil || *ss.Value != "ss-value1" {
+		t.Errorf("session storage ss-key1 = %v, want ss-value1", ss.Value)
 	}
 }
 
-func TestGetStorage_MissingKey(t *testing.T) {
+func TestStorage_SetOverwriteAndDelete(t *testing.T) {
 	tabID := navigateToFixture(t, "storage.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "nonexistent-key",
+	// Set new key, overwrite, and set empty string value.
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "set",
+		"tab":    tabID,
+		"key":    "new-key",
+		"value":  "new-value",
 	})
-	if out.Value != nil {
-		t.Errorf("expected nil value for missing key, got %q", *out.Value)
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "set",
+		"tab":    tabID,
+		"key":    "ls-key1",
+		"value":  "overwritten",
+	})
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "set",
+		"tab":    tabID,
+		"key":    "empty-val",
+		"value":  "",
+	})
+
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "key": "new-key"}); got.Value == nil || *got.Value != "new-value" {
+		t.Errorf("new-key = %v, want new-value", got.Value)
 	}
-}
-
-func TestGetStorage_SessionStorage(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-		"key":  "ss-key1",
-	})
-	if out.Value == nil {
-		t.Fatal("expected non-nil value for ss-key1")
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "key": "ls-key1"}); got.Value == nil || *got.Value != "overwritten" {
+		t.Errorf("ls-key1 = %v, want overwritten", got.Value)
 	}
-	if *out.Value != "ss-value1" {
-		t.Errorf("get_storage value = %q, want %q", *out.Value, "ss-value1")
-	}
-}
-
-// --- set_storage ---
-
-func TestSetStorage(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_storage", map[string]any{
-		"tab":   tabID,
-		"key":   "new-key",
-		"value": "new-value",
-	})
-
-	// Read it back.
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "new-key",
-	})
-	if out.Value == nil || *out.Value != "new-value" {
-		t.Errorf("after set, get_storage = %v, want %q", out.Value, "new-value")
-	}
-}
-
-func TestSetStorage_Overwrite(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_storage", map[string]any{
-		"tab":   tabID,
-		"key":   "ls-key1",
-		"value": "overwritten",
-	})
-
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "ls-key1",
-	})
-	if out.Value == nil || *out.Value != "overwritten" {
-		t.Errorf("after overwrite, get_storage = %v, want %q", out.Value, "overwritten")
-	}
-}
-
-func TestSetStorage_SessionStorage(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	callTool[struct{}](t, "set_storage", map[string]any{
-		"tab":   tabID,
-		"type":  "session",
-		"key":   "ss-new",
-		"value": "ss-new-value",
-	})
-
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-		"key":  "ss-new",
-	})
-	if out.Value == nil || *out.Value != "ss-new-value" {
-		t.Errorf("after set session, get_storage = %v, want %q", out.Value, "ss-new-value")
-	}
-}
-
-// --- delete_storage ---
-
-func TestDeleteStorage_SingleKey(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	// Verify key exists first.
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "ls-key1",
-	})
-	if out.Value == nil {
-		t.Fatal("ls-key1 should exist before delete")
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "key": "empty-val"}); got.Value == nil || *got.Value != "" {
+		t.Errorf("empty-val = %v, want empty string", got.Value)
 	}
 
-	// Delete it.
-	callTool[struct{}](t, "delete_storage", map[string]any{
-		"tab": tabID,
-		"key": "ls-key1",
+	// Delete single key preserves siblings.
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "delete",
+		"tab":    tabID,
+		"key":    "ls-key1",
 	})
-
-	// Verify it's gone.
-	out = callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "ls-key1",
-	})
-	if out.Value != nil {
-		t.Errorf("ls-key1 should be nil after delete, got %q", *out.Value)
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "key": "ls-key1"}); got.Value != nil {
+		t.Errorf("ls-key1 should be nil after delete, got %q", *got.Value)
 	}
-
-	// Verify other keys still exist.
-	out = callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tabID,
-		"key": "ls-key2",
-	})
-	if out.Value == nil {
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "key": "ls-key2"}); got.Value == nil {
 		t.Error("ls-key2 should still exist after deleting ls-key1")
 	}
-}
 
-func TestDeleteStorage_ClearAll(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
+	// Session storage set and delete.
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "set",
+		"tab":    tabID,
+		"type":   "session",
+		"key":    "ss-new",
+		"value":  "ss-new-value",
+	})
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "delete",
+		"tab":    tabID,
+		"type":   "session",
+		"key":    "ss-key1",
+	})
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "type": "session", "key": "ss-new"}); got.Value == nil || *got.Value != "ss-new-value" {
+		t.Errorf("ss-new = %v, want ss-new-value", got.Value)
+	}
+	if got := callTool[storageOutput](t, "storage", map[string]any{"action": "get", "tab": tabID, "type": "session", "key": "ss-key1"}); got.Value != nil {
+		t.Errorf("ss-key1 should be nil after delete, got %q", *got.Value)
+	}
 
 	// Clear all localStorage.
-	callTool[struct{}](t, "delete_storage", map[string]any{
-		"tab": tabID,
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "delete",
+		"tab":    tabID,
 	})
-
-	// Verify it's empty.
-	out := callTool[GetStorageKeysOutput](t, "get_storage_keys", map[string]any{
-		"tab": tabID,
+	keysAfter := callTool[storageOutput](t, "storage", map[string]any{
+		"action":    "get",
+		"tab":       tabID,
+		"keys_only": true,
 	})
-	if len(out.Keys) != 0 {
-		t.Errorf("expected 0 keys after clear, got %d", len(out.Keys))
+	if len(keysAfter.Keys) != 0 {
+		t.Errorf("expected 0 keys after clear, got %d", len(keysAfter.Keys))
 	}
 }
 
-func TestDeleteStorage_SessionStorage(t *testing.T) {
+func TestStorage_KeysOnlyLimitAndMaxBytes(t *testing.T) {
 	tabID := navigateToFixture(t, "storage.html")
 	defer closeTab(t, tabID)
 
-	callTool[struct{}](t, "delete_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-		"key":  "ss-key1",
-	})
+	// Clear and seed deterministic sessionStorage entries.
+	callTool[storageOutput](t, "storage", map[string]any{"action": "delete", "tab": tabID, "type": "session"})
+	callTool[storageOutput](t, "storage", map[string]any{"action": "set", "tab": tabID, "type": "session", "key": "a", "value": "11111"})
+	callTool[storageOutput](t, "storage", map[string]any{"action": "set", "tab": tabID, "type": "session", "key": "b", "value": "2222222222"})
+	callTool[storageOutput](t, "storage", map[string]any{"action": "set", "tab": tabID, "type": "session", "key": "c", "value": "🌍🌍🌍"})
 
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-		"key":  "ss-key1",
+	// keys_only returns sorted key names + byte lengths.
+	allKeys := callTool[storageOutput](t, "storage", map[string]any{
+		"action":    "get",
+		"tab":       tabID,
+		"type":      "session",
+		"keys_only": true,
 	})
-	if out.Value != nil {
-		t.Errorf("ss-key1 should be nil after delete, got %q", *out.Value)
+	if len(allKeys.Keys) != 3 || allKeys.Total == nil || *allKeys.Total != 3 || allKeys.Truncated {
+		t.Fatalf("allKeys = %+v", allKeys)
+	}
+	if allKeys.Keys[0].Key != "a" || allKeys.Keys[0].Size != 5 ||
+		allKeys.Keys[1].Key != "b" || allKeys.Keys[1].Size != 10 ||
+		allKeys.Keys[2].Key != "c" || allKeys.Keys[2].Size != 12 {
+		t.Fatalf("unexpected keys/sizes: %+v", allKeys.Keys)
 	}
 
-	// Other session key still exists.
-	out = callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-		"key":  "ss-key2",
+	// keys_only with limit=1 reports total=3 and truncated=true.
+	limKeys := callTool[storageOutput](t, "storage", map[string]any{
+		"action":    "get",
+		"tab":       tabID,
+		"type":      "session",
+		"keys_only": true,
+		"limit":     1,
 	})
-	if out.Value == nil {
-		t.Error("ss-key2 should still exist")
+	if len(limKeys.Keys) != 1 || limKeys.Keys[0].Key != "a" || limKeys.Total == nil || *limKeys.Total != 3 || !limKeys.Truncated {
+		t.Fatalf("limKeys = %+v, want [a] total=3 truncated=true", limKeys)
+	}
+
+	// Single-key max_bytes truncates on a valid UTF-8 rune boundary (4-byte emoji).
+	truncVal := callTool[storageOutput](t, "storage", map[string]any{
+		"action":    "get",
+		"tab":       tabID,
+		"type":      "session",
+		"key":       "c",
+		"max_bytes": 5,
+	})
+	if truncVal.Value == nil || *truncVal.Value != "🌍" || !utf8.ValidString(*truncVal.Value) || !truncVal.Truncated || truncVal.TotalBytes != 12 {
+		t.Fatalf("truncated single key = val=%v truncated=%v total_bytes=%d, want '🌍'/true/12",
+			truncVal.Value, truncVal.Truncated, truncVal.TotalBytes)
+	}
+
+	// All-entries limit caps returned entries and reports total & truncated.
+	limitedAll := callTool[storageOutput](t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
+		"type":   "session",
+		"limit":  2,
+	})
+	if len(limitedAll.Entries) != 2 || limitedAll.Entries["a"] != "11111" || limitedAll.Entries["b"] != "2222222222" || limitedAll.Total == nil || *limitedAll.Total != 3 || !limitedAll.Truncated {
+		t.Fatalf("limitedAll = %+v, want 2 entries (a,b) total=3 truncated=true", limitedAll)
+	}
+
+	// All-entries max_bytes stops before exceeding budget and reports total & truncated.
+	// Entry "a" takes 1+5=6 bytes; entry "b" takes 1+10=11 bytes (6+11=17 > 10).
+	boundedAll := callTool[storageOutput](t, "storage", map[string]any{
+		"action":    "get",
+		"tab":       tabID,
+		"type":      "session",
+		"max_bytes": 10,
+	})
+	if len(boundedAll.Entries) != 1 || boundedAll.Entries["a"] != "11111" || boundedAll.Total == nil || *boundedAll.Total != 3 || !boundedAll.Truncated {
+		t.Fatalf("boundedAll = %+v, want {a:11111} total=3 truncated=true", boundedAll)
 	}
 }
 
-// --- get_storage_keys ---
-
-func TestGetStorageKeys(t *testing.T) {
+func TestStorage_Validation(t *testing.T) {
 	tabID := navigateToFixture(t, "storage.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[GetStorageKeysOutput](t, "get_storage_keys", map[string]any{
-		"tab": tabID,
-	})
-	if len(out.Keys) < 3 {
-		t.Fatalf("expected at least 3 keys, got %d", len(out.Keys))
+	badCases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"invalid_type", map[string]any{"action": "get", "tab": tabID, "type": "invalid"}, "invalid"},
+		{"set_missing_key", map[string]any{"action": "set", "tab": tabID, "value": "something"}, "key"},
+		{"set_missing_value", map[string]any{"action": "set", "tab": tabID, "key": "k"}, "value"},
+		{"set_stray_keys_only", map[string]any{"action": "set", "tab": tabID, "key": "k", "value": "v", "keys_only": true}, "action='set'"},
+		{"get_stray_value", map[string]any{"action": "get", "tab": tabID, "value": ""}, "action='get'"},
+		{"get_keys_only_and_key", map[string]any{"action": "get", "tab": tabID, "keys_only": true, "key": "a"}, "keys_only"},
+		{"get_keys_only_and_max_bytes", map[string]any{"action": "get", "tab": tabID, "keys_only": true, "max_bytes": 10}, "keys_only"},
+		{"get_key_and_limit", map[string]any{"action": "get", "tab": tabID, "key": "a", "limit": 5}, "limit"},
+		{"get_neg_max_bytes", map[string]any{"action": "get", "tab": tabID, "max_bytes": -1}, "max_bytes"},
+		{"get_neg_limit", map[string]any{"action": "get", "tab": tabID, "keys_only": true, "limit": -1}, "limit"},
+		{"delete_stray_value", map[string]any{"action": "delete", "tab": tabID, "value": ""}, "action='delete'"},
+		{"delete_stray_keys_only", map[string]any{"action": "delete", "tab": tabID, "keys_only": true}, "action='delete'"},
 	}
-
-	keyMap := make(map[string]int)
-	for _, k := range out.Keys {
-		keyMap[k.Key] = k.Size
-	}
-
-	// ls-key1 = "ls-value1" (9 chars)
-	if size, ok := keyMap["ls-key1"]; !ok {
-		t.Error("expected ls-key1 in keys")
-	} else if size != 9 {
-		t.Errorf("ls-key1 size = %d, want 9", size)
-	}
-
-	// ls-json = '{"a":1}' (7 chars)
-	if size, ok := keyMap["ls-json"]; !ok {
-		t.Error("expected ls-json in keys")
-	} else if size != 7 {
-		t.Errorf("ls-json size = %d, want 7", size)
-	}
-}
-
-func TestGetStorageKeys_Limit(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	out := callTool[GetStorageKeysOutput](t, "get_storage_keys", map[string]any{
-		"tab":   tabID,
-		"limit": 1,
-	})
-	if len(out.Keys) != 1 {
-		t.Errorf("expected 1 key with limit=1, got %d", len(out.Keys))
+	for _, tc := range badCases {
+		t.Run(tc.name, func(t *testing.T) {
+			errText := callToolExpectErr(t, "storage", tc.args)
+			if !strings.Contains(errText, tc.want) {
+				t.Errorf("%s err = %q, want substring %q", tc.name, errText, tc.want)
+			}
+		})
 	}
 }
-
-func TestGetStorageKeys_SessionStorage(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	out := callTool[GetStorageKeysOutput](t, "get_storage_keys", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-	})
-	if len(out.Keys) < 2 {
-		t.Fatalf("expected at least 2 session keys, got %d", len(out.Keys))
-	}
-
-	keyMap := make(map[string]bool)
-	for _, k := range out.Keys {
-		keyMap[k.Key] = true
-	}
-	for _, key := range []string{"ss-key1", "ss-key2"} {
-		if !keyMap[key] {
-			t.Errorf("expected %q in session storage keys", key)
-		}
-	}
-}
-
-// --- error cases ---
-
-func TestStorage_InvalidType(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "invalid",
-	})
-	if !strings.Contains(errText, "type") || !strings.Contains(errText, "invalid") {
-		t.Errorf("expected invalid type error, got: %s", errText)
-	}
-}
-
-func TestSetStorage_MissingKey(t *testing.T) {
-	tabID := navigateToFixture(t, "storage.html")
-	defer closeTab(t, tabID)
-
-	errText := callToolExpectErr(t, "set_storage", map[string]any{
-		"tab":   tabID,
-		"value": "something",
-	})
-	// The MCP SDK validates required fields before our handler runs.
-	if !strings.Contains(errText, "key") {
-		t.Errorf("expected error about missing key, got: %s", errText)
-	}
-}
-
-// --- cross-tab behavior ---
 
 func TestStorage_CrossTabVisibility(t *testing.T) {
-	// localStorage is per-origin, so a value set in one tab should be
-	// visible from another tab on the same origin.
 	tab1 := navigateToFixture(t, "storage.html")
 	defer closeTab(t, tab1)
 
-	// Set a unique key in tab1.
-	callTool[struct{}](t, "set_storage", map[string]any{
-		"tab":   tab1,
-		"key":   "cross-tab-key",
-		"value": "cross-tab-value",
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "set",
+		"tab":    tab1,
+		"key":    "cross-tab-key",
+		"value":  "cross-tab-value",
 	})
 
-	// Open a second tab on the same origin.
 	tab2 := navigateToFixture(t, "index.html")
 	defer closeTab(t, tab2)
 
-	// Read from tab2.
-	out := callTool[GetStorageOutput](t, "get_storage", map[string]any{
-		"tab": tab2,
-		"key": "cross-tab-key",
+	out := callTool[storageOutput](t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tab2,
+		"key":    "cross-tab-key",
 	})
 	if out.Value == nil || *out.Value != "cross-tab-value" {
-		t.Errorf("cross-tab get_storage = %v, want %q", out.Value, "cross-tab-value")
+		t.Errorf("cross-tab storage(get) = %v, want cross-tab-value", out.Value)
 	}
 }
 
-func TestGetStorage_EmptyAllEntriesVsMissingKeyJSON(t *testing.T) {
+func TestStorage_EmptyAllEntriesVsMissingKeyJSON(t *testing.T) {
 	tabID := navigateToFixture(t, "storage.html")
 	defer closeTab(t, tabID)
 
-	// Clear sessionStorage so all-entries mode returns an empty map.
-	callTool[struct{}](t, "delete_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
+	callTool[storageOutput](t, "storage", map[string]any{
+		"action": "delete",
+		"tab":    tabID,
+		"type":   "session",
 	})
 
-	allRaw := callToolRaw(t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
+	allRaw := callToolRaw(t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
+		"type":   "session",
 	})
 	if allRaw.IsError {
-		t.Fatalf("get_storage all entries error: %s", contentText(allRaw))
+		t.Fatalf("storage(get) all entries error: %s", contentText(allRaw))
 	}
 	allJSON := contentText(allRaw)
 	if !strings.Contains(allJSON, `"entries":{}`) {
@@ -377,13 +292,14 @@ func TestGetStorage_EmptyAllEntriesVsMissingKeyJSON(t *testing.T) {
 		t.Errorf("all-entries JSON should omit 'value', got: %s", allJSON)
 	}
 
-	missingRaw := callToolRaw(t, "get_storage", map[string]any{
-		"tab":  tabID,
-		"type": "session",
-		"key":  "definitely-missing",
+	missingRaw := callToolRaw(t, "storage", map[string]any{
+		"action": "get",
+		"tab":    tabID,
+		"type":   "session",
+		"key":    "definitely-missing",
 	})
 	if missingRaw.IsError {
-		t.Fatalf("get_storage missing key error: %s", contentText(missingRaw))
+		t.Fatalf("storage(get) missing key error: %s", contentText(missingRaw))
 	}
 	missingJSON := contentText(missingRaw)
 	if !strings.Contains(missingJSON, `"value":null`) {
@@ -404,9 +320,9 @@ func TestIsLocalStorage(t *testing.T) {
 		{input: "local", isLocal: true, wantErr: false},
 		{input: "session", isLocal: false, wantErr: false},
 		{input: "invalid", isLocal: false, wantErr: true},
-		{input: "Local", isLocal: false, wantErr: true},     // case sensitive
-		{input: "SESSION", isLocal: false, wantErr: true},   // case sensitive
-		{input: "indexeddb", isLocal: false, wantErr: true}, // not supported
+		{input: "Local", isLocal: false, wantErr: true},
+		{input: "SESSION", isLocal: false, wantErr: true},
+		{input: "indexeddb", isLocal: false, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

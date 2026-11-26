@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
+	"github.com/greatliontech/chromedp-mcp/internal/profile"
 	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
@@ -36,22 +37,44 @@ type Options struct {
 	// location is auto-detected (e.g. ~/.config/google-chrome on
 	// Linux). Only relevant when AllowedProfiles is non-empty.
 	UserDataDir string
+}
 
-	// resolved at registration time by registerProfileTools
-	userDataDir string          // effective user data dir (explicit or auto-detected)
-	allowedSet  map[string]bool // allowed profile names for fast lookup
+// resolvedOptions holds immutable registration-time state derived from Options
+// without mutating the caller's Options struct.
+type resolvedOptions struct {
+	downloadDir string
+	userDataDir string
+	allowedSet  map[string]bool
+}
+
+func resolveOptions(opts *Options) resolvedOptions {
+	if opts == nil {
+		return resolvedOptions{}
+	}
+	res := resolvedOptions{
+		downloadDir: opts.DownloadDir,
+	}
+	if len(opts.AllowedProfiles) > 0 {
+		res.userDataDir = opts.UserDataDir
+		if res.userDataDir == "" {
+			res.userDataDir = profile.DefaultUserDataDir()
+		}
+		res.allowedSet = make(map[string]bool, len(opts.AllowedProfiles))
+		for _, name := range opts.AllowedProfiles {
+			res.allowedSet[name] = true
+		}
+	}
+	return res
 }
 
 // Register registers all tools on the given MCP server.
 func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
-	if opts == nil {
-		opts = &Options{}
-	}
-	registerBrowserTools(s, mgr, opts)
-	registerProfileTools(s, mgr, opts)
+	resolved := resolveOptions(opts)
+	registerBrowserTools(s, mgr, resolved)
+	registerProfileTools(s, resolved)
 	registerTabTools(s, mgr)
 	registerNavigationTools(s, mgr)
-	registerVisualTools(s, mgr, opts)
+	registerVisualTools(s, mgr, resolved)
 	registerSnapshotTools(s, mgr)
 	registerDOMTools(s, mgr)
 	registerFrameTools(s, mgr)
@@ -68,7 +91,7 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerIndexedDBTools(s, mgr)
 	registerCacheStorageTools(s, mgr)
 	registerPerformanceTools(s, mgr)
-	if opts.DownloadDir != "" {
+	if resolved.downloadDir != "" {
 		registerDownloadTools(s, mgr)
 	}
 	registerConfigTools(s, mgr)
@@ -80,18 +103,18 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 // get_websocket_frames, get_performance, get_downloads).
 //
 // Pure buffer-reading tools require mode explicitly; get_performance defaults
-// to ModePeek so no tool silently defaults to destructive consumption.
+// to modePeek so no tool silently defaults to destructive consumption.
 const (
-	ModePeek  = "peek"
-	ModeDrain = "drain"
+	modePeek  = "peek"
+	modeDrain = "drain"
 )
 
 // Type-tool modes (used by the `type` tool only). Required for the same
 // reason: the previous shape (`clear: bool`, default false) silently
 // concatenated typed text onto whatever was already in the field.
 const (
-	TypeModeReplace = "replace"
-	TypeModeAppend  = "append"
+	typeModeReplace = "replace"
+	typeModeAppend  = "append"
 )
 
 // validateMode returns an error when mode is not in the allowed set.
@@ -161,7 +184,7 @@ func validateEnum(param, val string, allowEmpty bool, allowed []string) error {
 	return fmt.Errorf("invalid %s %q: must be one of %v", param, val, allowed)
 }
 
-// validateSelectorTimeout rejects negative timeout values on SelectorInput tools.
+// validateSelectorTimeout rejects negative timeout values on selectorInput tools.
 func validateSelectorTimeout(timeoutMs int) error {
 	if timeoutMs < 0 {
 		return fmt.Errorf("timeout must be >= 0, got %d", timeoutMs)
@@ -232,16 +255,16 @@ func destructiveAnnotations() *mcp.ToolAnnotations {
 	}
 }
 
-// TabInput is embedded by tool inputs that operate on a tab but do not
+// tabInput is embedded by tool inputs that operate on a tab but do not
 // involve CSS selector polling.
-type TabInput struct {
+type tabInput struct {
 	Tab string `json:"tab,omitempty" jsonschema:"Tab ID. If omitted uses the active tab."`
 }
 
-// SelectorInput is embedded by tool inputs that involve CSS selector polling
-// with a configurable timeout. It extends TabInput with a Timeout field.
-type SelectorInput struct {
-	TabInput
+// selectorInput is embedded by tool inputs that involve CSS selector polling
+// with a configurable timeout. It extends tabInput with a Timeout field.
+type selectorInput struct {
+	tabInput
 	Timeout int `json:"timeout,omitempty" jsonschema:"Max time in milliseconds to wait for selectors (default 5000). Set lower for elements known to be present."`
 }
 

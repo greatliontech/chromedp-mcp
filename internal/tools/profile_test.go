@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,9 +140,37 @@ func TestBrowserLaunchProfileNotFound(t *testing.T) {
 }
 
 func TestBrowserLaunchProfileNoAllowedSet(t *testing.T) {
-	// When AllowedProfiles is empty, the profile tools are not registered.
-	// browser_launch on the main harness (no AllowedProfiles) should reject
-	// a profile parameter.
+	// When AllowedProfiles is empty, browser_launch omits the profile property
+	// from its InputSchema and rejects any caller passing profile.
+	hasProfileProp := func(opts *Options) bool {
+		t.Helper()
+		for _, tool := range listAllRegisteredTools(t, opts) {
+			if tool.Name != "browser_launch" {
+				continue
+			}
+			b, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatalf("marshal browser_launch schema: %v", err)
+			}
+			var schema map[string]any
+			if err := json.Unmarshal(b, &schema); err != nil {
+				t.Fatalf("unmarshal browser_launch schema: %v", err)
+			}
+			props, _ := schema["properties"].(map[string]any)
+			_, ok := props["profile"]
+			return ok
+		}
+		t.Fatal("browser_launch tool not found")
+		return false
+	}
+
+	if hasProfileProp(&Options{}) {
+		t.Error("browser_launch schema must omit 'profile' when AllowedProfiles is empty")
+	}
+	if !hasProfileProp(&Options{AllowedProfiles: []string{"Work"}, UserDataDir: t.TempDir()}) {
+		t.Error("browser_launch schema must include 'profile' when AllowedProfiles is non-empty")
+	}
+
 	result := callToolRaw(t, "browser_launch", map[string]any{
 		"profile": "Work",
 	})
@@ -149,8 +178,25 @@ func TestBrowserLaunchProfileNoAllowedSet(t *testing.T) {
 		t.Fatal("expected error when profile is set but AllowedProfiles is empty")
 	}
 	text := contentText(result)
-	if !strings.Contains(text, "not in the allowed profiles list") {
-		t.Errorf("error = %q, want 'not in the allowed profiles list'", text)
+	if !strings.Contains(text, "profile") {
+		t.Errorf("error = %q, want mention of 'profile'", text)
+	}
+}
+
+func TestRegisterDoesNotMutateCallerOptions(t *testing.T) {
+	opts := &Options{
+		DownloadDir:     t.TempDir(),
+		AllowedProfiles: []string{"Work"},
+		UserDataDir:     "",
+	}
+	// Registering on two isolated servers with the same Options must not
+	// mutate caller fields (e.g., UserDataDir stays empty).
+	_ = listAllRegisteredTools(t, opts)
+	if opts.UserDataDir != "" {
+		t.Errorf("Register mutated opts.UserDataDir to %q", opts.UserDataDir)
+	}
+	if len(opts.AllowedProfiles) != 1 || opts.AllowedProfiles[0] != "Work" {
+		t.Errorf("Register mutated opts.AllowedProfiles to %v", opts.AllowedProfiles)
 	}
 }
 

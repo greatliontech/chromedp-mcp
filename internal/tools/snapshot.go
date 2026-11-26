@@ -20,9 +20,9 @@ import (
 // flood the LLM context window.
 const defaultSnapshotMaxBytes = 50_000
 
-// SnapshotInput is the input for snapshot.
-type SnapshotInput struct {
-	SelectorInput
+// snapshotInput is the input for snapshot.
+type snapshotInput struct {
+	selectorInput
 	Frame           string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID from list_frames to snapshot instead of the main frame."`
 	Selector        string `json:"selector,omitempty" jsonschema:"Optional CSS selector (supports '>>>' for Shadow DOM) to scope the snapshot to a subtree."`
 	Depth           int    `json:"depth,omitempty" jsonschema:"Max semantic tree depth (default 0 = unlimited)."`
@@ -30,8 +30,8 @@ type SnapshotInput struct {
 	MaxBytes        int    `json:"max_bytes,omitempty" jsonschema:"Max bytes for the rendered snapshot text (default 50000)."`
 }
 
-// SnapshotOutput is the output for snapshot.
-type SnapshotOutput struct {
+// snapshotOutput is the output for snapshot.
+type snapshotOutput struct {
 	URL        string `json:"url"`
 	Title      string `json:"title"`
 	Snapshot   string `json:"snapshot"`
@@ -43,21 +43,21 @@ type SnapshotOutput struct {
 func registerSnapshotTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "snapshot",
-		Description: "Capture a compact accessibility snapshot of the page (or a same-origin frame/subtree) with short element refs ([ref=e1], [ref=e2], ...) usable in interaction tools, screenshot, get_dom, and evaluate. Each call replaces the tab's active ref table; refs pierce open Shadow DOM and automatically invalidate when their document navigates.",
+		Description: "Capture a compact accessibility snapshot of the page (or a same-origin frame/subtree) with short element refs ([ref=e1], [ref=e2], ...) usable in interaction tools, screenshot, get_dom, evaluate, and emulate(action='pseudo_state'). Each call replaces the tab's active ref table; refs pierce open Shadow DOM and automatically invalidate when their document navigates.",
 		Annotations: readOnlyAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input SnapshotInput) (*mcp.CallToolResult, SnapshotOutput, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input snapshotInput) (*mcp.CallToolResult, snapshotOutput, error) {
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
-			return nil, SnapshotOutput{}, err
+			return nil, snapshotOutput{}, err
 		}
 		if input.Depth < 0 {
-			return nil, SnapshotOutput{}, fmt.Errorf("depth must be >= 0, got %d", input.Depth)
+			return nil, snapshotOutput{}, fmt.Errorf("depth must be >= 0, got %d", input.Depth)
 		}
 		if input.MaxBytes < 0 {
-			return nil, SnapshotOutput{}, fmt.Errorf("max_bytes must be >= 0, got %d", input.MaxBytes)
+			return nil, snapshotOutput{}, fmt.Errorf("max_bytes must be >= 0, got %d", input.MaxBytes)
 		}
 		if input.Selector != "" {
 			if _, _, err := parseShadowSelector(input.Selector); err != nil {
-				return nil, SnapshotOutput{}, err
+				return nil, snapshotOutput{}, err
 			}
 		}
 
@@ -68,17 +68,17 @@ func registerSnapshotTools(s *mcp.Server, mgr *browser.Manager) {
 
 		t, err := mgr.ResolveTab("", input.Tab)
 		if err != nil {
-			return nil, SnapshotOutput{}, err
+			return nil, snapshotOutput{}, err
 		}
 		// Accessibility.getFullAXTree runs on Blink's renderer thread and
 		// stalls while a JS modal dialog is open; fail fast so callers can
 		// inspect/dismiss it.
 		if t.Dialog != nil && t.Dialog.Open() {
-			return nil, SnapshotOutput{}, fmt.Errorf("cannot capture snapshot while a JavaScript dialog is open — use dialog tool first")
+			return nil, snapshotOutput{}, fmt.Errorf("cannot capture snapshot while a JavaScript dialog is open — use dialog tool first")
 		}
 		if input.Frame != "" {
 			if _, err := resolveFrameContext(t, input.Frame, input.Selector != ""); err != nil {
-				return nil, SnapshotOutput{}, err
+				return nil, snapshotOutput{}, err
 			}
 		}
 
@@ -141,16 +141,16 @@ func registerSnapshotTools(s *mcp.Server, mgr *browser.Manager) {
 			return nil
 		}))
 		if err != nil {
-			return nil, SnapshotOutput{}, err
+			return nil, snapshotOutput{}, err
 		}
 
 		rendered, refs, truncated, totalBytes := renderAXSnapshot(nodes, rootBackendID, cdp.FrameID(input.Frame), input.Depth, input.InteractiveOnly, maxBytes)
 		if !t.SetSnapshotRefs(genTok, refs) {
-			return nil, SnapshotOutput{}, fmt.Errorf("document navigated during snapshot — retry snapshot")
+			return nil, snapshotOutput{}, fmt.Errorf("document navigated during snapshot — retry snapshot")
 		}
 
 		url, title, _ := t.Info(ctx)
-		out := SnapshotOutput{
+		out := snapshotOutput{
 			URL:      url,
 			Title:    title,
 			Snapshot: rendered,

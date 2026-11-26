@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,9 +16,9 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
-// ScreenshotInput is the input for screenshot.
-type ScreenshotInput struct {
-	SelectorInput
+// screenshotInput is the input for screenshot.
+type screenshotInput struct {
+	selectorInput
 	Ref          string `json:"ref,omitempty" jsonschema:"Element ref from snapshot to screenshot (mutually exclusive with selector/frame)."`
 	Frame        string `json:"frame,omitempty" jsonschema:"Optional same-origin frame ID for selector."`
 	Selector     string `json:"selector,omitempty" jsonschema:"CSS/shadow ('>>>') selector to screenshot a specific element. If both ref and selector are omitted, captures the viewport."`
@@ -30,9 +29,9 @@ type ScreenshotInput struct {
 	MaxDimension int    `json:"max_dimension,omitempty" jsonschema:"Maximum allowed width or height in physical pixels (downscaled proportionally if exceeded)."`
 }
 
-// PDFInput is the input for pdf.
-type PDFInput struct {
-	TabInput
+// pdfInput is the input for pdf.
+type pdfInput struct {
+	tabInput
 	Landscape       bool    `json:"landscape,omitempty" jsonschema:"Landscape orientation (default false)"`
 	PrintBackground *bool   `json:"print_background,omitempty" jsonschema:"Include background graphics (default true)"`
 	Scale           float64 `json:"scale,omitempty" jsonschema:"Page rendering scale (default 1.0)"`
@@ -42,22 +41,13 @@ type PDFInput struct {
 	Filename        string  `json:"filename,omitempty" jsonschema:"Save to disk with this filename (requires --download-dir). Omit to return inline only."`
 }
 
-// SetViewportInput is the input for set_viewport.
-type SetViewportInput struct {
-	TabInput
-	Width             int     `json:"width" jsonschema:"Viewport width in pixels"`
-	Height            int     `json:"height" jsonschema:"Viewport height in pixels"`
-	DeviceScaleFactor float64 `json:"device_scale_factor,omitempty" jsonschema:"Device scale factor (default 1.0)"`
-	Mobile            bool    `json:"mobile,omitempty" jsonschema:"Emulate mobile device (default false)"`
-}
-
 var screenshotFormatValues = []string{"png", "jpeg"}
 
-func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
+func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts resolvedOptions) {
 	// screenshot and pdf are read-only when --download-dir is not configured
 	// (filename always errors), and write/overwrite files on disk when it is.
 	captureAnnotations := func() *mcp.ToolAnnotations {
-		if opts.DownloadDir != "" {
+		if opts.downloadDir != "" {
 			return idempotentWriteAnnotations()
 		}
 		return readOnlyAnnotations()
@@ -66,11 +56,11 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "screenshot",
 		Description: "Capture a screenshot of the viewport, full page, or a specific element (by snapshot ref or CSS/shadow selector).",
-		InputSchema: schemaWithEnums[ScreenshotInput](map[string][]string{
+		InputSchema: schemaWithEnums[screenshotInput](map[string][]string{
 			"format": screenshotFormatValues,
 		}),
 		Annotations: captureAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input ScreenshotInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input screenshotInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := validateElementTarget(input.Ref, input.Selector, input.Frame, false); err != nil {
 			return nil, struct{}{}, err
 		}
@@ -106,7 +96,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		var saveName string
 		if input.Filename != "" {
 			var err error
-			saveName, err = validateSaveFilename(opts.DownloadDir, input.Filename, ext)
+			saveName, err = validateSaveFilename(opts.downloadDir, input.Filename, ext)
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -188,7 +178,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 
 		// Save to disk if requested.
 		if saveName != "" {
-			path, err := writeDownloadFile(opts.DownloadDir, saveName, buf)
+			path, err := writeDownloadFile(opts.downloadDir, saveName, buf)
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -204,7 +194,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		Name:        "pdf",
 		Description: "Generate a PDF of the current page.",
 		Annotations: captureAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input PDFInput) (*mcp.CallToolResult, struct{}, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input pdfInput) (*mcp.CallToolResult, struct{}, error) {
 		if err := validateNonNegativeFinite("scale", input.Scale); err != nil {
 			return nil, struct{}{}, err
 		}
@@ -217,7 +207,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		var saveName string
 		if input.Filename != "" {
 			var err error
-			saveName, err = validateSaveFilename(opts.DownloadDir, input.Filename, ".pdf")
+			saveName, err = validateSaveFilename(opts.downloadDir, input.Filename, ".pdf")
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -256,7 +246,7 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 		// When saving to disk, return the file path instead of the
 		// (potentially large) inline blob.
 		if saveName != "" {
-			path, err := writeDownloadFile(opts.DownloadDir, saveName, pdfData)
+			path, err := writeDownloadFile(opts.downloadDir, saveName, pdfData)
 			if err != nil {
 				return nil, struct{}{}, err
 			}
@@ -280,41 +270,6 @@ func registerVisualTools(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 				},
 			},
 		}, struct{}{}, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "set_viewport",
-		Description: "Set the browser viewport dimensions and device emulation settings.",
-		Annotations: idempotentWriteAnnotations(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, input SetViewportInput) (*mcp.CallToolResult, struct{}, error) {
-		if input.Width <= 0 || input.Height <= 0 {
-			return nil, struct{}{}, fmt.Errorf("width and height must be > 0, got %dx%d", input.Width, input.Height)
-		}
-		if err := validateNonNegativeFinite("device_scale_factor", input.DeviceScaleFactor); err != nil {
-			return nil, struct{}{}, err
-		}
-
-		t, err := mgr.ResolveTab("", input.Tab)
-		if err != nil {
-			return nil, struct{}{}, err
-		}
-
-		tctx, tcancel := tabContext(ctx, t.Context())
-		defer tcancel()
-		scale := input.DeviceScaleFactor
-		if scale == 0 {
-			scale = 1.0
-		}
-
-		if _, err := chromedp.Call(tctx, emulation.SetDeviceMetricsOverride, emulation.SetDeviceMetricsOverrideParams{
-			Width:             int64(input.Width),
-			Height:            int64(input.Height),
-			DeviceScaleFactor: scale,
-			Mobile:            input.Mobile,
-		}); err != nil {
-			return nil, struct{}{}, err
-		}
-		return nil, struct{}{}, nil
 	})
 }
 

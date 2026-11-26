@@ -52,16 +52,16 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": srv.URL + "/top.html",
 	})
 
 	// Wait until all 3 frames are listed and reachable.
-	var list ListFramesOutput
+	var list listFramesOutput
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		list = callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+		list = callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 		reachableCount := 0
 		for _, f := range list.Frames {
 			if f.Reachable {
@@ -77,7 +77,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 		t.Fatalf("list_frames len = %d, want 3: %+v", len(list.Frames), list.Frames)
 	}
 
-	var mainF, childF, grandF FrameInfo
+	var mainF, childF, grandF frameInfo
 	for _, f := range list.Frames {
 		switch {
 		case f.IsMain:
@@ -103,12 +103,12 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 		{"tab": tabID, "expression": "window.__who"},
 		{"tab": tabID, "frame": mainF.ID, "expression": "window.__who"},
 	} {
-		ev := callTool[EvaluateOutput](t, "evaluate", args)
+		ev := callTool[evaluateOutput](t, "evaluate", args)
 		if string(ev.Result) != `"top"` {
 			t.Errorf("top evaluate(%v) = %s, want %q", args, ev.Result, "top")
 		}
 	}
-	evChild := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evChild := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"frame":      childF.ID,
 		"expression": "window.__who",
@@ -116,7 +116,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if string(evChild.Result) != `"child"` {
 		t.Errorf("child evaluate = %s, want %q", evChild.Result, "child")
 	}
-	evSel := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evSel := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"frame":      childF.ID,
 		"selector":   "#heading",
@@ -125,7 +125,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if string(evSel.Result) != `"Child Heading"` {
 		t.Errorf("child selector evaluate = %s, want %q", evSel.Result, "Child Heading")
 	}
-	evPromise := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evPromise := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"frame":      childF.ID,
 		"expression": "Promise.resolve('async-child')",
@@ -133,7 +133,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if string(evPromise.Result) != `"async-child"` {
 		t.Errorf("child promise evaluate = %s, want %q", evPromise.Result, "async-child")
 	}
-	evNoAwait := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evNoAwait := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":           tabID,
 		"frame":         childF.ID,
 		"expression":    "Promise.resolve('async-child')",
@@ -142,7 +142,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if string(evNoAwait.Result) != `{}` {
 		t.Errorf("child await_promise=false evaluate = %s, want {}", evNoAwait.Result)
 	}
-	evTrunc := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evTrunc := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":              tabID,
 		"frame":            childF.ID,
 		"expression":       "'0123456789abcdef'",
@@ -151,7 +151,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if !evTrunc.Truncated || evTrunc.TotalBytes <= 5 {
 		t.Errorf("child truncated evaluate = %+v, want Truncated=true TotalBytes>5", evTrunc)
 	}
-	evGrand := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evGrand := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"frame":      grandF.ID,
 		"selector":   "#leaf",
@@ -162,7 +162,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	}
 
 	// query inside child frame (including computed_style, attributes, outer_html, bbox).
-	qOut := callTool[QueryOutput](t, "query", map[string]any{
+	qOut := callTool[queryOutput](t, "query", map[string]any{
 		"tab":            tabID,
 		"frame":          childF.ID,
 		"selector":       ".row",
@@ -203,7 +203,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	}
 
 	// get_dom(format=html) inside child frame: full default, outer=true, outer=false.
-	fullHTML := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	fullHTML := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":    tabID,
 		"format": "html",
 		"frame":  childF.ID,
@@ -211,7 +211,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if !strings.Contains(fullHTML.Content, "Child Heading") || strings.Contains(fullHTML.Content, "Top Heading") {
 		t.Errorf("child full get_dom(html) = %q", fullHTML.Content)
 	}
-	outerHTML := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	outerHTML := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "html",
 		"frame":    childF.ID,
@@ -221,7 +221,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if !strings.HasPrefix(outerHTML.Content, `<h1 id="heading"`) || !strings.HasSuffix(outerHTML.Content, `>Child Heading</h1>`) {
 		t.Errorf("child outer get_dom(html) = %q", outerHTML.Content)
 	}
-	innerHTML := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	innerHTML := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "html",
 		"frame":    childF.ID,
@@ -243,7 +243,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	}
 
 	// get_dom(format=text) inside child frame: body default, display:none, display:none ancestor, visibility:hidden.
-	bodyText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	bodyText := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":    tabID,
 		"format": "text",
 		"frame":  childF.ID,
@@ -260,13 +260,13 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 		{"#hidden-ancestor", "", "Inside Hidden"},
 		{"#vis-hidden", "", "Invisible Text"},
 	} {
-		off := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+		off := callTool[getDOMOutput](t, "get_dom", map[string]any{
 			"tab": tabID, "format": "text", "frame": childF.ID, "selector": tc.selector, "hidden": false,
 		})
 		if strings.TrimSpace(off.Content) != tc.wantOff {
 			t.Errorf("child get_dom(text, %s, hidden=false) = %q, want %q", tc.selector, off.Content, tc.wantOff)
 		}
-		on := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+		on := callTool[getDOMOutput](t, "get_dom", map[string]any{
 			"tab": tabID, "format": "text", "frame": childF.ID, "selector": tc.selector, "hidden": true,
 		})
 		if on.Content != tc.wantOn {
@@ -286,7 +286,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 
 	// snapshot(frame=childF.ID) captures child frame's AX tree with working refs
 	// usable in get_dom(ref) and evaluate(ref).
-	childSnap := callTool[SnapshotOutput](t, "snapshot", map[string]any{
+	childSnap := callTool[snapshotOutput](t, "snapshot", map[string]any{
 		"tab":   tabID,
 		"frame": childF.ID,
 	})
@@ -299,7 +299,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 		t.Fatalf("child frame snapshot missing heading ref:\n%s", childSnap.Snapshot)
 	}
 	childRef := childMatch[1]
-	childRefText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	childRefText := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":    tabID,
 		"format": "text",
 		"ref":    childRef,
@@ -307,7 +307,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	if strings.TrimSpace(childRefText.Content) != "Child Heading" {
 		t.Errorf("get_dom(child ref=%s) = %q, want Child Heading", childRef, childRefText.Content)
 	}
-	childRefEval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	childRefEval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"ref":        childRef,
 		"expression": `return el.id + ':' + window.name`,
@@ -318,11 +318,11 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 
 	// Dynamic same-origin iframe navigation: frame ID persists, grandchild disappears,
 	// childRef is invalidated as stale, and waitForSelector resolves #after-nav.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `document.querySelector('iframe[name="child-frame"]').src = '/child2.html'; true`,
 	})
-	navText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	navText := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"frame":    childF.ID,
@@ -339,7 +339,7 @@ func TestListFramesAndSameOriginTargeting(t *testing.T) {
 	}); !strings.Contains(errText, "stale") {
 		t.Errorf("get_dom(navigated child ref) err = %q, want mention of stale", errText)
 	}
-	afterNavFrames := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+	afterNavFrames := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 	if len(afterNavFrames.Frames) != 2 {
 		t.Errorf("after child nav to frameless child2.html, list_frames len = %d, want 2: %+v", len(afterNavFrames.Frames), afterNavFrames.Frames)
 	}
@@ -362,19 +362,19 @@ func TestListFramesOOPIFAndUnknownFrameErrors(t *testing.T) {
 
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
-	callTool[NavigateOutput](t, "navigate", map[string]any{
+	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
 		"url": srv.URL + "/host.html",
 	})
 
 	// Wait until the cross-origin OOPIF appears in list_frames with reachable=false.
 	var mainID string
-	var oopif FrameInfo
+	var oopif frameInfo
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		list := callTool[ListFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
+		list := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
 		mainID = ""
-		oopif = FrameInfo{}
+		oopif = frameInfo{}
 		for _, f := range list.Frames {
 			if f.IsMain {
 				mainID = f.ID
@@ -425,7 +425,7 @@ func TestListFramesFailsFastWhenDialogOpen(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(function() { alert('blocks-frames'); }, 10); true`,
 	})
@@ -433,12 +433,12 @@ func TestListFramesFailsFastWhenDialogOpen(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
+	if !callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for alert dialog")
 	}
 

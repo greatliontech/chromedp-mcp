@@ -143,7 +143,7 @@ func TestBrowserConnectAdoptsExistingTabsWithoutRogueBlankTab(t *testing.T) {
 	}
 
 	// Connect via browser_connect — must adopt both pages and NOT spawn a blank tab.
-	connOut := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+	connOut := callTool[browserConnectOutput](t, "browser_connect", map[string]any{
 		"url": fmt.Sprintf("http://127.0.0.1:%d", port),
 	})
 	if connOut.BrowserID == "" {
@@ -174,7 +174,7 @@ func TestBrowserConnectAdoptsExistingTabsWithoutRogueBlankTab(t *testing.T) {
 	}
 
 	// Immediately inspect an adopted tab without calling tab_new or navigate.
-	textOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	textOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      activeTab.ID,
 		"format":   "text",
 		"selector": "h1",
@@ -184,7 +184,7 @@ func TestBrowserConnectAdoptsExistingTabsWithoutRogueBlankTab(t *testing.T) {
 	}
 
 	// Disconnect via browser_close — must detach and leave both user tabs open.
-	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+	callTool[browserCloseOutput](t, "browser_close", map[string]any{
 		"browser": connOut.BrowserID,
 	})
 	afterDisconnectPages := listDevToolsPageTargets(t, port)
@@ -194,11 +194,11 @@ func TestBrowserConnectAdoptsExistingTabsWithoutRogueBlankTab(t *testing.T) {
 
 	// Re-connect and verify explicit tab_close closes the adopted target in
 	// Chrome synchronously (without needing an external retry loop).
-	connOut2 := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+	connOut2 := callTool[browserConnectOutput](t, "browser_connect", map[string]any{
 		"url": fmt.Sprintf("http://127.0.0.1:%d", port),
 	})
 	t.Cleanup(func() {
-		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+		callTool[browserCloseOutput](t, "browser_close", map[string]any{
 			"browser": connOut2.BrowserID,
 		})
 	})
@@ -241,12 +241,12 @@ func TestBrowserConnectSkipsWedgedTabWithoutHanging(t *testing.T) {
 	time.Sleep(250 * time.Millisecond)
 
 	start := time.Now()
-	connOut := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+	connOut := callTool[browserConnectOutput](t, "browser_connect", map[string]any{
 		"url": fmt.Sprintf("http://127.0.0.1:%d", port),
 	})
 	elapsed := time.Since(start)
 	t.Cleanup(func() {
-		callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+		callTool[browserCloseOutput](t, "browser_close", map[string]any{
 			"browser": connOut.BrowserID,
 		})
 	})
@@ -258,7 +258,7 @@ func TestBrowserConnectSkipsWedgedTabWithoutHanging(t *testing.T) {
 	if len(connOut.Tabs) != 1 || !strings.HasSuffix(connOut.Tabs[0].URL, "/page2.html") {
 		t.Fatalf("expected only healthy page2.html tab to be adopted, got %+v", connOut.Tabs)
 	}
-	textOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	textOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      connOut.Tabs[0].ID,
 		"format":   "text",
 		"selector": "h1",
@@ -270,34 +270,34 @@ func TestBrowserConnectSkipsWedgedTabWithoutHanging(t *testing.T) {
 
 func TestBrowserActivateSwitchesActiveBrowser(t *testing.T) {
 	// Capture the initial harness browser ID.
-	initList := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	initList := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	if len(initList.Browsers) == 0 {
 		t.Fatal("expected at least one harness browser")
 	}
 	b1 := initList.Browsers[0].ID
 
 	// Create a tab in b1 navigated to forms.html.
-	t1 := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	t1 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b1,
 		"url":     fixtureURL("forms.html"),
 	})
 	defer closeTab(t, t1.TabID)
 
 	// Launch a second browser b2 (which becomes active) with a tab on page2.html.
-	b2Out := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
+	b2Out := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
 	b2 := b2Out.BrowserID
-	defer callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": b2})
+	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b2})
 
-	t2 := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	t2 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b2,
 		"url":     fixtureURL("page2.html"),
 	})
 	defer closeTab(t, t2.TabID)
 
 	// Verify b2 is currently active.
-	urlOut := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	urlOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"expression": `location.pathname`,
 	})
 	if !strings.Contains(string(urlOut.Result), "page2.html") {
@@ -307,7 +307,7 @@ func TestBrowserActivateSwitchesActiveBrowser(t *testing.T) {
 	// Switch active browser back to b1 via browser_activate.
 	callTool[struct{}](t, "browser_activate", map[string]any{"browser": b1})
 
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	var b1Active, b2Active bool
 	for _, b := range list.Browsers {
 		if b.ID == b1 {
@@ -322,7 +322,7 @@ func TestBrowserActivateSwitchesActiveBrowser(t *testing.T) {
 	}
 
 	// Default-tab evaluate (no tab param) must now target b1's active tab (forms.html).
-	urlOut = callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	urlOut = callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"expression": `location.pathname`,
 	})
 	if !strings.Contains(string(urlOut.Result), "forms.html") {
@@ -340,7 +340,7 @@ func TestBrowserActivateSwitchesActiveBrowser(t *testing.T) {
 
 func TestBrowserLaunchListClose(t *testing.T) {
 	// Launch a second browser.
-	lo := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
+	lo := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
 	if lo.BrowserID == "" {
@@ -348,7 +348,7 @@ func TestBrowserLaunchListClose(t *testing.T) {
 	}
 
 	// List should show at least 2 browsers.
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	if len(list.Browsers) < 2 {
 		t.Errorf("browser_list returned %d browsers, want >= 2", len(list.Browsers))
 	}
@@ -370,7 +370,7 @@ func TestBrowserLaunchListClose(t *testing.T) {
 	})
 
 	// List should now have one fewer.
-	list2 := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list2 := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	for _, b := range list2.Browsers {
 		if b.ID == lo.BrowserID {
 			t.Errorf("closed browser %s still in list", lo.BrowserID)
@@ -389,14 +389,14 @@ func TestBrowserCloseInvalidID(t *testing.T) {
 
 func TestBrowserCloseActiveFallsBackToMRU(t *testing.T) {
 	// Launch two browsers.
-	b1 := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
-	b2 := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
+	b1 := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
+	b2 := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
 
 	// b2 is now active. Close it without specifying ID (should close active).
-	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{})
+	callTool[browserCloseOutput](t, "browser_close", map[string]any{})
 
 	// b1 should now be active.
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	var b1Active, b2Found bool
 	for _, b := range list.Browsers {
 		if b.ID == b1.BrowserID && b.Active {
@@ -414,11 +414,11 @@ func TestBrowserCloseActiveFallsBackToMRU(t *testing.T) {
 	}
 
 	// Clean up.
-	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{"browser": b1.BrowserID})
+	callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b1.BrowserID})
 }
 
 func TestBrowserListModeField(t *testing.T) {
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	if len(list.Browsers) == 0 {
 		t.Fatal("expected at least one browser")
 	}
@@ -430,7 +430,7 @@ func TestBrowserListModeField(t *testing.T) {
 }
 
 func TestBrowserListTabsCount(t *testing.T) {
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	if len(list.Browsers) == 0 {
 		t.Fatal("expected at least one browser")
 	}
@@ -444,23 +444,23 @@ func TestBrowserListTabsCount(t *testing.T) {
 }
 
 func TestBrowserLaunchCustomDimensions(t *testing.T) {
-	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
+	b := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 		"width":    800,
 		"height":   600,
 	})
-	defer callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{
 		"browser": b.BrowserID,
 	})
 
 	// Create a tab and verify viewport dimensions.
-	tab := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url":     fixtureURL("page2.html"),
 		"browser": b.BrowserID,
 	})
 	defer closeTab(t, tab.TabID)
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab.TabID,
 		"expression": "window.innerWidth",
 	})
@@ -470,12 +470,12 @@ func TestBrowserLaunchCustomDimensions(t *testing.T) {
 }
 
 func TestBrowserDoubleClose(t *testing.T) {
-	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
+	b := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
 
 	// First close succeeds.
-	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+	callTool[browserCloseOutput](t, "browser_close", map[string]any{
 		"browser": b.BrowserID,
 	})
 
@@ -489,7 +489,7 @@ func TestBrowserDoubleClose(t *testing.T) {
 }
 
 func TestBrowserListNotNil(t *testing.T) {
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	if list.Browsers == nil {
 		t.Error("browser list should be non-nil (empty array at minimum)")
 	}
@@ -537,7 +537,7 @@ func TestBrowserConnect(t *testing.T) {
 	wsURL := getWSURL(t, port)
 
 	// Now connect via the MCP tool.
-	out := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+	out := callTool[browserConnectOutput](t, "browser_connect", map[string]any{
 		"url": wsURL,
 	})
 	if out.BrowserID == "" {
@@ -545,7 +545,7 @@ func TestBrowserConnect(t *testing.T) {
 	}
 
 	// Verify the connected browser appears in browser_list with mode "connect".
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	var found bool
 	for _, b := range list.Browsers {
 		if b.ID == out.BrowserID {
@@ -560,12 +560,12 @@ func TestBrowserConnect(t *testing.T) {
 	}
 
 	// Create a tab on the connected browser and verify we can use it.
-	tab := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url":     fixtureURL("page2.html"),
 		"browser": out.BrowserID,
 	})
 
-	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab.TabID,
 		"expression": "document.title",
 	})
@@ -576,12 +576,12 @@ func TestBrowserConnect(t *testing.T) {
 	closeTab(t, tab.TabID)
 
 	// Close the connected browser (should disconnect, not kill the process).
-	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+	callTool[browserCloseOutput](t, "browser_close", map[string]any{
 		"browser": out.BrowserID,
 	})
 
 	// Verify it's removed from the list.
-	list2 := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list2 := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	for _, b := range list2.Browsers {
 		if b.ID == out.BrowserID {
 			t.Error("closed connected browser still in list")
@@ -610,7 +610,7 @@ func TestBrowserKilledExternally(t *testing.T) {
 	wsURL := getWSURL(t, port)
 
 	// Connect via MCP tool.
-	out := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+	out := callTool[browserConnectOutput](t, "browser_connect", map[string]any{
 		"url": wsURL,
 	})
 	browserID := out.BrowserID
@@ -619,7 +619,7 @@ func TestBrowserKilledExternally(t *testing.T) {
 	}
 
 	// Create a tab so we have a tab ID to reference.
-	tabOut := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tabOut := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": browserID,
 	})
 	tabID := tabOut.TabID
@@ -650,7 +650,7 @@ func TestBrowserKilledExternally(t *testing.T) {
 	}
 
 	// browser_list should no longer include the dead browser.
-	list := callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+	list := callTool[browserListOutput](t, "browser_list", map[string]any{})
 	for _, b := range list.Browsers {
 		if b.ID == browserID {
 			t.Error("dead browser should have been pruned from browser_list")
@@ -664,7 +664,7 @@ func TestBrowserConnectHTTPURL(t *testing.T) {
 	// Connect via http:// URL instead of ws:// — browser.Connect resolves
 	// /json/version before dialing the WebSocket.
 	httpURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	out := callTool[BrowserConnectOutput](t, "browser_connect", map[string]any{
+	out := callTool[browserConnectOutput](t, "browser_connect", map[string]any{
 		"url": httpURL,
 	})
 	if out.BrowserID == "" {
@@ -672,12 +672,12 @@ func TestBrowserConnectHTTPURL(t *testing.T) {
 	}
 
 	// Verify it works by creating a tab and evaluating JS.
-	tab := callTool[TabNewOutput](t, "tab_new", map[string]any{
+	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url":     fixtureURL("index.html"),
 		"browser": out.BrowserID,
 	})
 
-	eval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	eval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab.TabID,
 		"expression": "document.title",
 	})
@@ -686,7 +686,7 @@ func TestBrowserConnectHTTPURL(t *testing.T) {
 	}
 
 	closeTab(t, tab.TabID)
-	callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+	callTool[browserCloseOutput](t, "browser_close", map[string]any{
 		"browser": out.BrowserID,
 	})
 }
@@ -713,10 +713,10 @@ func TestBrowserCloseNoBrowsers(t *testing.T) {
 
 func TestConcurrentBrowserAndTabOperations(t *testing.T) {
 	// Launch a dedicated browser for this test.
-	b := callTool[BrowserLaunchOutput](t, "browser_launch", map[string]any{
+	b := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{
 		"headless": true,
 	})
-	defer callTool[BrowserCloseOutput](t, "browser_close", map[string]any{
+	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{
 		"browser": b.BrowserID,
 	})
 
@@ -724,7 +724,7 @@ func TestConcurrentBrowserAndTabOperations(t *testing.T) {
 	const numTabs = 5
 	tabIDs := make([]string, numTabs)
 	for i := 0; i < numTabs; i++ {
-		out := callTool[TabNewOutput](t, "tab_new", map[string]any{
+		out := callTool[tabNewOutput](t, "tab_new", map[string]any{
 			"browser": b.BrowserID,
 		})
 		tabIDs[i] = out.TabID
@@ -736,13 +736,13 @@ func TestConcurrentBrowserAndTabOperations(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			callTool[TabListOutput](t, "tab_list", map[string]any{
+			callTool[tabListOutput](t, "tab_list", map[string]any{
 				"browser": b.BrowserID,
 			})
 		}()
 		go func(idx int) {
 			defer func() { done <- struct{}{} }()
-			callTool[BrowserListOutput](t, "browser_list", map[string]any{})
+			callTool[browserListOutput](t, "browser_list", map[string]any{})
 		}(i)
 	}
 

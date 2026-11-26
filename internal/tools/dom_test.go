@@ -14,7 +14,7 @@ func TestQuery(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[QueryOutput](t, "query", map[string]any{
+	out := callTool[queryOutput](t, "query", map[string]any{
 		"tab":      tabID,
 		"selector": ".item",
 	})
@@ -30,7 +30,7 @@ func TestGetDOMHTMLAndText(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	htmlOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	htmlOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "html",
 		"selector": "#title",
@@ -39,7 +39,7 @@ func TestGetDOMHTMLAndText(t *testing.T) {
 		t.Errorf("get_dom(html) = %q, want h1 with Hello World", htmlOut.Content)
 	}
 
-	innerOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	innerOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "html",
 		"selector": "#title",
@@ -49,7 +49,7 @@ func TestGetDOMHTMLAndText(t *testing.T) {
 		t.Errorf("get_dom(html, outer=false) = %q", innerOut.Content)
 	}
 
-	textOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	textOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "#title",
@@ -63,7 +63,7 @@ func TestGetDOMDefaultsAndTruncation(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	htmlOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	htmlOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":    tabID,
 		"format": "html",
 	})
@@ -71,7 +71,7 @@ func TestGetDOMDefaultsAndTruncation(t *testing.T) {
 		t.Errorf("get_dom(html) default = %q", htmlOut.Content)
 	}
 
-	textOut := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	textOut := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":    tabID,
 		"format": "text",
 	})
@@ -80,7 +80,7 @@ func TestGetDOMDefaultsAndTruncation(t *testing.T) {
 	}
 
 	// max_bytes cap truncates cleanly and reports TotalBytes.
-	capped := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	capped := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":       tabID,
 		"format":    "html",
 		"max_bytes": 20,
@@ -153,7 +153,7 @@ func TestGetDOMTextPermutations(t *testing.T) {
 				}
 				return
 			}
-			out := callTool[GetDOMOutput](t, "get_dom", args)
+			out := callTool[getDOMOutput](t, "get_dom", args)
 			if tt.wantEmpty {
 				if out.Content != "" {
 					t.Errorf("got %q, want empty", out.Content)
@@ -171,11 +171,11 @@ func TestGetDOMHiddenBodyAndNested(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	visible := callTool[GetDOMOutput](t, "get_dom", map[string]any{"tab": tabID, "format": "text", "hidden": false})
+	visible := callTool[getDOMOutput](t, "get_dom", map[string]any{"tab": tabID, "format": "text", "hidden": false})
 	if !strings.Contains(visible.Content, "Hello World") || strings.Contains(visible.Content, "Hidden content") {
 		t.Errorf("visible body text = %q", visible.Content)
 	}
-	withHidden := callTool[GetDOMOutput](t, "get_dom", map[string]any{"tab": tabID, "format": "text", "hidden": true})
+	withHidden := callTool[getDOMOutput](t, "get_dom", map[string]any{"tab": tabID, "format": "text", "hidden": true})
 	if !strings.Contains(withHidden.Content, "Hidden content") {
 		t.Errorf("hidden=true body text missing hidden content: %q", withHidden.Content)
 	}
@@ -183,17 +183,17 @@ func TestGetDOMHiddenBodyAndNested(t *testing.T) {
 	tab2 := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tab2)
 
-	nested := callTool[GetDOMOutput](t, "get_dom", map[string]any{"tab": tab2, "format": "text", "selector": "#nested-text"})
+	nested := callTool[getDOMOutput](t, "get_dom", map[string]any{"tab": tab2, "format": "text", "selector": "#nested-text"})
 	for _, want := range []string{"Hello", "bold", "italic"} {
 		if !strings.Contains(nested.Content, want) {
 			t.Errorf("nested text missing %q: %q", want, nested.Content)
 		}
 	}
-	empty := callTool[GetDOMOutput](t, "get_dom", map[string]any{"tab": tab2, "format": "text", "selector": "#empty-el"})
+	empty := callTool[getDOMOutput](t, "get_dom", map[string]any{"tab": tab2, "format": "text", "selector": "#empty-el"})
 	if empty.Content != "" {
 		t.Errorf("empty element text = %q, want empty", empty.Content)
 	}
-	innerNested := callTool[GetDOMOutput](t, "get_dom", map[string]any{"tab": tab2, "format": "html", "selector": "#nested-text", "outer": false})
+	innerNested := callTool[getDOMOutput](t, "get_dom", map[string]any{"tab": tab2, "format": "html", "selector": "#nested-text", "outer": false})
 	if strings.Contains(innerNested.Content, `<div id="nested-text"`) || !strings.Contains(innerNested.Content, "<span>") || !strings.Contains(innerNested.Content, "<strong>") {
 		t.Errorf("inner nested HTML = %q", innerNested.Content)
 	}
@@ -213,7 +213,7 @@ func TestSnapshotStructureScopeDepthAndRefs(t *testing.T) {
 		t.Error("expected error for missing snapshot selector")
 	}
 
-	full := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
+	full := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
 	if full.Snapshot == "" || full.RefCount == 0 {
 		t.Fatalf("empty full snapshot: %+v", full)
 	}
@@ -222,13 +222,13 @@ func TestSnapshotStructureScopeDepthAndRefs(t *testing.T) {
 	}
 
 	// Interactive-only filters down to strictly fewer lines/refs.
-	inter := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "interactive_only": true})
+	inter := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "interactive_only": true})
 	if inter.RefCount == 0 || inter.RefCount >= full.RefCount {
 		t.Errorf("interactive_only refs=%d vs full=%d", inter.RefCount, full.RefCount)
 	}
 
 	// Scoped selector="nav" includes nav descendants and excludes unrelated siblings.
-	scoped := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "selector": "nav"})
+	scoped := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "selector": "nav"})
 	if !strings.Contains(scoped.Snapshot, "Main navigation") || !strings.Contains(scoped.Snapshot, "Home") {
 		t.Fatalf("scoped nav snapshot missing expected items:\n%s", scoped.Snapshot)
 	}
@@ -237,31 +237,31 @@ func TestSnapshotStructureScopeDepthAndRefs(t *testing.T) {
 	}
 
 	// Depth=1 on nav is non-empty and strictly smaller than unlimited nav.
-	shallow := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "selector": "nav", "depth": 1})
+	shallow := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "selector": "nav", "depth": 1})
 	if shallow.Snapshot == "" || len(shallow.Snapshot) >= len(scoped.Snapshot) {
 		t.Errorf("depth=1 nav (%dB) should be non-empty and smaller than unlimited (%dB): %q", len(shallow.Snapshot), len(scoped.Snapshot), shallow.Snapshot)
 	}
 
 	// Depth=1 WITHOUT selector still includes semantic children behind generic wrappers.
-	topDepth1 := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "depth": 1})
+	topDepth1 := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "depth": 1})
 	if topDepth1.RefCount == 0 || len(topDepth1.Snapshot) >= len(full.Snapshot) {
 		t.Errorf("depth=1 full-page snapshot should be non-empty with refs and smaller than full: refs=%d len=%d/%d\n%s", topDepth1.RefCount, len(topDepth1.Snapshot), len(full.Snapshot), topDepth1.Snapshot)
 	}
 
 	// Truncation with small max_bytes.
-	capped := callTool[SnapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "max_bytes": 120})
+	capped := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "max_bytes": 120})
 	if !capped.Truncated || len(capped.Snapshot) > 120 || capped.TotalBytes <= 120 {
 		t.Errorf("capped snapshot = %+v", capped)
 	}
 
 	// snapshot must fail fast when a JS dialog is open rather than hanging.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": `setTimeout(() => alert('blocking'), 10); true`,
 	})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		d := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"})
+		d := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"})
 		if d.Open {
 			break
 		}
@@ -274,7 +274,7 @@ func TestSnapshotStructureScopeDepthAndRefs(t *testing.T) {
 	if time.Since(dlgStart) > 2*time.Second {
 		t.Errorf("snapshot while dialog open did not fail fast (%v)", time.Since(dlgStart))
 	}
-	callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
+	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
 }
 
 func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
@@ -305,19 +305,19 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tabOut := callTool[TabNewOutput](t, "tab_new", map[string]any{"url": srv.URL})
+	tabOut := callTool[tabNewOutput](t, "tab_new", map[string]any{"url": srv.URL})
 	defer closeTab(t, tabOut.TabID)
 	tabID := tabOut.TabID
 
 	// query with >>> pierces single and nested Shadow DOM across multiple hosts.
-	qCards := callTool[QueryOutput](t, "query", map[string]any{
+	qCards := callTool[queryOutput](t, "query", map[string]any{
 		"tab":      tabID,
 		"selector": "div >>> .label",
 	})
 	if qCards.Total != 2 {
 		t.Fatalf("query 'div >>> .label' total = %d, want 2 (%+v)", qCards.Total, qCards)
 	}
-	qDeep := callTool[QueryOutput](t, "query", map[string]any{
+	qDeep := callTool[queryOutput](t, "query", map[string]any{
 		"tab":      tabID,
 		"selector": "#host-a >>> .inner >>> #deep-btn",
 	})
@@ -326,7 +326,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 
 	// get_dom and evaluate work through >>> shadow selectors.
-	domDeep := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	domDeep := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "#host-a >>> .inner >>> #deep-btn",
@@ -334,7 +334,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	if strings.TrimSpace(domDeep.Content) != "Deep Action" {
 		t.Errorf("get_dom shadow text = %q, want Deep Action", domDeep.Content)
 	}
-	evalShadow := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	evalShadow := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"selector":   "#host-a >>> .inner >>> #deep-btn",
 		"expression": `return el.getAttribute('data-role')`,
@@ -363,7 +363,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 
 	// Visible SVG element returns text under get_dom(format=text, hidden=false).
-	svgText := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	svgText := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":      tabID,
 		"format":   "text",
 		"selector": "#svg-box",
@@ -373,7 +373,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 
 	// snapshot(selector=...) supports >>> shadow piercing too.
-	scopedShadowSnap := callTool[SnapshotOutput](t, "snapshot", map[string]any{
+	scopedShadowSnap := callTool[snapshotOutput](t, "snapshot", map[string]any{
 		"tab":      tabID,
 		"selector": "#host-a >>> .inner",
 	})
@@ -383,7 +383,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 
 	// snapshot discovers the button inside nested Shadow DOM and assigns a ref
 	// usable directly in get_dom(ref) and evaluate(ref).
-	snap := callTool[SnapshotOutput](t, "snapshot", map[string]any{
+	snap := callTool[snapshotOutput](t, "snapshot", map[string]any{
 		"tab":              tabID,
 		"interactive_only": true,
 	})
@@ -394,7 +394,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 	btnRef := m[1]
 
-	refDOM := callTool[GetDOMOutput](t, "get_dom", map[string]any{
+	refDOM := callTool[getDOMOutput](t, "get_dom", map[string]any{
 		"tab":    tabID,
 		"format": "html",
 		"ref":    btnRef,
@@ -403,7 +403,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 		t.Errorf("get_dom(ref=%s) = %q, want data-role=\"secret\"", btnRef, refDOM.Content)
 	}
 
-	refEval := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	refEval := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"ref":        btnRef,
 		"expression": `return Promise.resolve(el.id + ':' + el.textContent); // trailing comment`,
@@ -414,10 +414,10 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 
 	// evaluate(ref) handles undefined, primitives, reassignable el, and thrown primitive exceptions.
-	if out := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "ref": btnRef, "expression": `el = null; return 0;`}); string(out.Result) != "0" {
+	if out := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "ref": btnRef, "expression": `el = null; return 0;`}); string(out.Result) != "0" {
 		t.Errorf("evaluate(ref, 0) = %s, want 0", out.Result)
 	}
-	if out := callTool[EvaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "ref": btnRef, "expression": `return;`}); string(out.Result) != "null" {
+	if out := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "ref": btnRef, "expression": `return;`}); string(out.Result) != "null" {
 		t.Errorf("evaluate(ref, undefined) = %s, want null", out.Result)
 	}
 	if errText := callToolExpectErr(t, "evaluate", map[string]any{"tab": tabID, "ref": btnRef, "expression": `throw "boom"`}); !strings.Contains(errText, "boom") {
@@ -425,7 +425,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 
 	// Removing the element from DOM makes its ref fail cleanly with detached error.
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"ref":        btnRef,
 		"expression": `el.remove(); return true;`,
@@ -435,7 +435,7 @@ func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {
 	}
 
 	// Navigating invalidates refs with a clear stale message.
-	callTool[NavigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": fixtureURL("page2.html")})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": fixtureURL("page2.html")})
 	errText := callToolExpectErr(t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"ref":        btnRef,
@@ -458,12 +458,12 @@ func TestQueryFeaturesAndMutationSafety(t *testing.T) {
 	}
 	selectorTimeout(t, tabID, "query", nil, map[string]any{"selector": ".item"})
 
-	limited := callTool[QueryOutput](t, "query", map[string]any{"tab": tabID, "selector": ".item", "limit": 2})
+	limited := callTool[queryOutput](t, "query", map[string]any{"tab": tabID, "selector": ".item", "limit": 2})
 	if limited.Total != 3 || len(limited.Elements) != 2 {
 		t.Errorf("limit=2: total=%d len=%d", limited.Total, len(limited.Elements))
 	}
 
-	full := callTool[QueryOutput](t, "query", map[string]any{
+	full := callTool[queryOutput](t, "query", map[string]any{
 		"tab":            tabID,
 		"selector":       "#title",
 		"outer_html":     true,
@@ -478,7 +478,7 @@ func TestQueryFeaturesAndMutationSafety(t *testing.T) {
 		t.Errorf("query full fields = %+v", e)
 	}
 
-	noAttrs := callTool[QueryOutput](t, "query", map[string]any{"tab": tabID, "selector": "#title", "attributes": false, "text": false})
+	noAttrs := callTool[queryOutput](t, "query", map[string]any{"tab": tabID, "selector": "#title", "attributes": false, "text": false})
 	if len(noAttrs.Elements[0].Attributes) != 0 || noAttrs.Elements[0].Text != "" {
 		t.Errorf("attributes/text disabled = %+v", noAttrs.Elements[0])
 	}
@@ -486,7 +486,7 @@ func TestQueryFeaturesAndMutationSafety(t *testing.T) {
 	// Delayed element appears within selector timeout.
 	tabDelayed := navigateToFixture(t, "delayed.html")
 	defer closeTab(t, tabDelayed)
-	delayed := callTool[QueryOutput](t, "query", map[string]any{"tab": tabDelayed, "selector": "#delayed-element"})
+	delayed := callTool[queryOutput](t, "query", map[string]any{"tab": tabDelayed, "selector": "#delayed-element"})
 	if delayed.Total != 1 || !strings.Contains(delayed.Elements[0].Text, "appeared") {
 		t.Errorf("delayed query = %+v", delayed)
 	}
@@ -494,15 +494,15 @@ func TestQueryFeaturesAndMutationSafety(t *testing.T) {
 	// Default limit=10 on 12 items + display:none partial bbox + mutation safety.
 	tab2 := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tab2)
-	defLim := callTool[QueryOutput](t, "query", map[string]any{"tab": tab2, "selector": ".query-item", "limit": 0})
+	defLim := callTool[queryOutput](t, "query", map[string]any{"tab": tab2, "selector": ".query-item", "limit": 0})
 	if defLim.Total != 12 || len(defLim.Elements) != 10 {
 		t.Errorf("default limit: total=%d len=%d, want 12/10", defLim.Total, len(defLim.Elements))
 	}
-	callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tab2,
 		"expression": `document.body.insertAdjacentHTML('beforeend', '<div id="hidden-q" style="display:none">Hidden</div>')`,
 	})
-	hiddenQ := callTool[QueryOutput](t, "query", map[string]any{"tab": tab2, "selector": "#hidden-q", "outer_html": true, "bbox": true})
+	hiddenQ := callTool[queryOutput](t, "query", map[string]any{"tab": tab2, "selector": "#hidden-q", "outer_html": true, "bbox": true})
 	if len(hiddenQ.Elements) != 1 || hiddenQ.Elements[0].OuterHTML == "" {
 		t.Errorf("hidden query = %+v", hiddenQ)
 	}

@@ -23,7 +23,7 @@ func TestClickAriaDisabledRejected(t *testing.T) {
 	}
 
 	// Page-side handler must not have fired.
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('aria-disabled-output').textContent",
 	})
@@ -39,7 +39,7 @@ func TestClickPointerEventsNoneWarning(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#pointer-events-none-btn",
 	})
@@ -55,7 +55,7 @@ func TestClickPointerEventsNoneWarning(t *testing.T) {
 
 	// Page-side handler must not fire because the browser doesn't deliver
 	// mouse events to pointer-events:none elements.
-	state := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	state := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('pointer-events-none-output').textContent",
 	})
@@ -91,7 +91,7 @@ func TestClickInvisibleWarning(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction2.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#invisible-btn",
 	})
@@ -119,7 +119,7 @@ func TestClickFieldsetDisabledRejected(t *testing.T) {
 		t.Errorf("error %q should mention 'disabled' (fieldset propagation)", errText)
 	}
 
-	out := callTool[EvaluateOutput](t, "evaluate", map[string]any{
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "document.getElementById('fieldset-input-output').textContent",
 	})
@@ -134,7 +134,7 @@ func TestClickNormalButtonReturnsCleanState(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
 
-	out := callTool[ClickOutput](t, "click", map[string]any{
+	out := callTool[clickOutput](t, "click", map[string]any{
 		"tab":      tabID,
 		"selector": "#click-target",
 	})
