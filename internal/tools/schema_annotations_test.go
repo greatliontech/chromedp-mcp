@@ -2,27 +2,12 @@ package tools
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
-
-func listAllRegisteredTools(t *testing.T, opts *Options) []*mcp.Tool {
-	t.Helper()
-	sess := newIsolatedSession(t, opts)
-	res, err := sess.ListTools(t.Context(), &mcp.ListToolsParams{})
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	return res.Tools
-}
 
 func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 	dir := t.TempDir()
@@ -272,85 +257,212 @@ func TestSchemaWithEnumsPanicsOnProgrammerMistakes(t *testing.T) {
 	})
 }
 
-func TestBrowserListProfilesReturnsEmptyArrayNotNull(t *testing.T) {
+func TestToolsListFootprintBounded(t *testing.T) {
 	dir := t.TempDir()
-	localState := `{"profile":{"info_cache":{"Default":{"name":"Personal"}}}}`
-	if err := os.WriteFile(filepath.Join(dir, "Local State"), []byte(localState), 0o600); err != nil {
-		t.Fatalf("write Local State: %v", err)
+	cases := []struct {
+		name string
+		opts *Options
+		want int
+	}{
+		{"default", &Options{}, 41},
+		{"download_dir", &Options{DownloadDir: dir}, 42},
+		{"allowed_profiles", &Options{AllowedProfiles: []string{"Work"}, UserDataDir: dir}, 42},
+		{"all_enabled", &Options{DownloadDir: dir, AllowedProfiles: []string{"Work"}, UserDataDir: dir}, 43},
 	}
-
-	sess := newIsolatedSession(t, &Options{
-		AllowedProfiles: []string{"NonExistentProfile"},
-		UserDataDir:     dir,
-	})
-
-	res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: "browser_list_profiles"})
-	if err != nil || res.IsError {
-		t.Fatalf("browser_list_profiles failed: err=%v text=%s", err, contentText(res))
-	}
-	b, err := json.Marshal(res.StructuredContent)
-	if err != nil {
-		t.Fatalf("marshal StructuredContent: %v", err)
-	}
-	if string(b) != `{"profiles":[]}` {
-		t.Errorf("empty browser_list_profiles JSON = %s, want %s", b, `{"profiles":[]}`)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := listAllRegisteredTools(t, tc.opts)
+			if len(tools) != tc.want {
+				t.Errorf("registered tool count = %d, want %d", len(tools), tc.want)
+			}
+			for _, tool := range tools {
+				if strings.TrimSpace(tool.Description) == "" {
+					t.Errorf("tool %q has empty description", tool.Name)
+				}
+				if tool.OutputSchema == nil {
+					t.Errorf("tool %q has nil OutputSchema", tool.Name)
+				}
+			}
+			if tc.name == "default" {
+				// Guard against accidental schema/description bloat in default tools/list.
+				raw, err := json.Marshal(tools)
+				if err != nil {
+					t.Fatalf("marshal default tools/list: %v", err)
+				}
+				t.Logf("default tools/list: %d tools, %d bytes (~%d tokens)", len(tools), len(raw), len(raw)/4)
+				const maxDefaultBytes = 75_000
+				if len(raw) > maxDefaultBytes {
+					t.Errorf("default tools/list JSON = %d bytes, exceeds ceiling %d bytes", len(raw), maxDefaultBytes)
+				}
+			}
+		})
 	}
 }
 
-func TestGetConsoleLogsFiltersNonStandardCDPLevels(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
+// TestValidateModeAccepted verifies that values in the allowed set pass.
+func TestValidateModeAccepted(t *testing.T) {
+	cases := []struct {
+		mode    string
+		allowed []string
+	}{
+		{modePeek, []string{modePeek, modeDrain}},
+		{modeDrain, []string{modePeek, modeDrain}},
+		{typeModeReplace, []string{typeModeReplace, typeModeAppend}},
+		{typeModeAppend, []string{typeModeReplace, typeModeAppend}},
+	}
+	for _, tc := range cases {
+		if err := validateMode(tc.mode, tc.allowed...); err != nil {
+			t.Errorf("validateMode(%q, %v) = %v, want nil", tc.mode, tc.allowed, err)
+		}
+	}
+}
 
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `console.assert(false, 'assertion-boom'); console.log('plain-log'); true`,
-	})
-	waitForConsole(t, tabID)
+// TestValidateModeEmpty verifies an empty mode is rejected (no silent
+// default into destructive behavior).
+func TestValidateModeEmpty(t *testing.T) {
+	err := validateMode("", modePeek, modeDrain)
+	if err == nil {
+		t.Fatal("validateMode(\"\", ...) returned nil; want error")
+	}
+	if !strings.Contains(err.Error(), "required") {
+		t.Errorf("error %q should mention 'required'", err)
+	}
+}
 
-	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab":   tabID,
-		"mode":  "drain",
-		"level": "assert",
-	})
-	if len(out.Logs) != 1 || out.Logs[0].Level != "assert" || !strings.Contains(out.Logs[0].Text, "assertion-boom") {
-		t.Fatalf("expected 1 assert log, got %+v", out.Logs)
+// TestValidateModeInvalid verifies unknown values are rejected with a
+// message that surfaces the offending value.
+func TestValidateModeInvalid(t *testing.T) {
+	err := validateMode("clear", modePeek, modeDrain)
+	if err == nil {
+		t.Fatal("validateMode(\"clear\", ...) returned nil; want error")
+	}
+	if !strings.Contains(err.Error(), `"clear"`) {
+		t.Errorf("error %q should quote the invalid mode", err)
+	}
+}
+
+// TestValidateModeCrossModeRejected verifies that a value from one
+// mode-set is rejected when validated against the other set — a buffer
+// "drain" must not accidentally be accepted by the type tool.
+func TestValidateModeCrossModeRejected(t *testing.T) {
+	if err := validateMode(modePeek, typeModeReplace, typeModeAppend); err == nil {
+		t.Error("validateMode(modePeek, type-modes) returned nil; want error")
+	}
+	if err := validateMode(typeModeReplace, modePeek, modeDrain); err == nil {
+		t.Error("validateMode(typeModeReplace, buffer-modes) returned nil; want error")
+	}
+}
+
+// TestModeRejectedAtToolBoundary verifies the schema-level required check
+// fires for every tool that consumes buffers when 'mode' is omitted.
+func TestModeRejectedAtToolBoundary(t *testing.T) {
+	sess := newIsolatedSession(t, &Options{DownloadDir: t.TempDir()})
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"get_console_logs", map[string]any{"tab": "any"}},
+		{"get_js_errors", map[string]any{"tab": "any"}},
+		{"get_network_requests", map[string]any{"tab": "any"}},
+		{"get_websocket_frames", map[string]any{"tab": "any"}},
+		{"get_downloads", map[string]any{}},
+		{"type", map[string]any{"tab": "any", "selector": "#x", "text": "hi"}},
+	}
+	for _, tc := range cases {
+		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+		if err != nil {
+			t.Fatalf("%s without mode protocol error: %v", tc.name, err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s without mode unexpectedly succeeded", tc.name)
+		}
+		errText := contentText(res)
+		if !strings.Contains(errText, `validating "arguments"`) || !strings.Contains(errText, `"mode"`) {
+			t.Errorf("%s without mode: error %q should be a schema validation error referencing \"mode\"", tc.name, errText)
+		}
+	}
+}
+
+// TestModeRejectedInvalidValueAtSchema verifies the schema-level enum
+// constraint rejects an unknown mode value before the handler sees it.
+func TestModeRejectedInvalidValueAtSchema(t *testing.T) {
+	sess := newIsolatedSession(t, &Options{})
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"get_console_logs", map[string]any{"tab": "any", "mode": "wipe"}},
+		{"get_console_logs", map[string]any{"tab": "any", "mode": "replace"}},
+		{"get_performance", map[string]any{"tab": "any", "mode": "wipe"}},
+		{"get_performance", map[string]any{"tab": "any", "mode": "replace"}},
+		{"type", map[string]any{"tab": "any", "selector": "#x", "text": "hi", "mode": "wipe"}},
+		{"type", map[string]any{"tab": "any", "selector": "#x", "text": "hi", "mode": "drain"}},
+	}
+	for _, tc := range cases {
+		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+		if err != nil {
+			t.Fatalf("%s with mode=%v protocol error: %v", tc.name, tc.args["mode"], err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s with mode=%v unexpectedly succeeded", tc.name, tc.args["mode"])
+		}
+		errText := contentText(res)
+		mode, _ := tc.args["mode"].(string)
+		if !strings.Contains(errText, `validating "arguments"`) || (!strings.Contains(errText, mode) && !strings.Contains(errText, "enum")) {
+			t.Errorf("%s with mode=%q: error %q should be a schema enum validation error", tc.name, mode, errText)
+		}
 	}
 }
 
 func TestRuntimeValidationAcrossTools(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
+	// Isolated server with DownloadDir configured and NO running browser:
+	// every upfront runtime validator must reject invalid inputs before tab resolution.
+	sess := newIsolatedSession(t, &Options{DownloadDir: t.TempDir()})
+	const tabID = "any-tab"
+	expectErr := func(name string, args map[string]any) string {
+		t.Helper()
+		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s protocol error: %v", name, err)
+		}
+		if !res.IsError {
+			t.Fatalf("%s expected tool error, got success: %s", name, contentText(res))
+		}
+		return contentText(res)
+	}
 
 	// Browser validation (both width and height).
-	if err := callToolExpectErr(t, "browser_launch", map[string]any{"width": -1}); !strings.Contains(err, "width") {
+	if err := expectErr("browser_launch", map[string]any{"width": -1}); !strings.Contains(err, "width") {
 		t.Errorf("negative browser_launch width err = %q", err)
 	}
-	if err := callToolExpectErr(t, "browser_launch", map[string]any{"height": -1}); !strings.Contains(err, "height") {
+	if err := expectErr("browser_launch", map[string]any{"height": -1}); !strings.Contains(err, "height") {
 		t.Errorf("negative browser_launch height err = %q", err)
 	}
-	if err := callToolExpectErr(t, "browser_connect", map[string]any{"url": "   "}); !strings.Contains(err, "url") {
+	if err := expectErr("browser_connect", map[string]any{"url": "   "}); !strings.Contains(err, "url") {
 		t.Errorf("whitespace browser_connect url err = %q", err)
 	}
 
 	// Console / JS errors / Downloads negative limits.
-	if err := callToolExpectErr(t, "get_console_logs", map[string]any{"tab": tabID, "mode": "peek", "limit": -1}); !strings.Contains(err, "limit") {
+	if err := expectErr("get_console_logs", map[string]any{"tab": tabID, "mode": "peek", "limit": -1}); !strings.Contains(err, "limit") {
 		t.Errorf("get_console_logs negative limit err = %q", err)
 	}
-	if err := callToolExpectErr(t, "get_js_errors", map[string]any{"tab": tabID, "mode": "peek", "limit": -1}); !strings.Contains(err, "limit") {
+	if err := expectErr("get_js_errors", map[string]any{"tab": tabID, "mode": "peek", "limit": -1}); !strings.Contains(err, "limit") {
 		t.Errorf("get_js_errors negative limit err = %q", err)
 	}
-	if err := callToolExpectErr(t, "get_downloads", map[string]any{"mode": "peek", "limit": -1}); !strings.Contains(err, "limit") {
+	if err := expectErr("get_downloads", map[string]any{"mode": "peek", "limit": -1}); !strings.Contains(err, "limit") {
 		t.Errorf("get_downloads negative limit err = %q", err)
 	}
 
 	// Network status bounds (both min, max, inverted) & empty request_id.
-	if err := callToolExpectErr(t, "get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_min": -1}); !strings.Contains(err, "status_min") {
+	if err := expectErr("get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_min": -1}); !strings.Contains(err, "status_min") {
 		t.Errorf("negative status_min err = %q", err)
 	}
-	if err := callToolExpectErr(t, "get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_max": -1}); !strings.Contains(err, "status_max") {
+	if err := expectErr("get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_max": -1}); !strings.Contains(err, "status_max") {
 		t.Errorf("negative status_max err = %q", err)
 	}
-	if err := callToolExpectErr(t, "get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_min": 500, "status_max": 200}); !strings.Contains(err, "status_max") {
+	if err := expectErr("get_network_requests", map[string]any{"tab": tabID, "mode": "peek", "status_min": 500, "status_max": 200}); !strings.Contains(err, "status_max") {
 		t.Errorf("inverted status range err = %q", err)
 	}
 	for _, part := range []string{"", "response", "request"} {
@@ -358,27 +470,27 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		if part != "" {
 			args["part"] = part
 		}
-		if err := callToolExpectErr(t, "get_network_body", args); !strings.Contains(err, "request_id") {
+		if err := expectErr("get_network_body", args); !strings.Contains(err, "request_id") {
 			t.Errorf("get_network_body(part=%q) empty request_id err = %q", part, err)
 		}
 	}
-	if err := callToolExpectErr(t, "get_websocket_frames", map[string]any{"tab": tabID, "mode": "peek", "request_id": ""}); !strings.Contains(err, "request_id") {
+	if err := expectErr("get_websocket_frames", map[string]any{"tab": tabID, "mode": "peek", "request_id": ""}); !strings.Contains(err, "request_id") {
 		t.Errorf("get_websocket_frames empty request_id err = %q", err)
 	}
 
 	// Storage negative limit & max_bytes.
-	if err := callToolExpectErr(t, "storage", map[string]any{"action": "get", "tab": tabID, "keys_only": true, "limit": -1}); !strings.Contains(err, "limit") {
+	if err := expectErr("storage", map[string]any{"action": "get", "tab": tabID, "keys_only": true, "limit": -1}); !strings.Contains(err, "limit") {
 		t.Errorf("storage negative limit err = %q", err)
 	}
-	if err := callToolExpectErr(t, "storage", map[string]any{"action": "get", "tab": tabID, "max_bytes": -1}); !strings.Contains(err, "max_bytes") {
+	if err := expectErr("storage", map[string]any{"action": "get", "tab": tabID, "max_bytes": -1}); !strings.Contains(err, "max_bytes") {
 		t.Errorf("storage negative max_bytes err = %q", err)
 	}
 
 	// Config validation.
-	if err := callToolExpectErr(t, "configure_page", map[string]any{"action": "set_permission", "tab": tabID, "name": "", "setting": "granted"}); !strings.Contains(err, "name") {
+	if err := expectErr("configure_page", map[string]any{"action": "set_permission", "tab": tabID, "name": "", "setting": "granted"}); !strings.Contains(err, "name") {
 		t.Errorf("configure_page(set_permission) empty name err = %q", err)
 	}
-	if err := callToolExpectErr(t, "configure_page", map[string]any{"action": "remove_script", "tab": tabID, "identifier": ""}); !strings.Contains(err, "identifier") {
+	if err := expectErr("configure_page", map[string]any{"action": "remove_script", "tab": tabID, "identifier": ""}); !strings.Contains(err, "identifier") {
 		t.Errorf("configure_page(remove_script) empty identifier err = %q", err)
 	}
 
@@ -398,33 +510,26 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		{"neg_accuracy", map[string]any{"action": "geolocation", "tab": tabID, "latitude": 0.0, "longitude": 0.0, "accuracy": -1.0}, "accuracy"},
 	}
 	for _, tc := range geoCases {
-		if err := callToolExpectErr(t, "emulate", tc.args); !strings.Contains(err, tc.want) {
+		if err := expectErr("emulate", tc.args); !strings.Contains(err, tc.want) {
 			t.Errorf("emulate(geolocation, %s) err = %q, want substring %q", tc.name, err, tc.want)
 		}
 	}
 
 	// Emulation validation: cpu_throttling & network (including fractional (-1, 0)).
-	if err := callToolExpectErr(t, "emulate", map[string]any{"action": "cpu_throttling", "tab": tabID, "rate": -1.0}); !strings.Contains(err, "rate") {
+	if err := expectErr("emulate", map[string]any{"action": "cpu_throttling", "tab": tabID, "rate": -1.0}); !strings.Contains(err, "rate") {
 		t.Errorf("emulate(cpu_throttling) negative rate err = %q", err)
 	}
-	if err := callToolExpectErr(t, "emulate", map[string]any{"action": "network", "tab": tabID, "latency": -5.0}); !strings.Contains(err, "latency") {
+	if err := expectErr("emulate", map[string]any{"action": "network", "tab": tabID, "latency": -5.0}); !strings.Contains(err, "latency") {
 		t.Errorf("emulate(network) negative latency err = %q", err)
 	}
 	for _, bad := range []float64{-2.0, -0.5} {
-		if err := callToolExpectErr(t, "emulate", map[string]any{"action": "network", "tab": tabID, "download_throughput": bad}); !strings.Contains(err, "download_throughput") {
+		if err := expectErr("emulate", map[string]any{"action": "network", "tab": tabID, "download_throughput": bad}); !strings.Contains(err, "download_throughput") {
 			t.Errorf("emulate(network) download_throughput=%v err = %q", bad, err)
 		}
-		if err := callToolExpectErr(t, "emulate", map[string]any{"action": "network", "tab": tabID, "upload_throughput": bad}); !strings.Contains(err, "upload_throughput") {
+		if err := expectErr("emulate", map[string]any{"action": "network", "tab": tabID, "upload_throughput": bad}); !strings.Contains(err, "upload_throughput") {
 			t.Errorf("emulate(network) upload_throughput=%v err = %q", bad, err)
 		}
 	}
-	// -1 (explicit disable) must still succeed.
-	callTool[emulateOutput](t, "emulate", map[string]any{
-		"action":              "network",
-		"tab":                 tabID,
-		"download_throughput": -1.0,
-		"upload_throughput":   -1.0,
-	})
 
 	// Negative selectorInput.Timeout rejected across selectorInput tools.
 	timeoutTools := []struct {
@@ -447,7 +552,7 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		{"emulate", map[string]any{"action": "pseudo_state", "tab": tabID, "selector": "h1", "timeout": -1}},
 	}
 	for _, tc := range timeoutTools {
-		if err := callToolExpectErr(t, tc.name, tc.args); !strings.Contains(err, "timeout") {
+		if err := expectErr(tc.name, tc.args); !strings.Contains(err, "timeout") {
 			t.Errorf("%s negative timeout err = %q, want mention of timeout", tc.name, err)
 		}
 	}
@@ -464,7 +569,7 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		{"upload_files", map[string]any{"tab": tabID, "selector": "", "paths": []string{"/tmp/a"}}},
 	}
 	for _, tc := range emptySelTools {
-		if err := callToolExpectErr(t, tc.name, tc.args); !strings.Contains(err, "selector") {
+		if err := expectErr(tc.name, tc.args); !strings.Contains(err, "selector") {
 			t.Errorf("%s empty selector err = %q, want mention of selector", tc.name, err)
 		}
 	}
@@ -564,31 +669,5 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		if !strings.Contains(got, tc.want) {
 			t.Errorf("%s without browser returned %q, want pre-ResolveTab error containing %q", tc.name, got, tc.want)
 		}
-	}
-}
-
-func TestNetworkEntryFieldSetMatchesStructReflection(t *testing.T) {
-	rt := reflect.TypeFor[collector.NetworkEntry]()
-	want := make([]string, 0, rt.NumField())
-	for i := 0; i < rt.NumField(); i++ {
-		f := rt.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		tag := f.Tag.Get("json")
-		if tag == "-" {
-			continue
-		}
-		name, _, _ := strings.Cut(tag, ",")
-		if name == "" {
-			name = f.Name
-		}
-		want = append(want, name)
-	}
-	slices.Sort(want)
-
-	got := sortedKeys(networkEntryFieldSet)
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("networkEntryFieldSet = %v, want %v (from collector.NetworkEntry json tags)", got, want)
 	}
 }

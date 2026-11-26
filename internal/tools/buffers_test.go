@@ -16,7 +16,7 @@ func TestClearBuffersSelectivePreservesOtherBuffers(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	b, tb, err := harness.mgr.ResolveTabWithBrowser("", tabID)
+	b, tb, err := ensureHarness(t).mgr.ResolveTabWithBrowser("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTabWithBrowser: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	b, tb, err := harness.mgr.ResolveTabWithBrowser("", tabID)
+	b, tb, err := ensureHarness(t).mgr.ResolveTabWithBrowser("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTabWithBrowser: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 		callTool[struct{}](t, "tab_close", map[string]any{"tab": tb.ID})
 	}
 
-	b2, err := harness.mgr.Resolve(b2ID)
+	b2, err := ensureHarness(t).mgr.Resolve(b2ID)
 	if err != nil {
 		t.Fatalf("Resolve(b2): %v", err)
 	}
@@ -292,7 +292,7 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 
 	// Passing tab from non-active browser b1 WITHOUT browser must resolve b1
 	// (the tab's owning browser) for downloads and leave active b2's downloads intact.
-	b1, err := harness.mgr.Resolve(b1ID)
+	b1, err := ensureHarness(t).mgr.Resolve(b1ID)
 	if err != nil {
 		t.Fatalf("Resolve(b1): %v", err)
 	}
@@ -325,7 +325,7 @@ func TestClearBuffersDownloadsOnlyWithoutOpenTabAndValidation(t *testing.T) {
 		"tab":        tabInB1,
 		"expression": `console.log('must-survive'); true`,
 	})
-	tb1, err := harness.mgr.ResolveTab(b1ID, tabInB1)
+	tb1, err := ensureHarness(t).mgr.ResolveTab(b1ID, tabInB1)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
 	}

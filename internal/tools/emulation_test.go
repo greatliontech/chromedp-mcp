@@ -268,6 +268,13 @@ func TestEmulateNetworkOfflineLatencyAndThroughput(t *testing.T) {
 	if latRes.Result < 300 {
 		t.Fatalf("expected >= 300ms latency, got %.0fms", latRes.Result)
 	}
+	// Explicit -1 disables download/upload throughput caps.
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "network",
+		"tab":                 tabID,
+		"download_throughput": -1.0,
+		"upload_throughput":   -1.0,
+	})
 	callTool[emulateOutput](t, "emulate", map[string]any{"action": "network", "tab": tabID})
 }
 
@@ -316,7 +323,7 @@ func TestEmulatePseudoStateSelectorRefShadowIframeAndNavigationReset(t *testing.
 	defer closeTab(t, tabID)
 	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
 
-	tb, err := harness.mgr.ResolveTab("", tabID)
+	tb, err := ensureHarness(t).mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
 	}
@@ -564,5 +571,139 @@ func TestEmulateDevicePortraitLandscapeAndReset(t *testing.T) {
 	}
 	if errText := callToolExpectErr(t, "emulate", map[string]any{"action": "device", "tab": tabID, "device": "reset", "landscape": true}); !strings.Contains(errText, "landscape") {
 		t.Errorf("reset+landscape err = %q, want landscape", errText)
+	}
+}
+
+func TestSetViewport(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "viewport",
+		"tab":    tabID,
+		"width":  375,
+		"height": 667,
+	})
+
+	// Verify via JS.
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.innerWidth",
+	})
+	if string(out.Result) != "375" {
+		t.Errorf("viewport width = %s, want 375", out.Result)
+	}
+}
+
+func TestSetViewportDeviceScaleFactor(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "viewport",
+		"tab":                 tabID,
+		"width":               800,
+		"height":              600,
+		"device_scale_factor": 2.0,
+	})
+
+	// Verify width.
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.innerWidth",
+	})
+	if string(out.Result) != "800" {
+		t.Errorf("viewport width = %s, want 800", out.Result)
+	}
+
+	// Verify height.
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.innerHeight",
+	})
+	if string(out.Result) != "600" {
+		t.Errorf("viewport height = %s, want 600", out.Result)
+	}
+
+	// Verify device pixel ratio matches scale factor.
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.devicePixelRatio",
+	})
+	if string(out.Result) != "2" {
+		t.Errorf("devicePixelRatio = %s, want 2", out.Result)
+	}
+}
+
+func TestSetViewportMobile(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "viewport",
+		"tab":    tabID,
+		"width":  390,
+		"height": 844,
+		"mobile": true,
+	})
+
+	// In mobile mode, screen.width/height reflects the device metrics
+	// regardless of layout viewport.
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "screen.width",
+	})
+	if string(out.Result) != "390" {
+		t.Errorf("screen.width = %s, want 390", out.Result)
+	}
+
+	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "screen.height",
+	})
+	if string(out.Result) != "844" {
+		t.Errorf("screen.height = %s, want 844", out.Result)
+	}
+}
+
+func TestSetViewportDefaultScaleFactor(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action": "viewport",
+		"tab":    tabID,
+		"width":  1024,
+		"height": 768,
+		// device_scale_factor omitted — should default to 1.0.
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.devicePixelRatio",
+	})
+	if string(out.Result) != "1" {
+		t.Errorf("default devicePixelRatio = %s, want 1", out.Result)
+	}
+}
+
+func TestSetViewportScaleFactorZero(t *testing.T) {
+	tabID := navigateToFixture(t, "index.html")
+	defer closeTab(t, tabID)
+
+	callTool[emulateOutput](t, "emulate", map[string]any{
+		"action":              "viewport",
+		"tab":                 tabID,
+		"width":               800,
+		"height":              600,
+		"device_scale_factor": 0,
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.devicePixelRatio",
+	})
+	if string(out.Result) != "1" {
+		t.Errorf("scale=0 devicePixelRatio = %s, want 1 (default)", out.Result)
 	}
 }

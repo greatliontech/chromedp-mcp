@@ -122,8 +122,8 @@ func startRemoteChromeWithKill(t *testing.T, urls ...string) (int, func()) {
 }
 
 func TestBrowserConnectAdoptsExistingTabsWithoutRogueBlankTab(t *testing.T) {
-	url1 := fixtureURL("forms.html")
-	url2 := fixtureURL("page2.html")
+	url1 := fixtureURL(t, "forms.html")
+	url2 := fixtureURL(t, "page2.html")
 	port := startRemoteChrome(t, url1, url2)
 
 	// Wait for both initial tabs to finish navigating.
@@ -224,7 +224,7 @@ func TestBrowserConnectSkipsWedgedTabWithoutHanging(t *testing.T) {
 	}))
 	defer wedgedSrv.Close()
 
-	healthyURL := fixtureURL("page2.html")
+	healthyURL := fixtureURL(t, "page2.html")
 	port := startRemoteChrome(t, wedgedSrv.URL, healthyURL)
 
 	// Wait until both targets appear and the wedged tab enters its infinite loop.
@@ -279,7 +279,7 @@ func TestBrowserActivateSwitchesActiveBrowser(t *testing.T) {
 	// Create a tab in b1 navigated to forms.html.
 	t1 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b1,
-		"url":     fixtureURL("forms.html"),
+		"url":     fixtureURL(t, "forms.html"),
 	})
 	defer closeTab(t, t1.TabID)
 
@@ -292,7 +292,7 @@ func TestBrowserActivateSwitchesActiveBrowser(t *testing.T) {
 
 	t2 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b2,
-		"url":     fixtureURL("page2.html"),
+		"url":     fixtureURL(t, "page2.html"),
 	})
 	defer closeTab(t, t2.TabID)
 
@@ -455,7 +455,7 @@ func TestBrowserLaunchCustomDimensions(t *testing.T) {
 
 	// Create a tab and verify viewport dimensions.
 	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url":     fixtureURL("page2.html"),
+		"url":     fixtureURL(t, "page2.html"),
 		"browser": b.BrowserID,
 	})
 	defer closeTab(t, tab.TabID)
@@ -561,7 +561,7 @@ func TestBrowserConnect(t *testing.T) {
 
 	// Create a tab on the connected browser and verify we can use it.
 	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url":     fixtureURL("page2.html"),
+		"url":     fixtureURL(t, "page2.html"),
 		"browser": out.BrowserID,
 	})
 
@@ -673,7 +673,7 @@ func TestBrowserConnectHTTPURL(t *testing.T) {
 
 	// Verify it works by creating a tab and evaluating JS.
 	tab := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url":     fixtureURL("index.html"),
+		"url":     fixtureURL(t, "index.html"),
 		"browser": out.BrowserID,
 	})
 
@@ -732,23 +732,26 @@ func TestConcurrentBrowserAndTabOperations(t *testing.T) {
 
 	// Run concurrent operations: list, activate, and list again.
 	// The race detector will catch any lock ordering issues.
-	done := make(chan struct{}, 20)
+	h := ensureHarness(t)
+	errs := make(chan error, 10)
 	for i := 0; i < 5; i++ {
 		go func() {
-			defer func() { done <- struct{}{} }()
-			callTool[tabListOutput](t, "tab_list", map[string]any{
+			_, err := callToolAsync[tabListOutput](h, "tab_list", map[string]any{
 				"browser": b.BrowserID,
 			})
+			errs <- err
 		}()
-		go func(idx int) {
-			defer func() { done <- struct{}{} }()
-			callTool[browserListOutput](t, "browser_list", map[string]any{})
-		}(i)
+		go func() {
+			_, err := callToolAsync[browserListOutput](h, "browser_list", map[string]any{})
+			errs <- err
+		}()
 	}
 
 	// Wait for all concurrent operations.
 	for i := 0; i < 10; i++ {
-		<-done
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent call failed: %v", err)
+		}
 	}
 
 	// Clean up tabs.
@@ -764,7 +767,7 @@ func TestNoBrowserError(t *testing.T) {
 	// launch or connect a browser first.
 	res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      "navigate",
-		Arguments: map[string]any{"url": fixtureURL("index.html")},
+		Arguments: map[string]any{"url": fixtureURL(t, "index.html")},
 	})
 	if err != nil {
 		t.Fatalf("navigate protocol error: %v", err)
@@ -778,7 +781,7 @@ func TestNoBrowserError(t *testing.T) {
 
 	// Explicit reference to a nonexistent tab ID on the shared harness also errors.
 	errText := callToolExpectErr(t, "navigate", map[string]any{
-		"url": fixtureURL("index.html"),
+		"url": fixtureURL(t, "index.html"),
 		"tab": "nonexistent-tab-id",
 	})
 	if !strings.Contains(errText, "not found") {

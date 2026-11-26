@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestIndexedDBLifecyclePaginationIndexAndDelete(t *testing.T) {
@@ -216,27 +214,26 @@ func TestIndexedDBLifecyclePaginationIndexAndDelete(t *testing.T) {
 	}
 
 	// Concurrent reads on the same tab must not corrupt RemoteObject handles.
+	h := ensureHarness(t)
 	var wg sync.WaitGroup
 	errs := make(chan string, 4)
 	for range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := harness.session.CallTool(harness.ctx, &mcp.CallToolParams{
-				Name: "indexeddb",
-				Arguments: map[string]any{
-					"action":   "get",
-					"tab":      tabID,
-					"database": "app_db",
-					"store":    "meta",
-				},
+			out, err := callToolAsync[indexedDBOutput](h, "indexeddb", map[string]any{
+				"action":   "get",
+				"tab":      tabID,
+				"database": "app_db",
+				"store":    "meta",
 			})
 			if err != nil {
 				errs <- err.Error()
 				return
 			}
-			if res.IsError || !strings.Contains(contentText(res), `"[Circular]"`) {
-				errs <- contentText(res)
+			raw, err := json.Marshal(out.Entries)
+			if err != nil || !strings.Contains(string(raw), `"[Circular]"`) {
+				errs <- string(raw)
 			}
 		}()
 	}

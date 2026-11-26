@@ -35,7 +35,7 @@ func TestAddAndRemoveScript(t *testing.T) {
 
 	callTool[struct{}](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("config.html"),
+		"url": fixtureURL(t, "config.html"),
 	})
 
 	result := callTool[evalResult](t, "evaluate", map[string]any{
@@ -54,7 +54,7 @@ func TestAddAndRemoveScript(t *testing.T) {
 
 	callTool[struct{}](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("index.html"),
+		"url": fixtureURL(t, "index.html"),
 	})
 
 	result = callTool[evalResult](t, "evaluate", map[string]any{
@@ -123,7 +123,7 @@ func TestAddScriptEvaluateNowFailureKeepsRegistration(t *testing.T) {
 
 	callTool[struct{}](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 
 	type evalResult struct {
@@ -183,7 +183,7 @@ func TestAddScriptParseErrorRejectsEarly(t *testing.T) {
 
 	callTool[struct{}](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	logs := callTool[getJSErrorsOutput](t, "get_js_errors", map[string]any{
 		"tab":  tabID,

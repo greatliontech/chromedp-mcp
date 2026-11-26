@@ -171,9 +171,14 @@ func TestBrowserLaunchProfileNoAllowedSet(t *testing.T) {
 		t.Error("browser_launch schema must include 'profile' when AllowedProfiles is non-empty")
 	}
 
-	result := callToolRaw(t, "browser_launch", map[string]any{
-		"profile": "Work",
+	sess := newIsolatedSession(t, &Options{})
+	result, err := sess.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "browser_launch",
+		Arguments: map[string]any{"profile": "Work"},
 	})
+	if err != nil {
+		t.Fatalf("CallTool(browser_launch): %v", err)
+	}
 	if !result.IsError {
 		t.Fatal("expected error when profile is set but AllowedProfiles is empty")
 	}
@@ -205,15 +210,39 @@ func TestRegisterDoesNotMutateCallerOptions(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBrowserListProfilesNotRegisteredWithoutAllowedProfiles(t *testing.T) {
-	// On the main harness (no AllowedProfiles), browser_list_profiles
-	// should not exist.
-	ctx, cancel := context.WithTimeout(harness.ctx, 5*time.Second)
+	sess := newIsolatedSession(t, &Options{})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	_, err := harness.session.CallTool(ctx, &mcp.CallToolParams{
+	_, err := sess.CallTool(ctx, &mcp.CallToolParams{
 		Name: "browser_list_profiles",
 	})
 	if err == nil {
 		t.Fatal("expected error calling browser_list_profiles when AllowedProfiles is empty")
+	}
+}
+
+func TestBrowserListProfilesReturnsEmptyArrayNotNull(t *testing.T) {
+	dir := t.TempDir()
+	localState := `{"profile":{"info_cache":{"Default":{"name":"Personal"}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "Local State"), []byte(localState), 0o600); err != nil {
+		t.Fatalf("write Local State: %v", err)
+	}
+
+	sess := newIsolatedSession(t, &Options{
+		AllowedProfiles: []string{"NonExistentProfile"},
+		UserDataDir:     dir,
+	})
+
+	res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: "browser_list_profiles"})
+	if err != nil || res.IsError {
+		t.Fatalf("browser_list_profiles failed: err=%v text=%s", err, contentText(res))
+	}
+	b, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal StructuredContent: %v", err)
+	}
+	if string(b) != `{"profiles":[]}` {
+		t.Errorf("empty browser_list_profiles JSON = %s, want %s", b, `{"profiles":[]}`)
 	}
 }
 

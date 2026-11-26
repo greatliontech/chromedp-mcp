@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -62,25 +61,6 @@ func TestEvaluateSelectorTrailingLineCommentAndValidation(t *testing.T) {
 	})
 	if !strings.Contains(errText, "max_result_bytes") {
 		t.Errorf("error = %q, want mention of max_result_bytes", errText)
-	}
-}
-
-func TestEvaluateAndSnapshotEmitOutputSchema(t *testing.T) {
-	res, err := harness.session.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	found := map[string]bool{}
-	for _, tool := range res.Tools {
-		if tool.Name == "evaluate" || tool.Name == "snapshot" || tool.Name == "get_dom" {
-			found[tool.Name] = true
-			if tool.OutputSchema == nil {
-				t.Errorf("tool %q has nil OutputSchema", tool.Name)
-			}
-		}
-	}
-	if !found["evaluate"] || !found["snapshot"] || !found["get_dom"] {
-		t.Fatalf("missing expected tools in ListTools: %v", found)
 	}
 }
 
@@ -467,5 +447,84 @@ func TestEvaluateWithoutSelector(t *testing.T) {
 	})
 	if result.Result != 4 {
 		t.Fatalf("expected 4, got %v", result.Result)
+	}
+}
+
+// TestEvaluateMaxResultBytesCaps verifies max_result_bytes truncates
+// large evaluation results and reports the cut.
+func TestEvaluateMaxResultBytesCaps(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":              tabID,
+		"expression":       `'A'.repeat(2000)`,
+		"max_result_bytes": 100,
+	})
+	if !out.Truncated {
+		t.Fatal("Truncated should be true when result exceeds cap")
+	}
+	if out.TotalBytes != 2002 { // 2000 chars + 2 quote bytes
+		t.Errorf("TotalBytes = %d, want 2002", out.TotalBytes)
+	}
+	// Result is now a JSON string containing the truncated prefix.
+	var asString string
+	if err := json.Unmarshal(out.Result, &asString); err != nil {
+		t.Fatalf("Result should be a JSON string after truncation: %v", err)
+	}
+	if len(asString) != 100 {
+		t.Errorf("truncated prefix length = %d, want 100", len(asString))
+	}
+	if !strings.HasPrefix(asString, `"AAA`) {
+		t.Errorf("truncated prefix = %q, want to start with the JSON open quote+A's", asString[:10])
+	}
+}
+
+// TestEvaluateMaxResultBytesUnderCap verifies that results under the
+// cap pass through unchanged with no Truncated/TotalBytes.
+func TestEvaluateMaxResultBytesUnderCap(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":              tabID,
+		"expression":       `'small'`,
+		"max_result_bytes": 100,
+	})
+	if out.Truncated {
+		t.Error("Truncated should be false when result fits under cap")
+	}
+	if out.TotalBytes != 0 {
+		t.Errorf("TotalBytes = %d, want 0 when not truncated", out.TotalBytes)
+	}
+	if string(out.Result) != `"small"` {
+		t.Errorf("Result = %s, want \"small\"", string(out.Result))
+	}
+}
+
+// TestEvaluateMaxResultBytesUTF8Safe verifies the truncation cut is
+// trimmed to a valid UTF-8 rune boundary so the prefix doesn't contain
+// stray U+FFFD replacement characters from json.Marshal silently
+// fixing an invalid encoding.
+func TestEvaluateMaxResultBytesUTF8Safe(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	// Result is "ééééé" (10 bytes = 5 × 2-byte é) plus the wrapping
+	// quotes (12 bytes total). Cap to 5 bytes lands inside a codepoint.
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":              tabID,
+		"expression":       `'é'.repeat(5)`,
+		"max_result_bytes": 5,
+	})
+	if !out.Truncated {
+		t.Fatal("Truncated should be true")
+	}
+	var asString string
+	if err := json.Unmarshal(out.Result, &asString); err != nil {
+		t.Fatalf("Result should unmarshal as JSON string: %v", err)
+	}
+	if strings.ContainsRune(asString, '\uFFFD') {
+		t.Errorf("truncated prefix contains U+FFFD replacement — UTF-8 trim failed: %q", asString)
 	}
 }

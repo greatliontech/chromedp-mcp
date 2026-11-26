@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/performancetimeline"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestGetPerformanceSessionWindowCLSAndRecentInput verifies that get_performance
@@ -21,7 +19,7 @@ func TestGetPerformanceSessionWindowCLSAndRecentInput(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	b, err := harness.mgr.Resolve("")
+	b, err := ensureHarness(t).mgr.Resolve("")
 	if err != nil {
 		t.Fatalf("resolve browser: %v", err)
 	}
@@ -132,7 +130,7 @@ func TestGetPerformanceLCPPeekDrainLimitAndLiveCapture(t *testing.T) {
 		t.Errorf("live LCP entry missing size/timestamp: %+v", live.LCP[0])
 	}
 
-	b, err := harness.mgr.Resolve("")
+	b, err := ensureHarness(t).mgr.Resolve("")
 	if err != nil {
 		t.Fatalf("resolve browser: %v", err)
 	}
@@ -298,7 +296,7 @@ func TestGetPerformanceFailsFastOnOpenDialogWithoutDraining(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	tb, err := harness.mgr.ResolveTab("", tabID)
+	tb, err := ensureHarness(t).mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
 	}
@@ -353,6 +351,7 @@ func TestGetPerformanceConcurrentCallsSerialized(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
+	h := ensureHarness(t)
 	const workers = 4
 	var wg sync.WaitGroup
 	errs := make(chan string, workers)
@@ -360,26 +359,12 @@ func TestGetPerformanceConcurrentCallsSerialized(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			res, err := harness.session.CallTool(harness.ctx, &mcp.CallToolParams{
-				Name:      "get_performance",
-				Arguments: map[string]any{"tab": tabID, "mode": "peek"},
+			out, err := callToolAsync[getPerformanceOutput](h, "get_performance", map[string]any{
+				"tab":  tabID,
+				"mode": "peek",
 			})
 			if err != nil {
-				errs <- fmt.Sprintf("worker %d CallTool error: %v", idx, err)
-				return
-			}
-			if res.IsError {
-				errs <- fmt.Sprintf("worker %d tool error: %s", idx, contentText(res))
-				return
-			}
-			raw, err := json.Marshal(res.StructuredContent)
-			if err != nil {
-				errs <- fmt.Sprintf("worker %d marshal error: %v", idx, err)
-				return
-			}
-			var out getPerformanceOutput
-			if err := json.Unmarshal(raw, &out); err != nil {
-				errs <- fmt.Sprintf("worker %d unmarshal error: %v", idx, err)
+				errs <- fmt.Sprintf("worker %d: %v", idx, err)
 				return
 			}
 			if len(out.Metrics) == 0 {

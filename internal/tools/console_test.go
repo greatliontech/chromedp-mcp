@@ -3,6 +3,7 @@ package tools
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConsoleLogs(t *testing.T) {
@@ -308,7 +309,7 @@ func TestConsoleLogSourceField(t *testing.T) {
 	if len(out.Logs) == 0 {
 		t.Fatal("expected console logs from index.html")
 	}
-	wantPrefix := harness.httpSrv.URL + "/:"
+	wantPrefix := ensureHarness(t).httpSrv.URL + "/:"
 	hasSource := false
 	for _, log := range out.Logs {
 		if log.Level == "" {
@@ -451,35 +452,52 @@ func TestConsoleBufferOverflowIntegration(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	// Generate 1100 console.log messages (buffer size is 1000).
+	// Generate 1100 console.log messages (ring buffer cap is 1000).
 	callTool[evaluateOutput](t, "evaluate", map[string]any{
 		"tab":        tabID,
 		"expression": "for (var i = 0; i < 1100; i++) { console.log('msg-' + i); }",
 	})
+
+	var out getConsoleLogsOutput
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		out = callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
+			"tab":  tabID,
+			"mode": "peek",
+		})
+		if len(out.Logs) == 1000 && out.Logs[len(out.Logs)-1].Text == "msg-1099" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(out.Logs) != 1000 {
+		t.Fatalf("console buffer length = %d, want 1000", len(out.Logs))
+	}
+	if first := out.Logs[0].Text; first != "msg-100" {
+		t.Errorf("first retained message = %q, want %q (oldest 100 evicted)", first, "msg-100")
+	}
+	if last := out.Logs[len(out.Logs)-1].Text; last != "msg-1099" {
+		t.Errorf("last retained message = %q, want %q", last, "msg-1099")
+	}
+}
+
+func TestGetConsoleLogsFiltersNonStandardCDPLevels(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `console.assert(false, 'assertion-boom'); console.log('plain-log'); true`,
+	})
 	waitForConsole(t, tabID)
 
 	out := callTool[getConsoleLogsOutput](t, "get_console_logs", map[string]any{
-		"tab":  tabID,
-		"mode": "peek",
+		"tab":   tabID,
+		"mode":  "drain",
+		"level": "assert",
 	})
-
-	if len(out.Logs) > 1000 {
-		t.Errorf("console buffer should cap at 1000, got %d", len(out.Logs))
-	}
-	if len(out.Logs) < 900 {
-		t.Errorf("expected close to 1000 logs after generating 1100, got %d", len(out.Logs))
-	}
-
-	// The oldest entries (msg-0 through msg-99) should have been evicted.
-	// The first entry should be approximately msg-100.
-	if len(out.Logs) > 0 {
-		firstMsg := out.Logs[0].Text
-		if strings.Contains(firstMsg, "msg-0") && !strings.Contains(firstMsg, "msg-0") {
-			t.Log("first message should not be msg-0 (oldest should be evicted)")
-		}
-		lastMsg := out.Logs[len(out.Logs)-1].Text
-		if !strings.Contains(lastMsg, "msg-1099") {
-			t.Logf("last message = %q (expected msg-1099)", lastMsg)
-		}
+	if len(out.Logs) != 1 || out.Logs[0].Level != "assert" || !strings.Contains(out.Logs[0].Text, "assertion-boom") {
+		t.Fatalf("expected 1 assert log, got %+v", out.Logs)
 	}
 }

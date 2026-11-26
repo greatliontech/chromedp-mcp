@@ -226,7 +226,7 @@ func TestDeleteCookiesScopedByPathPreservesOtherPathsAndDomains(t *testing.T) {
 
 	deleteCookiesHelper(t, map[string]any{"tab": tabID, "path": "/admin"})
 
-	localAdmin := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{harness.httpSrv.URL + "/admin"}})
+	localAdmin := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{ensureHarness(t).httpSrv.URL + "/admin"}})
 	for _, c := range cookieSlice(localAdmin) {
 		if c.Name == "local_admin" {
 			t.Errorf("expected local_admin deleted, still present: %+v", c)
@@ -258,7 +258,7 @@ func TestDeleteCookiesNameAndPathWithoutDomain(t *testing.T) {
 
 	deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "admin_tok", "path": "/admin"})
 
-	got := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{harness.httpSrv.URL + "/admin"}})
+	got := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{ensureHarness(t).httpSrv.URL + "/admin"}})
 	for _, c := range cookieSlice(got) {
 		if c.Name == "admin_tok" && c.Path == "/admin" {
 			t.Fatalf("expected /admin cookie deleted, still present: %+v", c)
@@ -421,7 +421,7 @@ func TestSetCookieCustomPath(t *testing.T) {
 		"path":   "/subdir",
 	})
 
-	out := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{harness.httpSrv.URL + "/subdir"}})
+	out := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{ensureHarness(t).httpSrv.URL + "/subdir"}})
 	for _, c := range cookieSlice(out) {
 		if c.Name == "path_cookie" {
 			if c.Path != "/subdir" {
@@ -555,7 +555,7 @@ func TestGetCookiesNoCookiesAndURLFilter(t *testing.T) {
 	setCookieHelper(t, map[string]any{"tab": tabID, "name": "url_test_cookie", "value": "hello", "domain": "127.0.0.1", "path": "/"})
 	defer deleteCookiesHelper(t, map[string]any{"tab": tabID, "name": "url_test_cookie", "domain": "127.0.0.1"})
 
-	out := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{fixtureURL("index.html")}})
+	out := getCookiesHelper(t, map[string]any{"tab": tabID, "urls": []string{fixtureURL(t, "index.html")}})
 	found := false
 	for _, c := range cookieSlice(out) {
 		if c.Name == "url_test_cookie" && c.Value == "hello" {

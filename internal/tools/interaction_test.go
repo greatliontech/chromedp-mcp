@@ -3,9 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,9 +13,6 @@ import (
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/greatliontech/chromedp-mcp/internal/collector"
 )
 
 func TestClickRightDoubleClickDispatchesRightButton(t *testing.T) {
@@ -174,7 +170,7 @@ func TestClickOpeningAlertDoesNotHang(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	tabObj, err := harness.mgr.ResolveTab("", tabID)
+	tabObj, err := ensureHarness(t).mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
 	}
@@ -779,374 +775,6 @@ func TestUploadFilesPathValidation(t *testing.T) {
 	}
 }
 
-func TestHandleDialogPromptTextAndEmptyString(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	// Case 1: explicit prompt text is returned to window.prompt.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(function() { window.__promptVal = prompt('Name?', 'default'); }, 20); true`,
-	})
-	handleDialog(t, tabID, map[string]any{"action": "accept", "text": "alice"})
-
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `window.__promptVal`,
-	})
-	if string(out.Result) != `"alice"` {
-		t.Errorf("prompt result = %s, want %q", out.Result, "alice")
-	}
-
-	// Case 2: explicit empty string submits "".
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(function() { window.__promptEmpty = prompt('Name?', 'default'); }, 20); true`,
-	})
-	handleDialog(t, tabID, map[string]any{"action": "accept", "text": ""})
-
-	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `window.__promptEmpty`,
-	})
-	if string(out.Result) != `""` {
-		t.Errorf("empty text prompt result = %s, want %q", out.Result, "")
-	}
-}
-
-func TestGetDialogAndHandleDialogPromptDefaultVsEmpty(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	waitDialogOpen := func(wantType string) (dialogOutput, string) {
-		t.Helper()
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			rawRes := callToolRaw(t, "dialog", map[string]any{"tab": tabID, "action": "get"})
-			if rawRes.IsError {
-				t.Fatalf("dialog(get) returned error: %+v", rawRes.Content)
-			}
-			var rawJSON string
-			for _, c := range rawRes.Content {
-				if tc, ok := c.(*mcp.TextContent); ok {
-					rawJSON = tc.Text
-					break
-				}
-			}
-			var d dialogOutput
-			if err := json.Unmarshal([]byte(rawJSON), &d); err != nil {
-				t.Fatalf("unmarshal dialog(get): %v", err)
-			}
-			if d.Open {
-				if d.Dialog == nil {
-					t.Fatalf("dialog(get) Open=true with nil Dialog: %s", rawJSON)
-				}
-				if d.Dialog.Type != wantType {
-					t.Fatalf("dialog(get) type = %q, want %q", d.Dialog.Type, wantType)
-				}
-				return d, rawJSON
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		t.Fatalf("timed out waiting for %q dialog to appear in dialog(get)", wantType)
-		return dialogOutput{}, ""
-	}
-
-	// Initially no dialog is open.
-	initState := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"})
-	if initState.Open || initState.Dialog != nil {
-		t.Fatalf("expected Open=false Dialog=nil initially, got %+v", initState)
-	}
-
-	// 1. Alert dialog with empty message verifies both message:"" and
-	// has_browser_handler:false are preserved in serialized JSON (not dropped
-	// by omitempty), and immediate post-accept dialog(get) sees open=false
-	// without polling.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(function() { alert(''); }, 20); true`,
-	})
-	d, rawJSON := waitDialogOpen("alert")
-	if d.Dialog.Message != "" || !strings.HasSuffix(d.Dialog.URL, "/page2.html") || d.Dialog.OpenedAt.IsZero() {
-		t.Errorf("unexpected alert dialog state: %+v", d.Dialog)
-	}
-	if !strings.Contains(rawJSON, `"message":""`) {
-		t.Errorf("dialog(get) JSON omitted empty message: %s", rawJSON)
-	}
-	if !strings.Contains(rawJSON, `"has_browser_handler":`) {
-		t.Errorf("dialog(get) JSON omitted has_browser_handler: %s", rawJSON)
-	}
-	// Verify false has_browser_handler and empty message are never dropped by omitempty.
-	falseOut, err := json.Marshal(dialogOutput{
-		Open: true,
-		Dialog: &collector.DialogState{
-			Type:              "alert",
-			Message:           "",
-			HasBrowserHandler: false,
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal DialogOutput: %v", err)
-	}
-	if !strings.Contains(string(falseOut), `"has_browser_handler":false`) || !strings.Contains(string(falseOut), `"message":""`) {
-		t.Errorf("DialogOutput JSON omitted false/empty fields: %s", falseOut)
-	}
-	accOut := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
-	if accOut.Open {
-		t.Fatalf("dialog(accept) immediately reported open: %+v", accOut)
-	}
-	// ClearIfSeq guarantees immediate follow-up dialog(get) reports closed.
-	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
-		t.Fatalf("dialog(get) immediately after accept still reported open: %+v", after)
-	}
-
-	// 2. Confirm dialog inspection + dismiss.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(function() { window.__confirm = confirm('proceed?'); }, 20); true`,
-	})
-	d, _ = waitDialogOpen("confirm")
-	if d.Dialog.Message != "proceed?" {
-		t.Errorf("confirm message = %q, want %q", d.Dialog.Message, "proceed?")
-	}
-	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "dismiss"})
-	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
-		t.Fatalf("dialog(get) immediately after confirm dismiss still reported open: %+v", after)
-	}
-	if res := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__confirm`}); string(res.Result) != "false" {
-		t.Errorf("dismissed confirm result = %s, want false", res.Result)
-	}
-
-	// 3. Prompt dialog with omitted text preserves DefaultPrompt.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(function() { window.__promptDef = prompt('Your name?', 'keep-default'); }, 20); true`,
-	})
-	d, _ = waitDialogOpen("prompt")
-	if d.Dialog.Message != "Your name?" || d.Dialog.DefaultPrompt != "keep-default" {
-		t.Errorf("prompt dialog state = %+v, want message='Your name?' default_prompt='keep-default'", d.Dialog)
-	}
-	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
-	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
-		t.Fatalf("dialog(get) immediately after prompt accept still reported open: %+v", after)
-	}
-	if res := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptDef`}); string(res.Result) != `"keep-default"` {
-		t.Errorf("omitted text prompt result = %s, want %q", res.Result, "keep-default")
-	}
-
-	// 4. Prompt dialog with explicit empty string submits "".
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(function() { window.__promptBlank = prompt('Your name?', 'keep-default'); }, 20); true`,
-	})
-	waitDialogOpen("prompt")
-	callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept", "text": ""})
-	if after := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); after.Open {
-		t.Fatalf("dialog(get) immediately after empty prompt accept still reported open: %+v", after)
-	}
-	if res := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__promptBlank`}); string(res.Result) != `""` {
-		t.Errorf("explicit empty text prompt result = %s, want %q", res.Result, "")
-	}
-}
-
-func TestDragAndDropHTML5AndPointerWithObservation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><head><style>
-			.box { width: 100px; height: 60px; margin: 20px; display: inline-block; border: 1px solid #333; }
-		</style></head><body>
-			<div>
-				<div id="src-html5" class="box" draggable="true">HTML5 Drag</div>
-				<div id="dst-html5" class="box">HTML5 Drop</div>
-				<div id="src-step1" class="box" draggable="true">Step1 Drag</div>
-				<div id="dst-step1" class="box">Step1 Drop</div>
-			</div>
-			<div>
-				<div id="src-ptr" class="box">Pointer Drag</div>
-				<div id="dst-ptr" class="box">Pointer Drop</div>
-			</div>
-			<button id="after-btn">After</button>
-			<div id="src-far" class="box" draggable="true" style="display:block; margin-top: 20px;">Far Drag</div>
-			<div style="height: 1800px;"></div>
-			<div id="dst-far" class="box" style="display:block;">Far Drop</div>
-			<script>
-				window.__html5Events = [];
-				window.__droppedData = null;
-				const srcH = document.getElementById('src-html5');
-				const dstH = document.getElementById('dst-html5');
-				srcH.addEventListener('dragstart', e => {
-					e.dataTransfer.setData('text/plain', 'payload-42');
-					window.__html5Events.push('dragstart');
-				});
-				dstH.addEventListener('dragover', e => {
-					e.preventDefault();
-					window.__html5Events.push('dragover');
-				});
-				dstH.addEventListener('drop', e => {
-					e.preventDefault();
-					window.__droppedData = e.dataTransfer.getData('text/plain');
-					window.__html5Events.push('drop');
-					const tag = document.createElement('span');
-					tag.className = 'dropped';
-					tag.textContent = window.__droppedData;
-					dstH.appendChild(tag);
-					console.log('dropped:' + window.__droppedData);
-				});
-				dstH.addEventListener('mouseup', () => {
-					window.__html5Events.push('SPURIOUS_MOUSEUP');
-				});
-
-				window.__step1Data = null;
-				document.getElementById('src-step1').addEventListener('dragstart', e => {
-					e.dataTransfer.setData('text/plain', 'step1-ok');
-				});
-				document.getElementById('dst-step1').addEventListener('dragover', e => e.preventDefault());
-				document.getElementById('dst-step1').addEventListener('drop', e => {
-					e.preventDefault();
-					window.__step1Data = e.dataTransfer.getData('text/plain');
-				});
-
-				window.__farData = null;
-				document.getElementById('src-far').addEventListener('dragstart', e => {
-					e.dataTransfer.setData('text/plain', 'far-99');
-				});
-				document.getElementById('dst-far').addEventListener('dragover', e => e.preventDefault());
-				document.getElementById('dst-far').addEventListener('drop', e => {
-					e.preventDefault();
-					window.__farData = e.dataTransfer.getData('text/plain');
-				});
-
-				window.__ptrDown = false;
-				window.__ptrMoves = 0;
-				window.__ptrDone = false;
-				const srcP = document.getElementById('src-ptr');
-				const dstP = document.getElementById('dst-ptr');
-				srcP.addEventListener('mousedown', e => {
-					if (e.button === 0) window.__ptrDown = true;
-				});
-				window.addEventListener('mousemove', e => {
-					if (window.__ptrDown && e.buttons === 1) window.__ptrMoves++;
-				});
-				dstP.addEventListener('mouseup', e => {
-					if (window.__ptrDown && e.button === 0) {
-						window.__ptrDown = false;
-						window.__ptrDone = true;
-					}
-				});
-
-				window.__afterClicked = false;
-				document.getElementById('after-btn').addEventListener('click', () => {
-					window.__afterClicked = true;
-				});
-			</script>
-		</body></html>`))
-	}))
-	defer srv.Close()
-
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
-
-	// 1. HTML5 native drag-and-drop with inline observation window.
-	out := callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":               tabID,
-		"source_selector":   "#src-html5",
-		"target_selector":   "#dst-html5",
-		"steps":             6,
-		"observe_window_ms": 200,
-	})
-	if out.Observed == nil || !out.Observed.HasAnyEffect || out.Observed.DOMMutations == 0 {
-		t.Fatalf("HTML5 drag_and_drop observation = %+v, want HasAnyEffect=true DOMMutations>0", out.Observed)
-	}
-	evHTML5 := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `({data: window.__droppedData, events: window.__html5Events})`,
-	})
-	var html5Res struct {
-		Data   string   `json:"data"`
-		Events []string `json:"events"`
-	}
-	if err := json.Unmarshal(evHTML5.Result, &html5Res); err != nil {
-		t.Fatalf("unmarshal html5 result: %v (raw=%s)", err, evHTML5.Result)
-	}
-	if html5Res.Data != "payload-42" || !strings.Contains(strings.Join(html5Res.Events, ","), "dragstart") || !strings.Contains(strings.Join(html5Res.Events, ","), "drop") {
-		t.Fatalf("HTML5 drag result = %+v, want data='payload-42' with dragstart & drop", html5Res)
-	}
-	if strings.Contains(strings.Join(html5Res.Events, ","), "SPURIOUS_MOUSEUP") {
-		t.Fatalf("HTML5 drop emitted spurious DOM mouseup on drop target: %+v", html5Res.Events)
-	}
-
-	// Verify HTML5 drag works with steps=1 (async Input.dragIntercepted).
-	callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":             tabID,
-		"source_selector": "#src-step1",
-		"target_selector": "#dst-step1",
-		"steps":           1,
-	})
-	if evS1 := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__step1Data`}); string(evS1.Result) != `"step1-ok"` {
-		t.Fatalf("steps=1 HTML5 drag __step1Data = %s, want \"step1-ok\"", evS1.Result)
-	}
-
-	// Verify mouse state is clean after HTML5 drop by clicking a normal button.
-	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#after-btn"})
-	evClick := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__afterClicked`})
-	if string(evClick.Result) != "true" {
-		t.Fatalf("post-drag click failed: __afterClicked = %s", evClick.Result)
-	}
-
-	// Verify HTML5 drag across >1 viewport height separation (1800px spacer).
-	callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":             tabID,
-		"source_selector": "#src-far",
-		"target_selector": "#dst-far",
-		"steps":           5,
-	})
-	if evFar := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__farData`}); string(evFar.Result) != `"far-99"` {
-		t.Fatalf(">1-viewport HTML5 drag __farData = %s, want \"far-99\"", evFar.Result)
-	}
-
-	// 2. Pointer/mouse-based drag-and-drop (non-draggable element).
-	callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":             tabID,
-		"source_selector": "#src-ptr",
-		"target_selector": "#dst-ptr",
-		"steps":           8,
-	})
-	evPtr := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `({done: window.__ptrDone, moves: window.__ptrMoves})`,
-	})
-	var ptrRes struct {
-		Done  bool `json:"done"`
-		Moves int  `json:"moves"`
-	}
-	if err := json.Unmarshal(evPtr.Result, &ptrRes); err != nil {
-		t.Fatalf("unmarshal pointer result: %v (raw=%s)", err, evPtr.Result)
-	}
-	if !ptrRes.Done || ptrRes.Moves < 8 {
-		t.Fatalf("pointer drag result = %+v, want done=true moves>=8", ptrRes)
-	}
-
-	// 3. Validation errors.
-	for _, tc := range []struct {
-		name string
-		args map[string]any
-		want string
-	}{
-		{"empty_source", map[string]any{"tab": tabID, "source_selector": "", "target_selector": "#dst-ptr"}, "source"},
-		{"empty_target", map[string]any{"tab": tabID, "source_selector": "#src-ptr", "target_selector": ""}, "target"},
-		{"negative_steps", map[string]any{"tab": tabID, "source_selector": "#src-ptr", "target_selector": "#dst-ptr", "steps": -1}, "steps"},
-		{"too_many_steps", map[string]any{"tab": tabID, "source_selector": "#src-ptr", "target_selector": "#dst-ptr", "steps": 101}, "steps"},
-		{"missing_source", map[string]any{"tab": tabID, "source_selector": "#nope", "target_selector": "#dst-ptr", "timeout": 300}, "nope"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if errText := callToolExpectErr(t, "drag_and_drop", tc.args); !strings.Contains(errText, tc.want) {
-				t.Errorf("%s err = %q, want substring %q", tc.name, errText, tc.want)
-			}
-		})
-	}
-}
-
 func TestClickAndType(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
@@ -1447,37 +1075,6 @@ func TestSelectOptionValidation(t *testing.T) {
 	}
 }
 
-func TestHandleDialog(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	// Set up a dialog handler before triggering the dialog.
-	// Chrome auto-dismisses dialogs unless we handle them. We need to
-	// trigger the dialog and handle it in the right order. The simplest
-	// approach: trigger an alert via evaluate (which blocks until dialog
-	// is dismissed), but do so from a separate goroutine.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		// This will block until the dialog is handled.
-		callToolRaw(t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "alert('test dialog')",
-		})
-	}()
-
-	// Handle the dialog (retries until dialog appears).
-	handleDialog(t, tabID, map[string]any{"action": "accept"})
-
-	// Wait for the evaluate to complete.
-	select {
-	case <-done:
-		// Success — dialog was handled and evaluate returned.
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for dialog handling to complete")
-	}
-}
-
 func TestScrollByOffset(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
@@ -1757,81 +1354,6 @@ func TestUploadFilesSuccess(t *testing.T) {
 	})
 	if !strings.Contains(string(out.Result), "test-upload.txt") {
 		t.Errorf("file name = %s, want 'test-upload.txt'", out.Result)
-	}
-}
-
-func TestHandleDialogDismiss(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	done := make(chan string, 1)
-	go func() {
-		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "confirm('Are you sure?')",
-		})
-		done <- string(out.Result)
-	}()
-
-	handleDialog(t, tabID, map[string]any{"action": "dismiss"})
-
-	select {
-	case result := <-done:
-		if result != "false" {
-			t.Errorf("confirm() after dismiss = %s, want false", result)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for confirm dialog")
-	}
-}
-
-func TestHandleDialogConfirmAccept(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	done := make(chan string, 1)
-	go func() {
-		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "confirm('Are you sure?')",
-		})
-		done <- string(out.Result)
-	}()
-
-	handleDialog(t, tabID, map[string]any{"action": "accept"})
-
-	select {
-	case result := <-done:
-		if result != "true" {
-			t.Errorf("confirm() after accept = %s, want true", result)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for confirm dialog")
-	}
-}
-
-func TestHandleDialogPrompt(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	done := make(chan string, 1)
-	go func() {
-		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "prompt('Enter name:')",
-		})
-		done <- string(out.Result)
-	}()
-
-	handleDialog(t, tabID, map[string]any{"action": "accept", "text": "Alice"})
-
-	select {
-	case result := <-done:
-		if !strings.Contains(result, "Alice") {
-			t.Errorf("prompt() result = %s, want 'Alice'", result)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for prompt dialog")
 	}
 }
 
@@ -2189,30 +1711,6 @@ func TestUploadMultipleFiles(t *testing.T) {
 	}
 }
 
-func TestHandleDialogTextOnAlert(t *testing.T) {
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-
-	done := make(chan struct{}, 1)
-	go func() {
-		callToolRaw(t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "alert('test alert')",
-		})
-		done <- struct{}{}
-	}()
-
-	// Pass text to an alert dialog — should be ignored, no error.
-	handleDialog(t, tabID, map[string]any{"action": "accept", "text": "ignored text"})
-
-	select {
-	case <-done:
-		// Success.
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for alert handling")
-	}
-}
-
 func TestPressKeyFocusNonFocusableElement(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -2510,66 +2008,6 @@ func TestScrollSelectorIgnoresXY(t *testing.T) {
 	})
 	if string(out.Result) != "true" {
 		t.Error("after scroll-into-view with x/y set, page should have scrolled")
-	}
-}
-
-func TestHandleDialogDismissConfirm(t *testing.T) {
-	tabID := navigateToFixture(t, "interaction2.html")
-	defer closeTab(t, tabID)
-
-	done := make(chan struct{}, 1)
-	go func() {
-		callToolRaw(t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "document.getElementById('confirm-result').textContent = String(confirm('Sure?'))",
-		})
-		done <- struct{}{}
-	}()
-
-	handleDialog(t, tabID, map[string]any{"action": "dismiss"})
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for confirm dialog")
-	}
-
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.getElementById('confirm-result').textContent",
-	})
-	if !strings.Contains(string(out.Result), "false") {
-		t.Errorf("dismissed confirm result = %s, want 'false'", out.Result)
-	}
-}
-
-func TestHandleDialogDismissPrompt(t *testing.T) {
-	tabID := navigateToFixture(t, "interaction2.html")
-	defer closeTab(t, tabID)
-
-	done := make(chan struct{}, 1)
-	go func() {
-		callToolRaw(t, "evaluate", map[string]any{
-			"tab":        tabID,
-			"expression": "document.getElementById('prompt-result').textContent = String(prompt('Name:'))",
-		})
-		done <- struct{}{}
-	}()
-
-	handleDialog(t, tabID, map[string]any{"action": "dismiss"})
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for prompt dialog")
-	}
-
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "document.getElementById('prompt-result').textContent",
-	})
-	if !strings.Contains(string(out.Result), "null") {
-		t.Errorf("dismissed prompt result = %s, want 'null'", out.Result)
 	}
 }
 
@@ -3097,547 +2535,6 @@ func TestSelectOptionSelectorTimeout(t *testing.T) {
 	}
 }
 
-func TestValidatePointerTargetUnit(t *testing.T) {
-	f := func(v float64) *float64 { return &v }
-	if err := validatePointerTarget("", "", "", f(10), f(20), true); err != nil {
-		t.Errorf("valid (x,y) failed: %v", err)
-	}
-	if err := validatePointerTarget("", "", "", f(10), nil, true); err == nil {
-		t.Error("x without y should error")
-	}
-	if err := validatePointerTarget("", "", "", nil, f(20), true); err == nil {
-		t.Error("y without x should error")
-	}
-	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if err := validatePointerTarget("", "", "", f(bad), f(0), true); err == nil {
-			t.Errorf("non-finite x=%v should error", bad)
-		}
-		if err := validatePointerTarget("", "", "", f(0), f(bad), true); err == nil {
-			t.Errorf("non-finite y=%v should error", bad)
-		}
-	}
-	if err := validatePointerTarget("e1", "", "", f(1), f(2), true); err == nil {
-		t.Error("coords + ref should error")
-	}
-	if err := validatePointerTarget("", "#a", "", f(1), f(2), true); err == nil {
-		t.Error("coords + selector should error")
-	}
-	if err := validatePointerTarget("", "", "f1", f(1), f(2), true); err == nil {
-		t.Error("coords + frame should error")
-	}
-	if err := validatePointerTarget("", "", "", nil, nil, true); err == nil {
-		t.Error("requireOne with empty target should error")
-	}
-	if err := validatePointerTarget("", "", "", nil, nil, false); err != nil {
-		t.Errorf("requireOne=false with empty target failed: %v", err)
-	}
-}
-
-// findSnapshotRef extracts the [ref=eN] token from the first snapshot line
-// containing needle.
-func findSnapshotRef(t *testing.T, snap, needle string) string {
-	t.Helper()
-	for line := range strings.SplitSeq(snap, "\n") {
-		if !strings.Contains(line, needle) {
-			continue
-		}
-		idx := strings.Index(line, "[ref=")
-		if idx < 0 {
-			continue
-		}
-		rest := line[idx+len("[ref="):]
-		end := strings.IndexByte(rest, ']')
-		if end > 0 {
-			return rest[:end]
-		}
-	}
-	t.Fatalf("could not find [ref=...] on line containing %q in snapshot:\n%s", needle, snap)
-	return ""
-}
-
-func TestInteractionWithSnapshotRefs(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><head><style>
-			.box { width: 90px; height: 50px; display: inline-block; border: 1px solid #333; margin: 10px; }
-		</style></head><body>
-			<button id="act-btn">Run Action</button>
-			<form id="ref-form">
-				<input id="ref-inp" aria-label="Search Box" value="start">
-				<button type="submit">Send</button>
-			</form>
-			<select id="ref-sel" aria-label="Tags" multiple>
-				<option value="go">Go</option>
-				<option value="rust">Rust</option>
-				<option value="zig">Zig</option>
-			</select>
-			<button id="hover-btn">Hover Me</button>
-			<input id="ref-file" type="file" aria-label="Upload File">
-			<div id="drag-src" role="button" aria-label="Drag Source" class="box" draggable="true">Src</div>
-			<div id="drag-dst" role="region" aria-label="Drop Zone" class="box">Dst</div>
-			<div style="height: 1500px;"></div>
-			<button id="far-btn">Bottom Target</button>
-			<script>
-				window.__clicks = [];
-				document.getElementById('act-btn').addEventListener('click', e => {
-					window.__clicks.push({shift: e.shiftKey, ctrl: e.ctrlKey});
-				});
-				window.__submittedVal = '';
-				document.getElementById('ref-form').addEventListener('submit', e => {
-					e.preventDefault();
-					window.__submittedVal = document.getElementById('ref-inp').value;
-				});
-				window.__hovered = false;
-				document.getElementById('hover-btn').addEventListener('mouseover', () => { window.__hovered = true; });
-				window.__dropped = '';
-				document.getElementById('drag-src').addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'via-ref'));
-				document.getElementById('drag-dst').addEventListener('dragover', e => e.preventDefault());
-				document.getElementById('drag-dst').addEventListener('drop', e => {
-					e.preventDefault();
-					window.__dropped = e.dataTransfer.getData('text/plain');
-				});
-			</script>
-		</body></html>`))
-	}))
-	defer srv.Close()
-
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
-
-	snap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID})
-	btnRef := findSnapshotRef(t, snap.Snapshot, `"Run Action"`)
-	inpRef := findSnapshotRef(t, snap.Snapshot, `"Search Box"`)
-	selRef := findSnapshotRef(t, snap.Snapshot, `"Tags"`)
-	hoverRef := findSnapshotRef(t, snap.Snapshot, `"Hover Me"`)
-	fileRef := findSnapshotRef(t, snap.Snapshot, `"Upload File"`)
-	srcRef := findSnapshotRef(t, snap.Snapshot, `"Drag Source"`)
-	dstRef := findSnapshotRef(t, snap.Snapshot, `"Drop Zone"`)
-	farRef := findSnapshotRef(t, snap.Snapshot, `"Bottom Target"`)
-
-	// 1. click(ref) with modifiers.
-	callTool[clickOutput](t, "click", map[string]any{
-		"tab":       tabID,
-		"ref":       btnRef,
-		"modifiers": []string{"shift"},
-	})
-	clicks := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__clicks`})
-	if !strings.Contains(string(clicks.Result), `"shift":true`) {
-		t.Errorf("click(ref, shift) = %s, want shift=true", clicks.Result)
-	}
-
-	// 2. type(ref, append) moves caret to end even if caret was placed at 0,
-	//    then type(ref, replace, submit=true) submits the form.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `(function(){ var i = document.getElementById('ref-inp'); i.focus(); i.setSelectionRange(0, 0); })()`,
-	})
-	callTool[actionOutput](t, "type", map[string]any{
-		"tab":  tabID,
-		"ref":  inpRef,
-		"text": "-end",
-		"mode": "append",
-	})
-	val := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('ref-inp').value`})
-	if string(val.Result) != `"start-end"` {
-		t.Errorf("type(ref, append) value = %s, want \"start-end\"", val.Result)
-	}
-	callTool[actionOutput](t, "type", map[string]any{
-		"tab":    tabID,
-		"ref":    inpRef,
-		"text":   "final",
-		"mode":   "replace",
-		"submit": true,
-	})
-	sub := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__submittedVal`})
-	if string(sub.Result) != `"final"` {
-		t.Errorf("type(ref, submit=true) submitted = %s, want \"final\"", sub.Result)
-	}
-
-	// 3. select_option(ref) multi-select + deselect all.
-	callTool[actionOutput](t, "select_option", map[string]any{
-		"tab":    tabID,
-		"ref":    selRef,
-		"values": []string{"go", "zig"},
-	})
-	selOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `Array.from(document.getElementById('ref-sel').selectedOptions).map(o => o.value).join(',')`,
-	})
-	if string(selOut.Result) != `"go,zig"` {
-		t.Errorf("select_option(ref) = %s, want \"go,zig\"", selOut.Result)
-	}
-	callTool[actionOutput](t, "select_option", map[string]any{
-		"tab":    tabID,
-		"ref":    selRef,
-		"values": []string{},
-	})
-	selEmpty := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `document.getElementById('ref-sel').selectedOptions.length`,
-	})
-	if string(selEmpty.Result) != "0" {
-		t.Errorf("select_option(ref, []) length = %s, want 0", selEmpty.Result)
-	}
-
-	// 4. hover(ref).
-	callTool[actionOutput](t, "hover", map[string]any{"tab": tabID, "ref": hoverRef})
-	hov := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__hovered`})
-	if string(hov.Result) != "true" {
-		t.Errorf("hover(ref) __hovered = %s, want true", hov.Result)
-	}
-
-	// 5. press_key(ref).
-	callTool[actionOutput](t, "press_key", map[string]any{"tab": tabID, "ref": inpRef, "key": "!"})
-	val2 := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('ref-inp').value`})
-	if !strings.Contains(string(val2.Result), "!") {
-		t.Errorf("press_key(ref) value = %s, want to contain '!'", val2.Result)
-	}
-
-	// 6. upload_files(ref).
-	tmpFile := filepath.Join(t.TempDir(), "via-ref.txt")
-	if err := os.WriteFile(tmpFile, []byte("ok"), 0o644); err != nil {
-		t.Fatalf("write tmpFile: %v", err)
-	}
-	callTool[actionOutput](t, "upload_files", map[string]any{
-		"tab":   tabID,
-		"ref":   fileRef,
-		"paths": []string{tmpFile},
-	})
-	fName := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `document.getElementById('ref-file').files[0].name`,
-	})
-	if string(fName.Result) != `"via-ref.txt"` {
-		t.Errorf("upload_files(ref) filename = %s, want \"via-ref.txt\"", fName.Result)
-	}
-
-	// 7. drag_and_drop(source_ref, target_ref).
-	callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":        tabID,
-		"source_ref": srcRef,
-		"target_ref": dstRef,
-		"steps":      5,
-	})
-	dropVal := callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `window.__dropped`})
-	if string(dropVal.Result) != `"via-ref"` {
-		t.Errorf("drag_and_drop(refs) = %s, want \"via-ref\"", dropVal.Result)
-	}
-
-	// 8. scroll(ref).
-	scr := callTool[scrollOutput](t, "scroll", map[string]any{"tab": tabID, "ref": farRef})
-	if scr.ScrollY <= 0 {
-		t.Errorf("scroll(ref) ScrollY = %v, want > 0", scr.ScrollY)
-	}
-
-	// 9. Detached ref fails cleanly with snapshot guidance.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{"tab": tabID, "expression": `document.getElementById('act-btn').remove(); true`})
-	if errText := callToolExpectErr(t, "click", map[string]any{"tab": tabID, "ref": btnRef}); !strings.Contains(errText, "snapshot") {
-		t.Errorf("detached ref click err = %q, want snapshot guidance", errText)
-	}
-}
-
-func TestInteractionShadowDOMAndSameOriginIframe(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/child.html", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><body>
-			<button id="if-btn">Frame Button</button>
-			<input id="if-inp" aria-label="Frame Input" value="old">
-			<select id="if-sel" aria-label="Frame Select">
-				<option value="x">X</option>
-				<option value="y">Y</option>
-			</select>
-			<div style="height: 1200px;"></div>
-			<button id="if-bottom">Frame Bottom</button>
-			<script>
-				window.__ifClicked = 0;
-				document.getElementById('if-btn').addEventListener('click', () => { window.__ifClicked++; });
-			</script>
-		</body></html>`))
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><body>
-			<div id="outer-host"></div>
-			<iframe id="child-frame" src="/child.html" style="width: 400px; height: 250px; border: 1px solid #000;"></iframe>
-			<script>
-				window.__shadowClicked = 0;
-				window.__shadowHovered = false;
-				window.__shadowDropped = '';
-				const outer = document.getElementById('outer-host').attachShadow({mode: 'open'});
-				outer.innerHTML = '<div id="inner-host"></div>';
-				const inner = outer.getElementById('inner-host').attachShadow({mode: 'open'});
-				inner.innerHTML =
-					'<button id="s-btn">Shadow Click</button>' +
-					'<input id="s-inp" value="init">' +
-					'<select id="s-sel"><option value="one">One</option><option value="two">Two</option></select>' +
-					'<input id="s-file" type="file">' +
-					'<div id="s-src" draggable="true" style="width:60px;height:30px;display:inline-block;border:1px solid #000;">S</div>' +
-					'<div id="s-dst" style="width:60px;height:30px;display:inline-block;border:1px solid #000;">D</div>';
-				inner.getElementById('s-btn').addEventListener('click', () => { window.__shadowClicked++; });
-				inner.getElementById('s-btn').addEventListener('mouseover', () => { window.__shadowHovered = true; });
-				inner.getElementById('s-src').addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'shadow-drop'));
-				inner.getElementById('s-dst').addEventListener('dragover', e => e.preventDefault());
-				inner.getElementById('s-dst').addEventListener('drop', e => {
-					e.preventDefault();
-					window.__shadowDropped = e.dataTransfer.getData('text/plain');
-				});
-			</script>
-		</body></html>`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
-
-	// Wait for iframe load.
-	callTool[struct{}](t, "wait_for", map[string]any{
-		"tab":        tabID,
-		"expression": `document.getElementById('child-frame').contentDocument && document.getElementById('child-frame').contentDocument.getElementById('if-btn') !== null`,
-	})
-
-	// Nested open Shadow DOM interactions via '>>>'.
-	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#outer-host >>> #inner-host >>> #s-btn"})
-	callTool[actionOutput](t, "hover", map[string]any{"tab": tabID, "selector": "#outer-host >>> #inner-host >>> #s-btn"})
-	callTool[actionOutput](t, "type", map[string]any{
-		"tab":      tabID,
-		"selector": "#outer-host >>> #inner-host >>> #s-inp",
-		"text":     "shadow-typed",
-		"mode":     "replace",
-	})
-	callTool[actionOutput](t, "select_option", map[string]any{
-		"tab":      tabID,
-		"selector": "#outer-host >>> #inner-host >>> #s-sel",
-		"values":   []string{"two"},
-	})
-	tmpFile := filepath.Join(t.TempDir(), "shadow.txt")
-	if err := os.WriteFile(tmpFile, []byte("s"), 0o644); err != nil {
-		t.Fatalf("write tmpFile: %v", err)
-	}
-	callTool[actionOutput](t, "upload_files", map[string]any{
-		"tab":      tabID,
-		"selector": "#outer-host >>> #inner-host >>> #s-file",
-		"paths":    []string{tmpFile},
-	})
-	callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":             tabID,
-		"source_selector": "#outer-host >>> #inner-host >>> #s-src",
-		"target_selector": "#outer-host >>> #inner-host >>> #s-dst",
-		"steps":           4,
-	})
-
-	shadowCheck := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab": tabID,
-		"expression": `(function() {
-			const inner = document.getElementById('outer-host').shadowRoot.getElementById('inner-host').shadowRoot;
-			return {
-				clicks: window.__shadowClicked,
-				hovered: window.__shadowHovered,
-				val: inner.getElementById('s-inp').value,
-				sel: inner.getElementById('s-sel').value,
-				file: inner.getElementById('s-file').files[0]?.name || '',
-				drop: window.__shadowDropped
-			};
-		})()`,
-	})
-	var sh struct {
-		Clicks  int    `json:"clicks"`
-		Hovered bool   `json:"hovered"`
-		Val     string `json:"val"`
-		Sel     string `json:"sel"`
-		File    string `json:"file"`
-		Drop    string `json:"drop"`
-	}
-	if err := json.Unmarshal(shadowCheck.Result, &sh); err != nil {
-		t.Fatalf("unmarshal shadowCheck: %v (raw=%s)", err, shadowCheck.Result)
-	}
-	if sh.Clicks != 1 || !sh.Hovered || sh.Val != "shadow-typed" || sh.Sel != "two" || sh.File != "shadow.txt" || sh.Drop != "shadow-drop" {
-		t.Errorf("shadow DOM state = %+v, want clicks=1 hovered=true val='shadow-typed' sel='two' file='shadow.txt' drop='shadow-drop'", sh)
-	}
-
-	// Same-origin iframe interactions via frame + selector AND via snapshot(frame) ref.
-	frames := callTool[listFramesOutput](t, "list_frames", map[string]any{"tab": tabID})
-	var childFrameID string
-	for _, fr := range frames.Frames {
-		if strings.HasSuffix(fr.URL, "/child.html") {
-			childFrameID = fr.ID
-			break
-		}
-	}
-	if childFrameID == "" {
-		t.Fatalf("child frame not found in %+v", frames.Frames)
-	}
-
-	callTool[clickOutput](t, "click", map[string]any{
-		"tab":      tabID,
-		"frame":    childFrameID,
-		"selector": "#if-btn",
-	})
-	callTool[actionOutput](t, "type", map[string]any{
-		"tab":      tabID,
-		"frame":    childFrameID,
-		"selector": "#if-inp",
-		"text":     "in-frame",
-		"mode":     "replace",
-	})
-	callTool[actionOutput](t, "select_option", map[string]any{
-		"tab":      tabID,
-		"frame":    childFrameID,
-		"selector": "#if-sel",
-		"values":   []string{"y"},
-	})
-	scrFrame := callTool[scrollOutput](t, "scroll", map[string]any{
-		"tab":   tabID,
-		"frame": childFrameID,
-		"y":     200,
-	})
-	if scrFrame.ScrollY <= 0 {
-		t.Errorf("scroll(frame, y=200) ScrollY = %v, want > 0", scrFrame.ScrollY)
-	}
-
-	// Now take a subframe snapshot, click the button via ref, and scroll to
-	// #if-bottom via ref (must report subframe scroll_y > 0, not main-frame 0).
-	fSnap := callTool[snapshotOutput](t, "snapshot", map[string]any{"tab": tabID, "frame": childFrameID})
-	ifBtnRef := findSnapshotRef(t, fSnap.Snapshot, `"Frame Button"`)
-	ifBottomRef := findSnapshotRef(t, fSnap.Snapshot, `"Frame Bottom"`)
-	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "ref": ifBtnRef})
-	scrSubRef := callTool[scrollOutput](t, "scroll", map[string]any{"tab": tabID, "ref": ifBottomRef})
-	if scrSubRef.ScrollY <= 500 {
-		t.Errorf("scroll(ref=<subframe bottom>) ScrollY = %v, want > 500 (subframe scroll, not main-frame 0)", scrSubRef.ScrollY)
-	}
-
-	ifCheck := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":   tabID,
-		"frame": childFrameID,
-		"expression": `({
-			clicks: window.__ifClicked,
-			val: document.getElementById('if-inp').value,
-			sel: document.getElementById('if-sel').value
-		})`,
-	})
-	var ifr struct {
-		Clicks int    `json:"clicks"`
-		Val    string `json:"val"`
-		Sel    string `json:"sel"`
-	}
-	if err := json.Unmarshal(ifCheck.Result, &ifr); err != nil {
-		t.Fatalf("unmarshal ifCheck: %v", err)
-	}
-	if ifr.Clicks != 2 || ifr.Val != "in-frame" || ifr.Sel != "y" {
-		t.Errorf("iframe state = %+v, want clicks=2 val='in-frame' sel='y'", ifr)
-	}
-}
-
-func TestInteractionViewportCoordinatesAndDialogObserveWindow(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/ping" {
-			_, _ = w.Write([]byte("pong"))
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<!doctype html><html><body style="margin:0;">
-			<button id="xy-btn" style="position:fixed;left:40px;top:40px;width:80px;height:40px;">XY</button>
-			<div id="xy-src" draggable="true" style="position:fixed;left:40px;top:120px;width:80px;height:40px;border:1px solid #000;">Src</div>
-			<div id="xy-dst" style="position:fixed;left:200px;top:120px;width:80px;height:40px;border:1px solid #000;">Dst</div>
-			<script>
-				window.__xyClick = null;
-				window.__xyHover = false;
-				window.__xyDrop = '';
-				const btn = document.getElementById('xy-btn');
-				btn.addEventListener('click', e => { window.__xyClick = {shift: e.shiftKey, ctrl: e.ctrlKey}; });
-				btn.addEventListener('mouseover', () => { window.__xyHover = true; });
-				document.getElementById('xy-src').addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'xy-ok'));
-				document.getElementById('xy-dst').addEventListener('dragover', e => e.preventDefault());
-				document.getElementById('xy-dst').addEventListener('drop', e => {
-					e.preventDefault();
-					window.__xyDrop = e.dataTransfer.getData('text/plain');
-				});
-			</script>
-		</body></html>`))
-	}))
-	defer srv.Close()
-
-	tabID := navigateToFixture(t, "page2.html")
-	defer closeTab(t, tabID)
-	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": srv.URL + "/"})
-
-	// Hover + Click by raw viewport coordinates with modifiers.
-	callTool[actionOutput](t, "hover", map[string]any{"tab": tabID, "x": 80.0, "y": 60.0})
-	callTool[clickOutput](t, "click", map[string]any{
-		"tab":       tabID,
-		"x":         80.0,
-		"y":         60.0,
-		"modifiers": []string{"shift", "ctrl"},
-	})
-	callTool[actionOutput](t, "drag_and_drop", map[string]any{
-		"tab":      tabID,
-		"source_x": 80.0,
-		"source_y": 140.0,
-		"target_x": 240.0,
-		"target_y": 140.0,
-		"steps":    4,
-	})
-	ev := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `({click: window.__xyClick, hover: window.__xyHover, drop: window.__xyDrop})`,
-	})
-	if !strings.Contains(string(ev.Result), `"shift":true`) ||
-		!strings.Contains(string(ev.Result), `"ctrl":true`) ||
-		!strings.Contains(string(ev.Result), `"hover":true`) ||
-		!strings.Contains(string(ev.Result), `"drop":"xy-ok"`) {
-		t.Errorf("coordinate interaction state = %s", ev.Result)
-	}
-
-	// dialog(action="accept", observe_window_ms=300) observes post-dialog fetch.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(() => { if (confirm('fetch?')) fetch('/ping'); }, 15); true`,
-	})
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	dlgOut := callTool[dialogOutput](t, "dialog", map[string]any{
-		"tab":               tabID,
-		"action":            "accept",
-		"observe_window_ms": 300,
-	})
-	if dlgOut.Open {
-		t.Errorf("dialog(accept) still Open=true")
-	}
-	if dlgOut.Observed == nil || !dlgOut.Observed.HasAnyEffect || dlgOut.Observed.NetworkRequests < 1 {
-		t.Errorf("dialog(accept, observe_window_ms) Observed = %+v, want HasAnyEffect=true NetworkRequests>=1", dlgOut.Observed)
-	}
-
-	// Chained dialog opening during observe_window_ms must be reflected in Open/Dialog.
-	callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": `setTimeout(() => { if (confirm('first')) setTimeout(() => alert('second'), 30); }, 15); true`,
-	})
-	deadline = time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	chained := callTool[dialogOutput](t, "dialog", map[string]any{
-		"tab":               tabID,
-		"action":            "accept",
-		"observe_window_ms": 200,
-	})
-	if !chained.Open || chained.Dialog == nil || chained.Dialog.Message != "second" {
-		t.Errorf("chained dialog during observe_window_ms = %+v, want Open=true Message='second'", chained)
-	}
-	handleDialog(t, tabID, map[string]any{"action": "accept"})
-}
-
 func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
@@ -3770,5 +2667,590 @@ func TestTypeAndPressKeyRejectNonFocusableAndCaretEmailShadow(t *testing.T) {
 	defer handleDialog(t, tabID, map[string]any{"action": "accept"})
 	if d := callTool[dialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open || d.Dialog == nil || d.Dialog.Message != "drop-alert" {
 		t.Errorf("dialog after drop-alert = %+v, want Open=true Message='drop-alert'", d)
+	}
+}
+
+// TestClickAriaDisabledRejected verifies clicking an aria-disabled="true"
+// element errors before dispatching, even though the DOM would otherwise
+// fire the click handler. This is precisely the case where the browser
+// itself doesn't block the click but the LLM's plan is almost certainly
+// wrong.
+func TestClickAriaDisabledRejected(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#aria-disabled-btn",
+	})
+	if !strings.Contains(errText, "aria-disabled") {
+		t.Errorf("error %q should mention 'aria-disabled'", errText)
+	}
+
+	// Page-side handler must not have fired.
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('aria-disabled-output').textContent",
+	})
+	if strings.Contains(string(out.Result), "clicked-aria-disabled") {
+		t.Error("aria-disabled click handler fired despite the pre-click error")
+	}
+}
+
+// TestClickPointerEventsNoneWarning verifies a click on an element with
+// CSS pointer-events:none succeeds (the dispatch is valid) but the
+// returned state carries a warning so the LLM can spot the no-effect.
+func TestClickPointerEventsNoneWarning(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[clickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#pointer-events-none-btn",
+	})
+	if out.PointerEvents != "none" {
+		t.Errorf("PointerEvents = %q, want 'none'", out.PointerEvents)
+	}
+	if out.Disabled || out.AriaDisabled {
+		t.Errorf("disabled flags should be false; got disabled=%v aria_disabled=%v", out.Disabled, out.AriaDisabled)
+	}
+	if !strings.Contains(out.Warning, "pointer-events") {
+		t.Errorf("Warning %q should mention 'pointer-events'", out.Warning)
+	}
+
+	// Page-side handler must not fire because the browser doesn't deliver
+	// mouse events to pointer-events:none elements.
+	state := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('pointer-events-none-output').textContent",
+	})
+	if strings.Contains(string(state.Result), "clicked-pointer-events-none") {
+		t.Errorf("pointer-events:none handler fired; expected the click to be swallowed")
+	}
+}
+
+// TestClickDisplayNoneErrors verifies a click on a display:none element
+// times out via chromedp's NodeVisible wait — the LLM gets a clear
+// failure signal even though the warning path doesn't fire (the dispatch
+// never happens).
+func TestClickDisplayNoneErrors(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#hidden-btn",
+		"timeout":  500,
+	})
+	if errText == "" {
+		t.Error("click on display:none element should error")
+	}
+}
+
+// TestClickInvisibleWarning verifies the visible=false warning path on
+// an element with visibility:hidden — it has a layout box (so chromedp's
+// NodeVisible can find it) but the user cannot see it. The click is
+// dispatched and the page-side handler does fire, but the warning
+// surfaces the no-effect-from-the-user's-POV state.
+func TestClickInvisibleWarning(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[clickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#invisible-btn",
+	})
+	if out.Visible {
+		t.Error("Visible should be false on visibility:hidden element")
+	}
+	if !strings.Contains(out.Warning, "not visible") {
+		t.Errorf("Warning %q should mention 'not visible'", out.Warning)
+	}
+}
+
+// TestClickFieldsetDisabledRejected verifies an input nested inside a
+// disabled fieldset is rejected pre-dispatch. The input itself has no
+// `disabled` attribute, so a probe based on `el.disabled` would miss
+// this — the implementation must use `el.matches(':disabled')`.
+func TestClickFieldsetDisabledRejected(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#fieldset-input",
+	})
+	if !strings.Contains(errText, "disabled") {
+		t.Errorf("error %q should mention 'disabled' (fieldset propagation)", errText)
+	}
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('fieldset-input-output').textContent",
+	})
+	if strings.Contains(string(out.Result), "clicked-fieldset-input") {
+		t.Error("fieldset-disabled input handler fired despite the pre-click error")
+	}
+}
+
+// TestClickNormalButtonReturnsCleanState verifies a successful click on
+// a regular button returns visible=true, disabled=false, no warning.
+func TestClickNormalButtonReturnsCleanState(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[clickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#click-target",
+	})
+	if out.Disabled || out.AriaDisabled {
+		t.Errorf("normal button should not be disabled; got disabled=%v aria_disabled=%v",
+			out.Disabled, out.AriaDisabled)
+	}
+	if !out.Visible {
+		t.Error("normal button should be visible=true")
+	}
+	if out.PointerEvents != "auto" {
+		t.Errorf("default pointer-events = %q, want 'auto'", out.PointerEvents)
+	}
+	if out.Warning != "" {
+		t.Errorf("Warning = %q on a clean click, want empty", out.Warning)
+	}
+}
+
+// ===========================================================================
+// Scroll: offset scroll returns position
+// ===========================================================================
+
+func TestScrollOffsetReturnsPosition(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   500,
+	})
+	if out.ScrollY < 1 {
+		t.Errorf("after scroll y=500, ScrollY = %f, want > 0", out.ScrollY)
+	}
+	if out.ScrollX != 0 {
+		t.Errorf("after scroll y=500, ScrollX = %f, want 0", out.ScrollX)
+	}
+}
+
+// ===========================================================================
+// Scroll: negative offset returns decreased position
+// ===========================================================================
+
+func TestScrollNegativeReturnsPosition(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Scroll down first.
+	out1 := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   500,
+	})
+
+	// Scroll up.
+	out2 := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   -200,
+	})
+
+	if out2.ScrollY >= out1.ScrollY {
+		t.Errorf("after negative scroll, ScrollY = %f, expected < %f", out2.ScrollY, out1.ScrollY)
+	}
+	if out2.ScrollY < 0 {
+		t.Errorf("ScrollY should not be negative, got %f", out2.ScrollY)
+	}
+}
+
+// ===========================================================================
+// Scroll: clamping at top boundary
+// ===========================================================================
+
+func TestScrollClampedAtTop(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Scroll down a bit.
+	callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   100,
+	})
+
+	// Scroll up by more than current position — should clamp at 0.
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   -9999,
+	})
+	if out.ScrollY != 0 {
+		t.Errorf("after scrolling past top, ScrollY = %f, want 0", out.ScrollY)
+	}
+}
+
+// ===========================================================================
+// Scroll: horizontal scroll returns position
+// ===========================================================================
+
+func TestScrollHorizontalReturnsPosition(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   300,
+	})
+	if out.ScrollX < 1 {
+		t.Errorf("after scroll x=300, ScrollX = %f, want > 0", out.ScrollX)
+	}
+}
+
+// ===========================================================================
+// Scroll: scroll into view returns position
+// ===========================================================================
+
+func TestScrollIntoViewReturnsPosition(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// The #scroll-marker is at margin-top: 2000px, so scrolling into view
+	// should result in a non-zero scrollY.
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#scroll-marker",
+	})
+	if out.ScrollY < 1 {
+		t.Errorf("after scroll into view of #scroll-marker, ScrollY = %f, want > 0", out.ScrollY)
+	}
+}
+
+// ===========================================================================
+// Scroll: both axes returns correct positions
+// ===========================================================================
+
+func TestScrollBothAxesReturnsPositions(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   200,
+		"y":   400,
+	})
+	if out.ScrollX < 1 {
+		t.Errorf("after scroll x=200,y=400, ScrollX = %f, want > 0", out.ScrollX)
+	}
+	if out.ScrollY < 1 {
+		t.Errorf("after scroll x=200,y=400, ScrollY = %f, want > 0", out.ScrollY)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scroll position: verify values are approximately correct
+// ---------------------------------------------------------------------------
+
+func TestScrollPositionApproximatelyCorrect(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   500,
+	})
+	// page.GetLayoutMetrics CSSVisualViewport.PageY should be ~500.
+	if math.Abs(out.ScrollY-500) > 5 {
+		t.Errorf("scroll y=500: ScrollY = %f, want ~500 (±5)", out.ScrollY)
+	}
+	if out.ScrollX != 0 {
+		t.Errorf("scroll y=500: ScrollX = %f, want 0", out.ScrollX)
+	}
+}
+
+func TestScrollPositionHorizontalApproximatelyCorrect(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   300,
+	})
+	if math.Abs(out.ScrollX-300) > 5 {
+		t.Errorf("scroll x=300: ScrollX = %f, want ~300 (±5)", out.ScrollX)
+	}
+	if out.ScrollY != 0 {
+		t.Errorf("scroll x=300: ScrollY = %f, want 0", out.ScrollY)
+	}
+}
+
+func TestScrollPositionBothAxesApproximatelyCorrect(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   200,
+		"y":   400,
+	})
+	if math.Abs(out.ScrollX-200) > 5 {
+		t.Errorf("scroll x=200,y=400: ScrollX = %f, want ~200 (±5)", out.ScrollX)
+	}
+	if math.Abs(out.ScrollY-400) > 5 {
+		t.Errorf("scroll x=200,y=400: ScrollY = %f, want ~400 (±5)", out.ScrollY)
+	}
+}
+
+func TestScrollPositionIncrementalAccumulates(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// Scroll 300, then 200 more. Total should be ~500.
+	callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   300,
+	})
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"y":   200,
+	})
+	if math.Abs(out.ScrollY-500) > 5 {
+		t.Errorf("incremental scroll 300+200: ScrollY = %f, want ~500 (±5)", out.ScrollY)
+	}
+}
+
+func TestScrollIntoViewPositionMatchesElement(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// #bottom-box is at top: 3000px. After scroll-into-view, ScrollY should
+	// be close to the element's position. The exact value depends on viewport
+	// height — the element should be near the bottom of the viewport, so
+	// ScrollY ≈ elementTop - viewportHeight + elementHeight.
+	// With default viewport 1080px: ~3000 - 1080 + 100 = ~2020.
+	// Allow generous tolerance since viewport may vary.
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+	})
+	if out.ScrollY < 1500 || out.ScrollY > 3100 {
+		t.Errorf("scroll into view #bottom-box (top:3000px): ScrollY = %f, expected 1500..3100", out.ScrollY)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Hover: coordinate accuracy via clientX/clientY
+// ---------------------------------------------------------------------------
+
+// parseCoordOutput parses "elementID:x,y" format from the fixture's output divs.
+func parseCoordOutput(t *testing.T, raw string) (id string, x, y int) {
+	t.Helper()
+	parts := strings.SplitN(raw, ":", 2)
+	if len(parts) != 2 {
+		t.Fatalf("unexpected coord output format: %q", raw)
+	}
+	id = parts[0]
+	_, err := fmt.Sscanf(parts[1], "%d,%d", &x, &y)
+	if err != nil {
+		t.Fatalf("parsing coordinates from %q: %v", raw, err)
+	}
+	return
+}
+
+func TestHoverCoordinateAccuracy(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// #top-box is at (50,50) with size 100x80, so center is (100, 90).
+	callTool[actionOutput](t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#top-box",
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('hover-output').textContent",
+	})
+	raw := strings.Trim(string(out.Result), "\"")
+	if raw == "" {
+		t.Fatal("hover did not trigger mousemove event on #top-box")
+	}
+	id, cx, cy := parseCoordOutput(t, raw)
+	if id != "top-box" {
+		t.Errorf("hover hit element %q, want 'top-box'", id)
+	}
+	// Center of #top-box: (50+50, 50+40) = (100, 90). Allow ±5 tolerance.
+	if math.Abs(float64(cx)-100) > 5 {
+		t.Errorf("hover clientX = %d, want ~100 (center of 50..150)", cx)
+	}
+	if math.Abs(float64(cy)-90) > 5 {
+		t.Errorf("hover clientY = %d, want ~90 (center of 50..130)", cy)
+	}
+}
+
+func TestHoverOnScrolledPage(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// Scroll #bottom-box into view first. It's at top:3000px, left:200px, 150x100.
+	callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+	})
+
+	// Now hover on it. GetContentQuads returns viewport-relative coords,
+	// so this should work correctly even after scrolling.
+	callTool[actionOutput](t, "hover", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('hover-output').textContent",
+	})
+	raw := strings.Trim(string(out.Result), "\"")
+	if raw == "" {
+		t.Fatal("hover did not trigger mousemove on #bottom-box after scroll")
+	}
+	id, _, _ := parseCoordOutput(t, raw)
+	if id != "bottom-box" {
+		t.Errorf("hover after scroll hit %q, want 'bottom-box'", id)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Right-click: coordinate accuracy and scrolled page
+// ---------------------------------------------------------------------------
+
+func TestRightClickCoordinateAccuracy(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// Right-click #top-box. Center is (100, 90).
+	callTool[clickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#top-box",
+		"button":   "right",
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('right-click-output').textContent",
+	})
+	raw := strings.Trim(string(out.Result), "\"")
+	if raw == "" {
+		t.Fatal("right-click did not trigger mousedown(button=2) on #top-box")
+	}
+	id, cx, cy := parseCoordOutput(t, raw)
+	if id != "top-box" {
+		t.Errorf("right-click hit %q, want 'top-box'", id)
+	}
+	if math.Abs(float64(cx)-100) > 5 {
+		t.Errorf("right-click clientX = %d, want ~100", cx)
+	}
+	if math.Abs(float64(cy)-90) > 5 {
+		t.Errorf("right-click clientY = %d, want ~90", cy)
+	}
+}
+
+func TestRightClickOnScrolledPage(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// Scroll to #bottom-box and right-click it.
+	callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+	})
+
+	callTool[clickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+		"button":   "right",
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('right-click-output').textContent",
+	})
+	raw := strings.Trim(string(out.Result), "\"")
+	if raw == "" {
+		t.Fatal("right-click did not trigger mousedown on #bottom-box after scroll")
+	}
+	id, _, _ := parseCoordOutput(t, raw)
+	if id != "bottom-box" {
+		t.Errorf("right-click after scroll hit %q, want 'bottom-box'", id)
+	}
+}
+
+func TestMiddleClickOnScrolledPage(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab": tabID,
+		"expression": `(function() {
+			var el = document.getElementById('bottom-box');
+			el.addEventListener('mousedown', function(e) {
+				if (e.button === 1) { el.dataset.middleClick = 'yes'; }
+			});
+		})()`,
+	})
+
+	// Scroll to #bottom-box and middle-click it.
+	callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+	})
+
+	callTool[clickOutput](t, "click", map[string]any{
+		"tab":      tabID,
+		"selector": "#bottom-box",
+		"button":   "middle",
+	})
+
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": `document.getElementById('bottom-box').dataset.middleClick || ''`,
+	})
+	if string(out.Result) != `"yes"` {
+		t.Errorf("middle click on scrolled #bottom-box did not fire mousedown(button=1); got %s", out.Result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scroll position: cross-check CDP GetLayoutMetrics vs JS window.scrollX/Y
+// ---------------------------------------------------------------------------
+
+func TestScrollPositionMatchesJS(t *testing.T) {
+	tabID := navigateToFixture(t, "cdp-coords.html")
+	defer closeTab(t, tabID)
+
+	// Scroll to a known position.
+	out := callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab": tabID,
+		"x":   150,
+		"y":   750,
+	})
+
+	// Cross-check against JS window.scrollX/scrollY.
+	var jsPos struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	jsOut := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "({x: window.scrollX, y: window.scrollY})",
+	})
+	if err := json.Unmarshal(jsOut.Result, &jsPos); err != nil {
+		t.Fatalf("parsing JS scroll position: %v (raw: %s)", err, jsOut.Result)
+	}
+
+	if math.Abs(out.ScrollX-jsPos.X) > 1 {
+		t.Errorf("ScrollX mismatch: CDP=%f, JS=%f", out.ScrollX, jsPos.X)
+	}
+	if math.Abs(out.ScrollY-jsPos.Y) > 1 {
+		t.Errorf("ScrollY mismatch: CDP=%f, JS=%f", out.ScrollY, jsPos.Y)
 	}
 }

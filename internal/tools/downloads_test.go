@@ -224,7 +224,7 @@ func TestDownloadFileRenamed(t *testing.T) {
 	dl := downloads.Downloads[0]
 
 	// The GUID-named file should NOT exist (it was renamed).
-	guidPath := filepath.Join(harness.downloadDir, dl.GUID)
+	guidPath := filepath.Join(ensureHarness(t).downloadDir, dl.GUID)
 	if _, err := os.Stat(guidPath); err == nil {
 		t.Fatalf("GUID file %s should have been renamed", guidPath)
 	}

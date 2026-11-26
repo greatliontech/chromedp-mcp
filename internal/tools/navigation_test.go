@@ -200,7 +200,7 @@ func TestNavigateDOMContentLoadedFasterThanLoad(t *testing.T) {
 	start := time.Now()
 	dcl := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        harness.httpSrv.URL + "/slow-subresource",
+		"url":        ensureHarness(t).httpSrv.URL + "/slow-subresource",
 		"wait_until": "domcontentloaded",
 	})
 	dclElapsed := time.Since(start)
@@ -217,7 +217,7 @@ func TestNavigateDOMContentLoadedFasterThanLoad(t *testing.T) {
 	start = time.Now()
 	full := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        harness.httpSrv.URL + "/slow-subresource",
+		"url":        ensureHarness(t).httpSrv.URL + "/slow-subresource",
 		"wait_until": "load",
 	})
 	loadElapsed := time.Since(start)
@@ -235,7 +235,7 @@ func TestNavigateNetworkIdleWaitsPastReplaceStateAndXHR(t *testing.T) {
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        harness.httpSrv.URL + "/slow-xhr",
+		"url":        ensureHarness(t).httpSrv.URL + "/slow-xhr",
 		"wait_until": "networkidle",
 	})
 	if out.Status != 200 {
@@ -261,7 +261,7 @@ func TestNavigateLifecycleModesRedirectFragmentAndBlank(t *testing.T) {
 	for _, mode := range []string{"domcontentloaded", "networkidle"} {
 		redir := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
-			"url":        harness.httpSrv.URL + "/redirect",
+			"url":        ensureHarness(t).httpSrv.URL + "/redirect",
 			"wait_until": mode,
 		})
 		if redir.Status != 200 {
@@ -272,7 +272,7 @@ func TestNavigateLifecycleModesRedirectFragmentAndBlank(t *testing.T) {
 		}
 
 		// Same-document fragment navigation and repeated no-op fragment navigation.
-		fragURL := harness.httpSrv.URL + "/page2.html#sec1"
+		fragURL := ensureHarness(t).httpSrv.URL + "/page2.html#sec1"
 		frag := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
 			"url":        fragURL,
@@ -358,7 +358,7 @@ func TestNavigateClientRedirectAnd204DoNotHang(t *testing.T) {
 		start := time.Now()
 		out := callTool[navigateOutput](t, "navigate", map[string]any{
 			"tab":        tabID,
-			"url":        harness.httpSrv.URL + "/bounce",
+			"url":        ensureHarness(t).httpSrv.URL + "/bounce",
 			"wait_until": mode,
 		})
 		if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -377,7 +377,7 @@ func TestNavigateClientRedirectAnd204DoNotHang(t *testing.T) {
 	start := time.Now()
 	delayed := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        harness.httpSrv.URL + "/bounce-delayed",
+		"url":        ensureHarness(t).httpSrv.URL + "/bounce-delayed",
 		"wait_until": "networkidle",
 	})
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -396,7 +396,7 @@ func TestNavigateClientRedirectAnd204DoNotHang(t *testing.T) {
 		start = time.Now()
 		errText := callToolExpectErr(t, "navigate", map[string]any{
 			"tab":        tabID,
-			"url":        harness.httpSrv.URL + "/no-content",
+			"url":        ensureHarness(t).httpSrv.URL + "/no-content",
 			"wait_until": mode,
 		})
 		if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -426,7 +426,7 @@ func TestNavigate(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 		"tab": tabID,
 	})
 	if !strings.HasSuffix(out.URL, "/page2.html") {
@@ -443,7 +443,7 @@ func TestNavigateAndGoBack(t *testing.T) {
 
 	// Navigate to page2.
 	callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 		"tab": tabID,
 	})
 	// Go back.
@@ -483,7 +483,7 @@ func TestNavigateReturnsStatusCode(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 		"tab": tabID,
 	})
 	if out.Status == 0 {
@@ -499,7 +499,7 @@ func TestNavigateFollowsRedirect(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": harness.httpSrv.URL + "/redirect",
+		"url": ensureHarness(t).httpSrv.URL + "/redirect",
 		"tab": tabID,
 	})
 	// The /redirect handler 302s to /page2.html. Because Go's FileServer
@@ -517,7 +517,7 @@ func TestNavigate404(t *testing.T) {
 	defer closeTab(t, tabID)
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": harness.httpSrv.URL + "/api/not-found",
+		"url": ensureHarness(t).httpSrv.URL + "/api/not-found",
 		"tab": tabID,
 	})
 	if out.Status != 404 {
@@ -531,7 +531,7 @@ func TestGoForward(t *testing.T) {
 
 	// Navigate to page2.
 	callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 		"tab": tabID,
 	})
 	// Go back to forms.
@@ -624,7 +624,7 @@ func TestNavigateWaitUntilDOMContentLoaded(t *testing.T) {
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        fixtureURL("index.html"),
+		"url":        fixtureURL(t, "index.html"),
 		"wait_until": "domcontentloaded",
 	})
 	if out.Status != 200 {
@@ -643,7 +643,7 @@ func TestNavigateWaitUntilNetworkIdle(t *testing.T) {
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        fixtureURL("network.html"),
+		"url":        fixtureURL(t, "network.html"),
 		"wait_until": "networkidle",
 	})
 	if out.Status != 200 {
@@ -660,7 +660,7 @@ func TestNavigateWaitUntilLoadExplicit(t *testing.T) {
 
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        fixtureURL("forms.html"),
+		"url":        fixtureURL(t, "forms.html"),
 		"wait_until": "load",
 	})
 	if out.Status != 200 {
@@ -752,11 +752,11 @@ func TestGoBackMultipleSteps(t *testing.T) {
 	// Navigate to page2, then forms (3 pages total).
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 
 	// Go back twice to reach index.
@@ -803,7 +803,7 @@ func TestNavigateSlowPage(t *testing.T) {
 	start := time.Now()
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": harness.httpSrv.URL + "/slow",
+		"url": ensureHarness(t).httpSrv.URL + "/slow",
 	})
 	elapsed := time.Since(start)
 
@@ -850,11 +850,11 @@ func TestGoForwardMultipleSteps(t *testing.T) {
 	// Navigate: index -> page2 -> forms (3 pages).
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 
 	// Go back twice to index.
@@ -881,7 +881,7 @@ func TestNavigateWaitUntilInvalid(t *testing.T) {
 	// Invalid wait_until value should return an error.
 	errText := callToolExpectErr(t, "navigate", map[string]any{
 		"tab":        tabID,
-		"url":        fixtureURL("index.html"),
+		"url":        fixtureURL(t, "index.html"),
 		"wait_until": "invalid_event",
 	})
 	if !strings.Contains(errText, "wait_until") || !strings.Contains(errText, "invalid_event") {
@@ -898,7 +898,7 @@ func TestGoBackDOMWorks(t *testing.T) {
 	// Navigate to a second page.
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("interaction.html"),
+		"url": fixtureURL(t, "interaction.html"),
 	})
 
 	// Verify we're on the second page.
@@ -959,7 +959,7 @@ func TestGoForwardDOMWorks(t *testing.T) {
 	// Navigate to second page.
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("interaction.html"),
+		"url": fixtureURL(t, "interaction.html"),
 	})
 
 	// Go back.
@@ -987,11 +987,11 @@ func TestGoBackMultipleHops(t *testing.T) {
 	// Build a 3-page history: index -> interaction -> forms.
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("interaction.html"),
+		"url": fixtureURL(t, "interaction.html"),
 	})
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 
 	// Go back to interaction.
@@ -1027,7 +1027,7 @@ func TestGoBackThenInteract(t *testing.T) {
 	// Navigate away.
 	callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("index.html"),
+		"url": fixtureURL(t, "index.html"),
 	})
 
 	// Go back to interaction page.
@@ -1090,7 +1090,7 @@ func TestNavigateNetworkIdleTimesOut(t *testing.T) {
 	tabID := navigateToFixture(t, "page2.html")
 	defer closeTab(t, tabID)
 
-	tb, err := harness.mgr.ResolveTab("", tabID)
+	tb, err := ensureHarness(t).mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab: %v", err)
 	}
@@ -1111,7 +1111,7 @@ func TestNavigateNetworkIdleTimesOut(t *testing.T) {
 	// Tab must remain usable after a lifecycle timeout.
 	out := callTool[navigateOutput](t, "navigate", map[string]any{
 		"tab": tabID,
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	if out.Title != "Page 2" {
 		t.Errorf("follow-up navigate title = %q, want 'Page 2'", out.Title)
@@ -1189,7 +1189,7 @@ func TestNavigateBackForwardReturnURLAndTitle(t *testing.T) {
 	}
 
 	// SPA pushState back/forward returns the updated document.title directly.
-	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": fixtureURL("spa.html")})
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "url": fixtureURL(t, "spa.html")})
 	callTool[clickOutput](t, "click", map[string]any{"tab": tabID, "selector": "#go-about"})
 	backSPA := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "back"})
 	if !strings.Contains(backSPA.Title, "SPA Home") {
@@ -1374,4 +1374,212 @@ func TestWaitForStatesTextURLShadowAndFrame(t *testing.T) {
 		"text":    "SVG Text Ready",
 		"timeout": 3000,
 	})
+}
+
+// ===========================================================================
+// Reload
+// ===========================================================================
+
+func TestReloadReturnsOutput(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	out := callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
+	if out.URL == "" {
+		t.Error("reload output URL should not be empty")
+	}
+	if out.Title != "Interaction Test" {
+		t.Errorf("reload output title = %q, want %q", out.Title, "Interaction Test")
+	}
+}
+
+func TestReloadBypassCacheWaitsForLoad(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Mutate the DOM to verify reload actually happened.
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.title = 'pre-reload'",
+	})
+
+	// Reload with bypass_cache. The tool should wait for the page to
+	// fully load before returning — no sleep should be needed.
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
+		"tab":          tabID,
+		"action":       "reload",
+		"bypass_cache": true,
+	})
+
+	// The title should be restored from the server, not 'pre-reload'.
+	if out.Title == "pre-reload" {
+		t.Error("bypass_cache reload did not wait for page load: title is still 'pre-reload'")
+	}
+	if out.Title != "Interaction Test" {
+		t.Errorf("after bypass_cache reload, title = %q, want %q", out.Title, "Interaction Test")
+	}
+	if !strings.Contains(out.URL, "interaction.html") {
+		t.Errorf("reload URL = %q, expected it to contain 'interaction.html'", out.URL)
+	}
+}
+
+func TestReloadNormalWaitsForLoad(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Mutate the DOM.
+	callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.title = 'before-reload'",
+	})
+
+	// Normal reload should also wait and return correct output.
+	out := callTool[navigateOutput](t, "navigate", map[string]any{
+		"tab":    tabID,
+		"action": "reload",
+	})
+
+	if out.Title == "before-reload" {
+		t.Error("normal reload returned before page finished loading")
+	}
+	if out.Title != "Interaction Test" {
+		t.Errorf("after reload, title = %q, want %q", out.Title, "Interaction Test")
+	}
+}
+
+func TestReloadDOMUsableImmediately(t *testing.T) {
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Reload.
+	callTool[navigateOutput](t, "navigate", map[string]any{"tab": tabID, "action": "reload"})
+
+	// Immediately query the DOM — should work without errors because
+	// reload waited for the page to load.
+	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "document.getElementById('click-target').textContent",
+	})
+	if string(out.Result) == "" {
+		t.Error("DOM query after reload returned empty result")
+	}
+}
+
+// ===========================================================================
+// wait_for expression coercion
+// ===========================================================================
+
+// TestWaitForExpressionNonPrimitive verifies a predicate that returns a
+// non-primitive value (e.g. a chained property access ultimately
+// returning an object/array) does not fail with CDP error "Object
+// reference chain is too long".
+func TestWaitForExpressionNonPrimitive(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.body",
+		"timeout":    2000,
+	})
+}
+
+// TestWaitForExpressionFalsyPrimitive verifies the coercion preserves
+// the timeout-on-falsy semantics.
+func TestWaitForExpressionFalsyPrimitive(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "0",
+		"timeout":    300,
+	})
+	if errText == "" {
+		t.Error("wait_for on falsy predicate '0' should have timed out")
+	}
+}
+
+// TestWaitForExpressionReturnsObject verifies a predicate whose terminal
+// value is a non-primitive (a DOMRect object from getBoundingClientRect).
+func TestWaitForExpressionReturnsObject(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.querySelector('h1')?.getBoundingClientRect()",
+		"timeout":    2000,
+	})
+}
+
+// TestWaitForExpressionAsyncPredicate verifies that an expression that
+// evaluates to a Promise is awaited, not silently coerced to true.
+func TestWaitForExpressionAsyncPredicate(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "fetch('/api/data').then(r => { window.__fetchOk = r.ok; return r.ok; })",
+		"timeout":    5000,
+	})
+
+	res := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		"tab":        tabID,
+		"expression": "window.__fetchOk === true",
+	})
+	if string(res.Result) != "true" {
+		t.Error("wait_for returned but window.__fetchOk wasn't set; the Promise was not awaited (a bare Boolean(promise) wrap would succeed instantly without running the .then)")
+	}
+}
+
+// TestWaitForExpressionAsyncRejection verifies that a Promise rejection
+// in the predicate surfaces as a poll error rather than being silently
+// coerced to true.
+func TestWaitForExpressionAsyncRejection(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "Promise.reject(new Error('async-predicate-failure'))",
+		"timeout":    1000,
+	})
+	if errText == "" {
+		t.Error("rejected Promise predicate should surface an error")
+	}
+}
+
+// TestWaitForExpressionTrailingLineComment verifies a trailing line
+// comment in the user's expression doesn't swallow the wrapping syntax.
+func TestWaitForExpressionTrailingLineComment(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	callTool[struct{}](t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "document.body // trailing comment",
+		"timeout":    2000,
+	})
+}
+
+// TestWaitForExpressionSyntaxError verifies that a syntax error in the
+// expression is still surfaced clearly even after the coercion wrap.
+func TestWaitForExpressionSyntaxError(t *testing.T) {
+	tabID := navigateToFixture(t, "page2.html")
+	defer closeTab(t, tabID)
+
+	errText := callToolExpectErr(t, "wait_for", map[string]any{
+		"tab":        tabID,
+		"expression": "if (true) { return",
+		"timeout":    1000,
+	})
+	if errText == "" {
+		t.Fatal("syntax error in expression should produce an error")
+	}
+	if !strings.Contains(strings.ToLower(errText), "syntax") &&
+		!strings.Contains(errText, "Unexpected") {
+		t.Errorf("syntax-error text %q should reference 'syntax' or 'Unexpected'", errText)
+	}
 }

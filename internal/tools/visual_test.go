@@ -242,7 +242,7 @@ func TestScreenshotSaveToDisk(t *testing.T) {
 	}
 
 	// Verify file exists on disk.
-	path := filepath.Join(harness.downloadDir, "test-screenshot.png")
+	path := filepath.Join(ensureHarness(t).downloadDir, "test-screenshot.png")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("screenshot file not found: %v", err)
@@ -271,7 +271,7 @@ func TestPDFSaveToDisk(t *testing.T) {
 	}
 
 	// Verify file exists on disk.
-	path := filepath.Join(harness.downloadDir, "test-output.pdf")
+	path := filepath.Join(ensureHarness(t).downloadDir, "test-output.pdf")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("PDF file not found: %v", err)
@@ -527,27 +527,6 @@ func TestElementScreenshot(t *testing.T) {
 	t.Error("element screenshot has no ImageContent")
 }
 
-func TestSetViewport(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[emulateOutput](t, "emulate", map[string]any{
-		"action": "viewport",
-		"tab":    tabID,
-		"width":  375,
-		"height": 667,
-	})
-
-	// Verify via JS.
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "window.innerWidth",
-	})
-	if string(out.Result) != "375" {
-		t.Errorf("viewport width = %s, want 375", out.Result)
-	}
-}
-
 func TestFullPageScreenshot(t *testing.T) {
 	tabID := navigateToFixture(t, "interaction.html")
 	defer closeTab(t, tabID)
@@ -720,77 +699,6 @@ func TestPDFCustomScale(t *testing.T) {
 	t.Error("no EmbeddedResource in result")
 }
 
-func TestSetViewportDeviceScaleFactor(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[emulateOutput](t, "emulate", map[string]any{
-		"action":              "viewport",
-		"tab":                 tabID,
-		"width":               800,
-		"height":              600,
-		"device_scale_factor": 2.0,
-	})
-
-	// Verify width.
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "window.innerWidth",
-	})
-	if string(out.Result) != "800" {
-		t.Errorf("viewport width = %s, want 800", out.Result)
-	}
-
-	// Verify height.
-	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "window.innerHeight",
-	})
-	if string(out.Result) != "600" {
-		t.Errorf("viewport height = %s, want 600", out.Result)
-	}
-
-	// Verify device pixel ratio matches scale factor.
-	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "window.devicePixelRatio",
-	})
-	if string(out.Result) != "2" {
-		t.Errorf("devicePixelRatio = %s, want 2", out.Result)
-	}
-}
-
-func TestSetViewportMobile(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[emulateOutput](t, "emulate", map[string]any{
-		"action": "viewport",
-		"tab":    tabID,
-		"width":  390,
-		"height": 844,
-		"mobile": true,
-	})
-
-	// In mobile mode, screen.width/height reflects the device metrics
-	// regardless of layout viewport.
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "screen.width",
-	})
-	if string(out.Result) != "390" {
-		t.Errorf("screen.width = %s, want 390", out.Result)
-	}
-
-	out = callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "screen.height",
-	})
-	if string(out.Result) != "844" {
-		t.Errorf("screen.height = %s, want 844", out.Result)
-	}
-}
-
 func TestScreenshotSelectorOverridesFullPage(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -877,27 +785,6 @@ func TestPDFCombinedParams(t *testing.T) {
 	t.Error("no EmbeddedResource in result")
 }
 
-func TestSetViewportDefaultScaleFactor(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[emulateOutput](t, "emulate", map[string]any{
-		"action": "viewport",
-		"tab":    tabID,
-		"width":  1024,
-		"height": 768,
-		// device_scale_factor omitted — should default to 1.0.
-	})
-
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "window.devicePixelRatio",
-	})
-	if string(out.Result) != "1" {
-		t.Errorf("default devicePixelRatio = %s, want 1", out.Result)
-	}
-}
-
 func TestScreenshotJPEGViewport(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
@@ -951,27 +838,6 @@ func TestPDFPageRanges(t *testing.T) {
 		}
 	}
 	t.Error("no EmbeddedResource in result")
-}
-
-func TestSetViewportScaleFactorZero(t *testing.T) {
-	tabID := navigateToFixture(t, "index.html")
-	defer closeTab(t, tabID)
-
-	callTool[emulateOutput](t, "emulate", map[string]any{
-		"action":              "viewport",
-		"tab":                 tabID,
-		"width":               800,
-		"height":              600,
-		"device_scale_factor": 0,
-	})
-
-	out := callTool[evaluateOutput](t, "evaluate", map[string]any{
-		"tab":        tabID,
-		"expression": "window.devicePixelRatio",
-	})
-	if string(out.Result) != "1" {
-		t.Errorf("scale=0 devicePixelRatio = %s, want 1 (default)", out.Result)
-	}
 }
 
 // TestElementScaleWithinMax verifies element screenshots succeed without
@@ -1328,4 +1194,76 @@ func TestScreenshotRefShadowFrameAndAtomicWrite(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != "shot.png" {
 		t.Errorf("unexpected leftover files in download dir: %+v", entries)
 	}
+}
+
+func TestElementScreenshotOnScrolledPage(t *testing.T) {
+	// interaction.html has #scroll-marker at margin-top:2000px.
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	// Scroll to make #scroll-marker visible.
+	callTool[scrollOutput](t, "scroll", map[string]any{
+		"tab":      tabID,
+		"selector": "#scroll-marker",
+	})
+
+	// Take an element screenshot of #scroll-marker after scrolling.
+	// This verifies GetContentQuads returns correct viewport-relative
+	// coordinates for elements that were scrolled into view.
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#scroll-marker",
+	})
+	if result.IsError {
+		t.Fatalf("element screenshot on scrolled page failed: %s", contentText(result))
+	}
+
+	// Verify we got a valid image (non-empty, decodable).
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+			if err != nil {
+				t.Fatalf("decoding screenshot: %v", err)
+			}
+			bounds := decoded.Bounds()
+			if bounds.Dx() < 1 || bounds.Dy() < 1 {
+				t.Errorf("screenshot dimensions %dx%d are too small", bounds.Dx(), bounds.Dy())
+			}
+			return
+		}
+	}
+	t.Fatal("screenshot did not return ImageContent")
+}
+
+func TestElementScreenshotDimensionsMatchElement(t *testing.T) {
+	// interaction.html has #click-target at 200x50.
+	tabID := navigateToFixture(t, "interaction.html")
+	defer closeTab(t, tabID)
+
+	result := callToolRaw(t, "screenshot", map[string]any{
+		"tab":      tabID,
+		"selector": "#click-target",
+	})
+	if result.IsError {
+		t.Fatalf("element screenshot failed: %s", contentText(result))
+	}
+
+	for _, c := range result.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+			if err != nil {
+				t.Fatalf("decoding screenshot: %v", err)
+			}
+			bounds := decoded.Bounds()
+			// #click-target is 200x50.
+			if math.Abs(float64(bounds.Dx())-200) > 2 {
+				t.Errorf("screenshot width = %d, want ~200", bounds.Dx())
+			}
+			if math.Abs(float64(bounds.Dy())-50) > 2 {
+				t.Errorf("screenshot height = %d, want ~50", bounds.Dy())
+			}
+			return
+		}
+	}
+	t.Fatal("screenshot did not return ImageContent")
 }

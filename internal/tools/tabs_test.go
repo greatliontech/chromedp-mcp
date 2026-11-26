@@ -42,7 +42,7 @@ func TestTabNewFailedNavigationRollsBackTab(t *testing.T) {
 
 func TestTabNewRedirectReturnsFinalURL(t *testing.T) {
 	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("redirect"),
+		"url": fixtureURL(t, "redirect"),
 	})
 	defer closeTab(t, out.TabID)
 
@@ -56,14 +56,14 @@ func TestMultiBrowserTabRoutingAndActivate(t *testing.T) {
 	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b1.BrowserID})
 	t1 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b1.BrowserID,
-		"url":     fixtureURL("index.html"),
+		"url":     fixtureURL(t, "index.html"),
 	})
 
 	b2 := callTool[browserLaunchOutput](t, "browser_launch", map[string]any{"headless": true})
 	defer callTool[browserCloseOutput](t, "browser_close", map[string]any{"browser": b2.BrowserID})
 	t2 := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": b2.BrowserID,
-		"url":     fixtureURL("page2.html"),
+		"url":     fixtureURL(t, "page2.html"),
 	})
 	_ = t2
 
@@ -116,7 +116,7 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 
 	// Immediately call navigate WITHOUT tab_new or explicit tab ID.
 	nav := callTool[navigateOutput](t, "navigate", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	if !strings.HasSuffix(nav.URL, "/page2.html") || nav.Title != "Page 2" {
 		t.Fatalf("immediate navigate after browser_launch = %+v, want /page2.html 'Page 2'", nav)
@@ -129,7 +129,7 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	}
 
 	// Verify Chrome itself only has 1 page target (no extra untracked blank tab).
-	bObj, err := harness.mgr.Resolve(bOut.BrowserID)
+	bObj, err := ensureHarness(t).mgr.Resolve(bOut.BrowserID)
 	if err != nil {
 		t.Fatalf("Resolve(%q): %v", bOut.BrowserID, err)
 	}
@@ -168,12 +168,12 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 	// still error ("no open tabs") rather than silently auto-creating, AND
 	// tab_new must still work on the same browser!
 	callTool[struct{}](t, "tab_close", map[string]any{"tab": defaultTabID})
-	if errText := callToolExpectErr(t, "navigate", map[string]any{"url": fixtureURL("forms.html")}); !strings.Contains(errText, "no open tabs") {
+	if errText := callToolExpectErr(t, "navigate", map[string]any{"url": fixtureURL(t, "forms.html")}); !strings.Contains(errText, "no open tabs") {
 		t.Errorf("navigate after closing last tab err = %q, want 'no open tabs'", errText)
 	}
 	reopened := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"browser": bOut.BrowserID,
-		"url":     fixtureURL("forms.html"),
+		"url":     fixtureURL(t, "forms.html"),
 	})
 	if reopened.TabID == "" || !strings.HasSuffix(reopened.URL, "/forms.html") {
 		t.Errorf("tab_new after closing default tab = %+v, want live tab at /forms.html", reopened)
@@ -183,13 +183,13 @@ func TestBrowserLaunchLeveragesDefaultTabWithoutTabNew(t *testing.T) {
 func TestTabManagement(t *testing.T) {
 	// Create a new tab.
 	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("index.html"),
+		"url": fixtureURL(t, "index.html"),
 	})
 	tab1 := out.TabID
 
 	// Create another tab.
 	out = callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	tab2 := out.TabID
 
@@ -210,13 +210,13 @@ func TestTabManagement(t *testing.T) {
 func TestTabActiveTabSwitch(t *testing.T) {
 	// Create tab A.
 	a := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	defer closeTab(t, a.TabID)
 
 	// Create tab B — should now be active.
 	b := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 	defer closeTab(t, b.TabID)
 
@@ -251,10 +251,10 @@ func TestTabActiveTabSwitch(t *testing.T) {
 func TestTabCloseActiveSwitches(t *testing.T) {
 	// Create two tabs.
 	a := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	b := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 	// B is active. Close B — A (MRU) should become active.
 	closeTab(t, b.TabID)
@@ -307,7 +307,7 @@ func TestTabNewWithoutURL(t *testing.T) {
 func TestActiveTabDefault(t *testing.T) {
 	// Create a tab and navigate it — it becomes the active tab.
 	tabOut := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	defer closeTab(t, tabOut.TabID)
 
@@ -325,31 +325,36 @@ func TestConcurrentToolCallsOnDifferentTabs(t *testing.T) {
 	defer closeTab(t, tab2)
 
 	// Run evaluate on both tabs concurrently.
+	h := ensureHarness(t)
 	type result struct {
 		tab   string
 		title string
+		err   error
 	}
 	ch := make(chan result, 2)
 
 	go func() {
-		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		out, err := callToolAsync[evaluateOutput](h, "evaluate", map[string]any{
 			"tab":        tab1,
 			"expression": "document.title",
 		})
-		ch <- result{tab: "tab1", title: string(out.Result)}
+		ch <- result{tab: "tab1", title: string(out.Result), err: err}
 	}()
 	go func() {
-		out := callTool[evaluateOutput](t, "evaluate", map[string]any{
+		out, err := callToolAsync[evaluateOutput](h, "evaluate", map[string]any{
 			"tab":        tab2,
 			"expression": "document.title",
 		})
-		ch <- result{tab: "tab2", title: string(out.Result)}
+		ch <- result{tab: "tab2", title: string(out.Result), err: err}
 	}()
 
 	results := make(map[string]string)
 	for i := 0; i < 2; i++ {
 		select {
 		case r := <-ch:
+			if r.err != nil {
+				t.Fatalf("concurrent evaluate on %s failed: %v", r.tab, r.err)
+			}
 			results[r.tab] = r.title
 		case <-time.After(10 * time.Second):
 			t.Fatal("timed out waiting for concurrent calls")
@@ -396,7 +401,7 @@ func TestTabActivateIdempotent(t *testing.T) {
 }
 
 func TestTabNewReturnsURL(t *testing.T) {
-	url := fixtureURL("forms.html")
+	url := fixtureURL(t, "forms.html")
 	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
 		"url": url,
 	})
@@ -546,22 +551,26 @@ func TestConcurrentSameTab(t *testing.T) {
 	tabID := navigateToFixture(t, "index.html")
 	defer closeTab(t, tabID)
 
-	done := make(chan struct{}, 3)
+	h := ensureHarness(t)
+	errs := make(chan error, 3)
 
 	// Run 3 concurrent evaluate calls on the same tab.
 	for i := 0; i < 3; i++ {
-		go func(n int) {
-			defer func() { done <- struct{}{} }()
-			callTool[evaluateOutput](t, "evaluate", map[string]any{
+		go func() {
+			_, err := callToolAsync[evaluateOutput](h, "evaluate", map[string]any{
 				"tab":        tabID,
 				"expression": "document.title",
 			})
-		}(i)
+			errs <- err
+		}()
 	}
 
 	for i := 0; i < 3; i++ {
 		select {
-		case <-done:
+		case err := <-errs:
+			if err != nil {
+				t.Errorf("concurrent same-tab evaluate failed: %v", err)
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("concurrent same-tab calls timed out")
 		}
@@ -571,13 +580,13 @@ func TestConcurrentSameTab(t *testing.T) {
 func TestTabMRUOrder(t *testing.T) {
 	// Create three tabs: A, B, C.
 	tabA := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("index.html"),
+		"url": fixtureURL(t, "index.html"),
 	})
 	tabB := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	tabC := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 
 	// MRU order should now be: A, B, C (C is most recent / active).
@@ -612,16 +621,16 @@ func TestTabMRUOrder(t *testing.T) {
 func TestTabMRUOrderComplexSequence(t *testing.T) {
 	// Create tabs A, B, C, D.
 	tabA := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("index.html"),
+		"url": fixtureURL(t, "index.html"),
 	})
 	tabB := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("page2.html"),
+		"url": fixtureURL(t, "page2.html"),
 	})
 	tabC := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("forms.html"),
+		"url": fixtureURL(t, "forms.html"),
 	})
 	tabD := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL("interaction.html"),
+		"url": fixtureURL(t, "interaction.html"),
 	})
 
 	// MRU: A, B, C, D (D is active)

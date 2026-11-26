@@ -17,7 +17,7 @@ import (
 
 func attachPausedCounter(t *testing.T, tabID string) (*atomic.Int64, func()) {
 	t.Helper()
-	tb, err := harness.mgr.ResolveTab("", tabID)
+	tb, err := ensureHarness(t).mgr.ResolveTab("", tabID)
 	if err != nil {
 		t.Fatalf("ResolveTab(%q): %v", tabID, err)
 	}

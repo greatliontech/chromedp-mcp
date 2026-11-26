@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,20 +19,45 @@ import (
 	"github.com/greatliontech/chromedp-mcp/internal/browser"
 )
 
-// testHarness holds the shared test infrastructure.
+// testHarness holds the shared test infrastructure, started lazily on the
+// first integration test so pure unit tests do not boot Chrome.
 type testHarness struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	httpSrv     *httptest.Server
 	mgr         *browser.Manager
 	session     *mcp.ClientSession
+	srvDone     chan struct{}
 	downloadDir string
 }
 
-// Global harness, initialized in TestMain.
-var harness *testHarness
+var (
+	sharedHarnessOnce sync.Once
+	sharedHarness     *testHarness
+	sharedHarnessErr  error
+)
 
 func TestMain(m *testing.M) {
+	code := m.Run()
+	teardownSharedHarness()
+	os.Exit(code)
+}
+
+func teardownSharedHarness() {
+	if sharedHarness == nil {
+		return
+	}
+	_ = sharedHarness.session.Close()
+	sharedHarness.mgr.CloseAll()
+	sharedHarness.httpSrv.Close()
+	sharedHarness.cancel()
+	if sharedHarness.srvDone != nil {
+		<-sharedHarness.srvDone
+	}
+	_ = os.RemoveAll(sharedHarness.downloadDir)
+}
+
+func initSharedHarness() {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Start test HTTP server serving fixtures.
@@ -202,10 +229,10 @@ func TestMain(m *testing.M) {
 	// Create a temp download directory for tests.
 	downloadDir, err := os.MkdirTemp("", "chromedp-mcp-test-downloads-*")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create temp download dir: %v\n", err)
 		cancel()
 		httpSrv.Close()
-		os.Exit(1)
+		sharedHarnessErr = fmt.Errorf("create temp download dir: %w", err)
+		return
 	}
 
 	// Create browser manager.
@@ -220,7 +247,9 @@ func TestMain(m *testing.M) {
 
 	// Connect an in-memory MCP client to the server.
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	srvDone := make(chan struct{})
 	go func() {
+		defer close(srvDone)
 		_ = srv.Run(ctx, serverTransport)
 	}()
 
@@ -230,13 +259,16 @@ func TestMain(m *testing.M) {
 	}, nil)
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to connect MCP client: %v\n", err)
 		cancel()
+		<-srvDone
+		mgr.CloseAll()
 		httpSrv.Close()
-		os.Exit(1)
+		_ = os.RemoveAll(downloadDir)
+		sharedHarnessErr = fmt.Errorf("connect MCP client: %w", err)
+		return
 	}
 
-	// Pre-launch a browser so tests don't each pay the startup cost.
+	// Pre-launch a shared browser once integration tests begin.
 	_, err = mgr.Launch(ctx, browser.LaunchOptions{
 		Headless:    true,
 		Width:       1280,
@@ -244,46 +276,54 @@ func TestMain(m *testing.M) {
 		DownloadDir: downloadDir,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to launch browser: %v\n", err)
+		_ = session.Close()
 		cancel()
+		<-srvDone
+		mgr.CloseAll()
 		httpSrv.Close()
-		os.Exit(1)
+		_ = os.RemoveAll(downloadDir)
+		sharedHarnessErr = fmt.Errorf("launch browser: %w", err)
+		return
 	}
 
-	harness = &testHarness{
+	sharedHarness = &testHarness{
 		ctx:         ctx,
 		cancel:      cancel,
 		httpSrv:     httpSrv,
 		mgr:         mgr,
 		session:     session,
+		srvDone:     srvDone,
 		downloadDir: downloadDir,
 	}
-
-	code := m.Run()
-
-	mgr.CloseAll()
-	httpSrv.Close()
-	cancel()
-	os.RemoveAll(downloadDir)
-	os.Exit(code)
 }
 
-// callTool calls an MCP tool and unmarshals the structured output into dst.
-// It fails the test if the tool returns an error.
-func callTool[T any](t *testing.T, name string, args any) T {
+// ensureHarness lazily initializes and returns the shared integration test
+// harness (HTTP fixture server, MCP session, and headless Chrome).
+func ensureHarness(t *testing.T) *testHarness {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(harness.ctx, 30*time.Second)
+	sharedHarnessOnce.Do(initSharedHarness)
+	if sharedHarnessErr != nil {
+		t.Fatalf("shared test harness: %v", sharedHarnessErr)
+	}
+	return sharedHarness
+}
+
+// callToolAsync invokes an MCP tool on an already-initialized harness without
+// touching testing.T, making it safe to call from spawned goroutines.
+func callToolAsync[T any](h *testHarness, name string, args any) (T, error) {
+	var zero T
+	ctx, cancel := context.WithTimeout(h.ctx, 30*time.Second)
 	defer cancel()
 
-	result, err := harness.session.CallTool(ctx, &mcp.CallToolParams{
+	result, err := h.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
 		Arguments: args,
 	})
 	if err != nil {
-		t.Fatalf("CallTool(%s): %v", name, err)
+		return zero, fmt.Errorf("CallTool(%s): %w", name, err)
 	}
 	if result.IsError {
-		t.Fatalf("CallTool(%s) returned error: %s", name, contentText(result))
+		return zero, fmt.Errorf("CallTool(%s) returned error: %s", name, contentText(result))
 	}
 
 	var out T
@@ -291,19 +331,30 @@ func callTool[T any](t *testing.T, name string, args any) T {
 	if result.StructuredContent != nil {
 		b, err := json.Marshal(result.StructuredContent)
 		if err != nil {
-			t.Fatalf("marshal StructuredContent: %v", err)
+			return zero, fmt.Errorf("marshal StructuredContent: %w", err)
 		}
 		if err := json.Unmarshal(b, &out); err != nil {
-			t.Fatalf("unmarshal StructuredContent into %T: %v\nraw: %s", out, err, b)
+			return zero, fmt.Errorf("unmarshal StructuredContent into %T: %w\nraw: %s", out, err, b)
 		}
-		return out
+		return out, nil
 	}
 	// Fall back to parsing from text content.
 	text := contentText(result)
 	if text != "" {
 		if err := json.Unmarshal([]byte(text), &out); err != nil {
-			t.Fatalf("unmarshal text content into %T: %v\nraw: %s", out, err, text)
+			return zero, fmt.Errorf("unmarshal text content into %T: %w\nraw: %s", out, err, text)
 		}
+	}
+	return out, nil
+}
+
+// callTool calls an MCP tool and unmarshals the structured output into dst.
+// It fails the test if the tool returns an error.
+func callTool[T any](t *testing.T, name string, args any) T {
+	t.Helper()
+	out, err := callToolAsync[T](ensureHarness(t), name, args)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return out
 }
@@ -311,10 +362,11 @@ func callTool[T any](t *testing.T, name string, args any) T {
 // callToolRaw calls an MCP tool and returns the raw result.
 func callToolRaw(t *testing.T, name string, args any) *mcp.CallToolResult {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(harness.ctx, 30*time.Second)
+	h := ensureHarness(t)
+	ctx, cancel := context.WithTimeout(h.ctx, 30*time.Second)
 	defer cancel()
 
-	result, err := harness.session.CallTool(ctx, &mcp.CallToolParams{
+	result, err := h.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
 		Arguments: args,
 	})
@@ -328,10 +380,11 @@ func callToolRaw(t *testing.T, name string, args any) *mcp.CallToolResult {
 // Returns the error text. Fails the test if the tool succeeds.
 func callToolExpectErr(t *testing.T, name string, args any) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(harness.ctx, 10*time.Second)
+	h := ensureHarness(t)
+	ctx, cancel := context.WithTimeout(h.ctx, 10*time.Second)
 	defer cancel()
 
-	result, err := harness.session.CallTool(ctx, &mcp.CallToolParams{
+	result, err := h.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
 		Arguments: args,
 	})
@@ -346,8 +399,9 @@ func callToolExpectErr(t *testing.T, name string, args any) string {
 }
 
 // fixtureURL returns the test server URL for a fixture file.
-func fixtureURL(path string) string {
-	return harness.httpSrv.URL + "/" + path
+func fixtureURL(t *testing.T, path string) string {
+	t.Helper()
+	return ensureHarness(t).httpSrv.URL + "/" + path
 }
 
 // contentText extracts the first text content from a CallToolResult.
@@ -368,7 +422,7 @@ func contentText(r *mcp.CallToolResult) string {
 func navigateToFixture(t *testing.T, fixture string) string {
 	t.Helper()
 	out := callTool[tabNewOutput](t, "tab_new", map[string]any{
-		"url": fixtureURL(fixture),
+		"url": fixtureURL(t, fixture),
 	})
 	if out.TabID == "" {
 		t.Fatal("tab_new returned empty tab ID")
@@ -487,6 +541,40 @@ func newIsolatedSession(t *testing.T, opts *Options) *mcp.ClientSession {
 		mgr.CloseAll()
 	})
 	return sess
+}
+
+// listAllRegisteredTools creates an isolated MCP server with opts and returns
+// its full tools/list response without starting Chrome.
+func listAllRegisteredTools(t *testing.T, opts *Options) []*mcp.Tool {
+	t.Helper()
+	sess := newIsolatedSession(t, opts)
+	res, err := sess.ListTools(t.Context(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	return res.Tools
+}
+
+// findSnapshotRef extracts the [ref=eN] token from the first snapshot line
+// containing needle.
+func findSnapshotRef(t *testing.T, snap, needle string) string {
+	t.Helper()
+	for line := range strings.SplitSeq(snap, "\n") {
+		if !strings.Contains(line, needle) {
+			continue
+		}
+		idx := strings.Index(line, "[ref=")
+		if idx < 0 {
+			continue
+		}
+		rest := line[idx+len("[ref="):]
+		end := strings.IndexByte(rest, ']')
+		if end > 0 {
+			return rest[:end]
+		}
+	}
+	t.Fatalf("could not find [ref=...] on line containing %q in snapshot:\n%s", needle, snap)
+	return ""
 }
 
 // selectorTimeout is a helper that verifies a tool call with a missing
