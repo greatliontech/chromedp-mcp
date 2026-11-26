@@ -14,7 +14,7 @@ tasks:
   test:
     desc: Run all tests with race detector
     cmds:
-      - go test -race -count=1 -timeout 300s ./...
+      - go test -p=1 -race -count=1 -timeout 300s ./...
 
   test:short:
     desc: Run a quick subset of tests

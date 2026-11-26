@@ -46,7 +46,7 @@ func listDevToolsPageTargets(t *testing.T, port int) []devtoolsTargetInfo {
 
 func findChrome(t *testing.T) string {
 	t.Helper()
-	for _, name := range []string{"chromium", "google-chrome", "chromium-browser"} {
+	for _, name := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
 		if p, err := exec.LookPath(name); err == nil {
 			return p
 		}
@@ -81,6 +81,7 @@ func startRemoteChromeWithKill(t *testing.T, urls ...string) (int, func()) {
 		"--headless=new",
 		"--no-sandbox",
 		"--disable-gpu",
+		"--enable-unsafe-swiftshader",
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		fmt.Sprintf("--user-data-dir=%s", userDataDir),
 		firstURL,

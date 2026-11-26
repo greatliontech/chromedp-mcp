@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ var allocCancel context.CancelFunc
 func TestMain(m *testing.M) {
 	allocCtx, ac := chromedp.NewExecAllocator(
 		context.Background(),
-		append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Headless)...,
+		append(slices.Clone(chromedp.DefaultExecAllocatorOptions[:]), chromedp.Headless, chromedp.DisableGPU)...,
 	)
 	allocCancel = ac
 

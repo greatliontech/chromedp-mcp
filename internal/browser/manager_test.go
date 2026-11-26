@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -580,4 +582,119 @@ func TestResolveDebuggerURL(t *testing.T) {
 	if gotQuery != "token=secret" {
 		t.Errorf("/json/version RawQuery = %q, want token=secret", gotQuery)
 	}
+}
+
+func captureLaunchArgs(t *testing.T, opts LaunchOptions) []string {
+	t.Helper()
+	var gotArgs []string
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	allocOpts := append(
+		launchAllocatorOptions(opts),
+		chromedp.ExecPath(filepath.Join(t.TempDir(), "nonexistent-chrome")),
+		chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
+			gotArgs = slices.Clone(cmd.Args)
+			cancel()
+		}),
+	)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, allocOpts...)
+	defer allocCancel()
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	defer browserCancel()
+
+	_, err := chromedp.Targets(browserCtx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("chromedp.Targets err = %v, want context.Canceled", err)
+	}
+	if len(gotArgs) == 0 {
+		t.Fatal("ModifyCmdFunc did not capture Chrome command args")
+	}
+	return gotArgs
+}
+
+func TestLaunchAllocatorOptions(t *testing.T) {
+	hasFlag := func(args []string, want string) bool {
+		return slices.Contains(args, want)
+	}
+	hasFlagPrefix := func(args []string, prefix string) bool {
+		return slices.ContainsFunc(args, func(a string) bool {
+			return strings.HasPrefix(a, prefix)
+		})
+	}
+
+	t.Run("headless enables DisableGPU and SwiftShader", func(t *testing.T) {
+		args := captureLaunchArgs(t, LaunchOptions{Headless: true})
+		for _, want := range []string{"--headless", "--disable-gpu", "--enable-unsafe-swiftshader"} {
+			if !hasFlag(args, want) {
+				t.Errorf("headless args missing %q: %v", want, args)
+			}
+		}
+		if hasFlagPrefix(args, "--window-size=") {
+			t.Errorf("zero dimensions should omit --window-size: %v", args)
+		}
+		if hasFlagPrefix(args, "--profile-directory=") {
+			t.Errorf("empty profile should omit --profile-directory: %v", args)
+		}
+	})
+
+	t.Run("headful omits headless and GPU-disabling flags", func(t *testing.T) {
+		args := captureLaunchArgs(t, LaunchOptions{Headless: false})
+		for _, forbidden := range []string{"--headless", "--disable-gpu", "--enable-unsafe-swiftshader"} {
+			if hasFlag(args, forbidden) || hasFlagPrefix(args, forbidden+"=") {
+				t.Errorf("headful args unexpectedly contain %q: %v", forbidden, args)
+			}
+		}
+	})
+
+	t.Run("window size and profile flags", func(t *testing.T) {
+		userDataDir := filepath.Join(t.TempDir(), "chrome-profile")
+		args := captureLaunchArgs(t, LaunchOptions{
+			Headless:    true,
+			Width:       1280,
+			Height:      720,
+			UserDataDir: userDataDir,
+			ProfileDir:  "Profile 2",
+		})
+		for _, want := range []string{
+			"--window-size=1280,720",
+			"--user-data-dir=" + userDataDir,
+			"--profile-directory=Profile 2",
+		} {
+			if !hasFlag(args, want) {
+				t.Errorf("args missing %q: %v", want, args)
+			}
+		}
+	})
+
+	t.Run("non-positive or partial dimensions omit window-size", func(t *testing.T) {
+		cases := []LaunchOptions{
+			{Headless: true, Width: 1280, Height: 0},
+			{Headless: true, Width: 0, Height: 720},
+			{Headless: true, Width: -1, Height: 720},
+			{Headless: true, Width: 1280, Height: -1},
+		}
+		for _, opts := range cases {
+			args := captureLaunchArgs(t, opts)
+			if hasFlagPrefix(args, "--window-size=") {
+				t.Errorf("opts %+v should omit --window-size: %v", opts, args)
+			}
+		}
+	})
+
+	t.Run("half-specified profile omits user-data-dir and profile-directory", func(t *testing.T) {
+		userDataDir := filepath.Join(t.TempDir(), "custom-chrome-profile")
+		for _, opts := range []LaunchOptions{
+			{Headless: true, UserDataDir: userDataDir},
+			{Headless: true, ProfileDir: "Profile 2"},
+		} {
+			args := captureLaunchArgs(t, opts)
+			if hasFlag(args, "--user-data-dir="+userDataDir) {
+				t.Errorf("opts %+v should omit custom --user-data-dir: %v", opts, args)
+			}
+			if hasFlagPrefix(args, "--profile-directory=") {
+				t.Errorf("opts %+v should omit --profile-directory: %v", opts, args)
+			}
+		}
+	})
 }

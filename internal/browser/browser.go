@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -75,23 +76,13 @@ func DefaultLaunchOptions() LaunchOptions {
 	}
 }
 
-// Launch starts a new Chrome browser process. startupCtx bounds browser
-// startup (e.g. MCP request cancellation) without tying the browser's
-// post-startup lifetime to startupCtx; nil defaults to context.Background().
-func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions) (*Browser, error) {
-	if startupCtx == nil {
-		startupCtx = context.Background()
-	}
-	if err := startupCtx.Err(); err != nil {
-		return nil, fmt.Errorf("launch browser: %w", err)
-	}
-	if (opts.UserDataDir != "") != (opts.ProfileDir != "") {
-		return nil, fmt.Errorf("launch browser: UserDataDir and ProfileDir must either both be set or both be empty")
-	}
-
-	allocOpts := chromedp.DefaultExecAllocatorOptions[:]
+func launchAllocatorOptions(opts LaunchOptions) []chromedp.ExecAllocatorOption {
+	allocOpts := slices.Clone(chromedp.DefaultExecAllocatorOptions[:])
 	if opts.Headless {
-		allocOpts = append(allocOpts, chromedp.Headless)
+		// Disable hardware GPU compositing in headless mode (with SwiftShader
+		// fallback for Chromium 139+) so Page.captureScreenshot stays reliable
+		// on GPU-less Linux VMs and containers.
+		allocOpts = append(allocOpts, chromedp.Headless, chromedp.DisableGPU)
 	} else {
 		// DefaultExecAllocatorOptions includes Headless which sets
 		// the "headless" flag to true. Override it to false. Since
@@ -107,8 +98,24 @@ func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions
 			chromedp.Flag("profile-directory", opts.ProfileDir),
 		)
 	}
+	return allocOpts
+}
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, allocOpts...)
+// Launch starts a new Chrome browser process. startupCtx bounds browser
+// startup (e.g. MCP request cancellation) without tying the browser's
+// post-startup lifetime to startupCtx; nil defaults to context.Background().
+func Launch(parentCtx, startupCtx context.Context, id string, opts LaunchOptions) (*Browser, error) {
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, fmt.Errorf("launch browser: %w", err)
+	}
+	if (opts.UserDataDir != "") != (opts.ProfileDir != "") {
+		return nil, fmt.Errorf("launch browser: UserDataDir and ProfileDir must either both be set or both be empty")
+	}
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, launchAllocatorOptions(opts)...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Start Chrome at the browser CDP level via chromedp.Targets (NOT

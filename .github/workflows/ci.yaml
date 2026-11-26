@@ -52,7 +52,7 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
-          if bin=$(command -v chromium || command -v google-chrome || command -v chromium-browser); then
+          if bin=$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable); then
             echo "Using browser: $bin"
             "$bin" --version
           else
@@ -66,4 +66,7 @@ jobs:
           fi
 
       - name: Test
-        run: go test -race -count=1 -timeout 600s ./...
+        # Serialize package test binaries (-p=1) so concurrent Chrome-driving
+        # packages do not starve software rendering (SwiftShader) under -race
+        # on 4-vCPU runners.
+        run: go test -p=1 -race -count=1 -timeout 600s ./...
