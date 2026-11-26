@@ -52,6 +52,11 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+          for cand in chromium google-chrome chromium-browser; do
+            if p=$(command -v "$cand"); then
+              echo "Found $cand at $p: $("$p" --version)"
+            fi
+          done
           if bin=$(command -v chromium || command -v google-chrome || command -v chromium-browser); then
             echo "Using browser: $bin"
             "$bin" --version
@@ -66,4 +71,6 @@ jobs:
           fi
 
       - name: Test
-        run: go test -race -count=1 -timeout 600s ./...
+        env:
+          CHROMEDP_MCP_DEBUG_CHROME: "1"
+        run: go test -v -race -count=1 -timeout 600s ./internal/tools
