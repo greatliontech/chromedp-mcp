@@ -429,16 +429,16 @@ func TestListFramesFailsFastWhenDialogOpen(t *testing.T) {
 		"tab":        tabID,
 		"expression": `setTimeout(function() { alert('blocks-frames'); }, 10); true`,
 	})
-	defer handleDialog(t, tabID, map[string]any{"accept": true})
+	defer handleDialog(t, tabID, map[string]any{"action": "accept"})
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}).Open {
+		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}).Open {
+	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for alert dialog")
 	}
 
@@ -448,7 +448,7 @@ func TestListFramesFailsFastWhenDialogOpen(t *testing.T) {
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("list_frames with open dialog took %v, want fast failure", elapsed)
 	}
-	if !strings.Contains(errText, "get_dialog") || !strings.Contains(errText, "handle_dialog") {
-		t.Errorf("list_frames open-dialog err = %q, want guidance to get_dialog/handle_dialog", errText)
+	if !strings.Contains(errText, "dialog") {
+		t.Errorf("list_frames open-dialog err = %q, want guidance to dialog tool", errText)
 	}
 }

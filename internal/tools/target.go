@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -13,6 +15,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
+	"github.com/greatliontech/chromedp-mcp/internal/collector"
 	"github.com/greatliontech/chromedp-mcp/internal/tab"
 )
 
@@ -252,6 +255,7 @@ type resolvedElement struct {
 	BackendNodeID cdp.BackendNodeID
 	FrameID       cdp.FrameID
 	Label         string
+	dialog        *collector.Dialog
 }
 
 func (e *resolvedElement) Release(ctx context.Context, tgt *chromedp.Target) {
@@ -260,6 +264,12 @@ func (e *resolvedElement) Release(ctx context.Context, tgt *chromedp.Target) {
 	}
 	oid := e.ObjectID
 	e.ObjectID = ""
+	// Skip Runtime.releaseObject when a JS modal dialog is currently blocking
+	// the renderer main thread; otherwise cleanupContext would stall for 2s.
+	// V8 automatically reclaims the handle on document navigation or tab close.
+	if e.dialog != nil && e.dialog.Open() {
+		return
+	}
 	releaseRemoteObject(ctx, tgt, oid)
 }
 
@@ -272,6 +282,15 @@ func releaseRemoteObject(ctx context.Context, tgt *chromedp.Target, oid runtime.
 	_, _ = cdp.Call(cleanCtx, tgt, runtime.ReleaseObject, runtime.ReleaseObjectParams{
 		ObjectID: oid,
 	})
+}
+
+// releaseExceptionObject releases the V8 RemoteObjectID attached to a CDP
+// Runtime.ExceptionDetails payload (if any and distinct from skipOID).
+func releaseExceptionObject(ctx context.Context, tgt *chromedp.Target, ex *runtime.ExceptionDetails, skipOID runtime.RemoteObjectID) {
+	if ex == nil || ex.Exception == nil || ex.Exception.ObjectID == "" || ex.Exception.ObjectID == skipOID {
+		return
+	}
+	releaseRemoteObject(ctx, tgt, ex.Exception.ObjectID)
 }
 
 // validateElementTarget checks mutual exclusion between ref, selector, and frame.
@@ -340,6 +359,7 @@ func resolveElementObject(
 			BackendNodeID: snapRef.BackendNodeID,
 			FrameID:       snapRef.FrameID,
 			Label:         fmt.Sprintf("ref %q", ref),
+			dialog:        t.Dialog,
 		}, nil
 	}
 
@@ -370,9 +390,12 @@ func resolveElementObject(
 		return nil, err
 	}
 	if evalRes.ExceptionDetails != nil {
+		var resOID runtime.RemoteObjectID
 		if evalRes.Result != nil && evalRes.Result.ObjectID != "" {
-			releaseRemoteObject(tctx, tgt, evalRes.Result.ObjectID)
+			resOID = evalRes.Result.ObjectID
+			releaseRemoteObject(tctx, tgt, resOID)
 		}
+		releaseExceptionObject(tctx, tgt, evalRes.ExceptionDetails, resOID)
 		return nil, fmt.Errorf("selector %q: %s", selector, formatExceptionDetails(evalRes.ExceptionDetails))
 	}
 	if evalRes.Result == nil || evalRes.Result.ObjectID == "" {
@@ -400,6 +423,7 @@ func resolveElementObject(
 		BackendNodeID: bid,
 		FrameID:       cdp.FrameID(frameID),
 		Label:         fmt.Sprintf("selector %q", selector),
+		dialog:        t.Dialog,
 	}, nil
 }
 
@@ -454,6 +478,7 @@ func callOnElement[T any](
 		return zero, err
 	}
 	if res.ExceptionDetails != nil {
+		releaseExceptionObject(ctx, tgt, res.ExceptionDetails, "")
 		return zero, fmt.Errorf("%s", formatExceptionDetails(res.ExceptionDetails))
 	}
 	if res.Result == nil || len(res.Result.Value) == 0 {
@@ -464,4 +489,214 @@ func callOnElement[T any](
 		return zero, err
 	}
 	return out, nil
+}
+
+// validatePointerTarget validates target fields for pointer tools (click,
+// hover, drag endpoints) accepting either viewport coordinates (x, y) OR an
+// element target (ref / selector + optional frame).
+func validatePointerTarget(ref, selector, frameID string, x, y *float64, requireOne bool) error {
+	hasX := x != nil
+	hasY := y != nil
+	if hasX != hasY {
+		return fmt.Errorf("x and y coordinates must both be provided together")
+	}
+	if hasX {
+		if math.IsNaN(*x) || math.IsInf(*x, 0) || math.IsNaN(*y) || math.IsInf(*y, 0) {
+			return fmt.Errorf("x and y coordinates must be finite numbers")
+		}
+		if ref != "" || selector != "" || frameID != "" {
+			return fmt.Errorf("coordinates (x, y) are mutually exclusive with ref, selector, and frame")
+		}
+		return nil
+	}
+	if requireOne && ref == "" && selector == "" {
+		return fmt.Errorf("one of ref, selector, or (x, y) coordinates is required")
+	}
+	return validateElementTarget(ref, selector, frameID, false)
+}
+
+// parseModifiers parses modifier key names ("ctrl", "shift", "alt", "meta")
+// into a chromedp.Modifier bitmask.
+func parseModifiers(mods []string) (chromedp.Modifier, error) {
+	var mask chromedp.Modifier
+	for _, m := range mods {
+		switch m {
+		case "ctrl":
+			mask |= chromedp.ModifierCtrl
+		case "shift":
+			mask |= chromedp.ModifierShift
+		case "alt":
+			mask |= chromedp.ModifierAlt
+		case "meta":
+			mask |= chromedp.ModifierMeta
+		default:
+			return 0, fmt.Errorf("invalid modifiers: unknown modifier %q (must be ctrl, shift, alt, or meta)", m)
+		}
+	}
+	return mask, nil
+}
+
+// contentQuadCenter returns the root-viewport center coordinates of a DOM node
+// via DOM.getContentQuads without scrolling it. Works uniformly across main
+// frame, Shadow DOM, and same-origin iframes.
+func contentQuadCenter(ctx context.Context, tgt *chromedp.Target, bid cdp.BackendNodeID) (x, y float64, err error) {
+	if bid == 0 {
+		return 0, 0, fmt.Errorf("element has no backend DOM node ID")
+	}
+	res, err := cdp.Call(ctx, tgt, dom.GetContentQuads, dom.GetContentQuadsParams{
+		BackendNodeID: bid,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("getContentQuads: %w", err)
+	}
+	if len(res.Quads) == 0 {
+		return 0, 0, fmt.Errorf("element has no content quads (not laid out)")
+	}
+	q := res.Quads[0]
+	if len(q) < 8 {
+		return 0, 0, fmt.Errorf("unexpected quad length: %d", len(q))
+	}
+	return (q[0] + q[2] + q[4] + q[6]) / 4, (q[1] + q[3] + q[5] + q[7]) / 4, nil
+}
+
+// scrollAndCenterBackendNode scrolls the DOM node into view (when needed) and
+// returns its root-viewport center coordinates via DOM.getContentQuads. Works
+// uniformly across main-frame elements, Shadow DOM nodes, and same-origin iframes.
+func scrollAndCenterBackendNode(ctx context.Context, tgt *chromedp.Target, bid cdp.BackendNodeID) (x, y float64, err error) {
+	if bid == 0 {
+		return 0, 0, fmt.Errorf("element has no backend DOM node ID")
+	}
+	_, _ = cdp.Call(ctx, tgt, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{
+		BackendNodeID: bid,
+	})
+	return contentQuadCenter(ctx, tgt, bid)
+}
+
+// layoutBoxStateJS checks whether a DOM node is connected and has a layout box
+// (matching chromedp's NodeVisible: true for visibility:hidden and zero-size
+// inputs, false for display:none).
+const layoutBoxStateJS = `function() {
+	if (!this.isConnected) return "detached";
+	if (this.offsetWidth || this.offsetHeight ||
+		(typeof this.getClientRects === "function" && this.getClientRects().length > 0)) {
+		return "visible";
+	}
+	return "hidden";
+}`
+
+// waitForElementLayoutBox polls until the resolved element has a layout box
+// (visible or visibility:hidden, not display:none) within timeoutMs. Fails fast
+// if the element detaches or its execution context is destroyed.
+func waitForElementLayoutBox(
+	tctx context.Context,
+	tgt *chromedp.Target,
+	el *resolvedElement,
+	timeoutMs int,
+) error {
+	sctx, cancel := selectorContext(tctx, timeoutMs)
+	defer cancel()
+
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := callOnElement[string](sctx, tgt, el.ObjectID, layoutBoxStateJS, false)
+		if err != nil {
+			if tctx.Err() != nil {
+				return tctx.Err()
+			}
+			if sctx.Err() != nil {
+				return fmt.Errorf("element %s exists but is not visible (timed out waiting for layout box)", el.Label)
+			}
+			return fmt.Errorf("waiting for %s to become visible: %w", el.Label, err)
+		}
+		switch state {
+		case "visible":
+			return nil
+		case "detached":
+			return fmt.Errorf("element %s was detached from the DOM while waiting to become visible", el.Label)
+		}
+		if tctx.Err() != nil {
+			return tctx.Err()
+		}
+		if sctx.Err() != nil {
+			return fmt.Errorf("element %s exists but is not visible (timed out waiting for layout box)", el.Label)
+		}
+		select {
+		case <-tctx.Done():
+			return tctx.Err()
+		case <-sctx.Done():
+			return fmt.Errorf("element %s exists but is not visible (timed out waiting for layout box)", el.Label)
+		case <-ticker.C:
+		}
+	}
+}
+
+// focusResolvedElement focuses an element via DOM.focus(BackendNodeID),
+// propagating non-focusable / disabled errors instead of silently sending
+// subsequent keystrokes to a previously focused element. Falls back to JS
+// focus only when BackendNodeID is unavailable, verifying focus actually landed.
+func focusResolvedElement(ctx context.Context, tgt *chromedp.Target, el *resolvedElement) error {
+	if el.BackendNodeID > 0 {
+		if _, err := cdp.Call(ctx, tgt, dom.Focus, dom.FocusParams{
+			BackendNodeID: el.BackendNodeID,
+		}); err != nil {
+			return fmt.Errorf("focus %s: %w", el.Label, err)
+		}
+		return nil
+	}
+	_, err := callOnElement[any](ctx, tgt, el.ObjectID, `function() {
+		if (!this.isConnected) throw new Error('element is no longer attached to the DOM');
+		if (typeof this.matches === 'function' && this.matches(':disabled')) {
+			throw new Error('element is disabled and cannot be focused');
+		}
+		if (typeof this.focus !== 'function') throw new Error('element is not focusable');
+		this.focus();
+		const root = this.getRootNode();
+		if (!root || root.activeElement !== this) {
+			throw new Error('element is not focusable');
+		}
+	}`, false)
+	if err != nil {
+		return fmt.Errorf("focus %s: %w", el.Label, err)
+	}
+	return nil
+}
+
+// runDialogInterruptible executes a CDP dispatch (such as MouseReleased or
+// KeyEvent) that Chromium blocks when a synchronous page handler opens a JS
+// modal dialog (alert/confirm/prompt). If a new dialog opens while fn waits
+// for the renderer ACK, fn's child context is cancelled so the tool returns
+// promptly with the dialog open instead of hanging until request timeout.
+func runDialogInterruptible(ctx context.Context, dlg *collector.Dialog, fn func(context.Context) error) error {
+	if dlg == nil {
+		return fn(ctx)
+	}
+	openedCh := dlg.OpeningNotify()
+	select {
+	case <-openedCh:
+		// A dialog was already open before dispatch; run without masking errors.
+		return fn(ctx)
+	default:
+	}
+	callCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var dialogInterrupted atomic.Bool
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-openedCh:
+			dialogInterrupted.Store(true)
+			cancel()
+		case <-done:
+		case <-ctx.Done():
+		}
+	}()
+
+	err := fn(callCtx)
+	if err != nil && errors.Is(err, context.Canceled) && dialogInterrupted.Load() && ctx.Err() == nil {
+		return nil
+	}
+	return err
 }

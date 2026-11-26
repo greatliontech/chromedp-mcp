@@ -114,7 +114,7 @@ type observation struct {
 	// performance.now() values. Deriving the threshold from a Go-side
 	// elapsed time instead shifts the window later by one CDP round trip,
 	// which silently drops the synchronous mutations of dispatches that
-	// are themselves a single round trip (select_option, submit_form).
+	// are themselves a single round trip (e.g. select_option).
 	//
 	// Keyed by the system-unique context ID, because that ID is never
 	// reused: a navigation destroys the context, so the stale anchor

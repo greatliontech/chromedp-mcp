@@ -60,6 +60,8 @@ func Register(s *mcp.Server, mgr *browser.Manager, opts *Options) {
 	registerInterceptTools(s, mgr)
 	registerJSTools(s, mgr)
 	registerInteractionTools(s, mgr)
+	registerDragTools(s, mgr)
+	registerDialogTools(s, mgr)
 	registerCookieTools(s, mgr)
 	registerStorageTools(s, mgr)
 	registerIndexedDBTools(s, mgr)

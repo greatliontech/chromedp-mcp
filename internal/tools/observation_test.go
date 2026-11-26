@@ -47,7 +47,7 @@ func TestObserveWindowDegradesCleanlyWhenDialogOpens(t *testing.T) {
 		"observe_window_ms": 200,
 	})
 	elapsed := time.Since(start)
-	defer handleDialog(t, tabID, map[string]any{"accept": true})
+	defer handleDialog(t, tabID, map[string]any{"action": "accept"})
 
 	// countMutations short-circuits via Dialog.Open() instead of stalling for
 	// evalInContextTimeout (1s), so total elapsed time stays close to 200ms.
@@ -71,16 +71,16 @@ func TestOpenObservationFastPathWhenDialogAlreadyOpen(t *testing.T) {
 		"tab":        tabID,
 		"expression": `setTimeout(function() { alert('pre-existing'); }, 10); true`,
 	})
-	defer handleDialog(t, tabID, map[string]any{"accept": true})
+	defer handleDialog(t, tabID, map[string]any{"action": "accept"})
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}).Open {
+		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}).Open {
+	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for pre-existing alert to open")
 	}
 

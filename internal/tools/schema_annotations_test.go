@@ -70,7 +70,6 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"get_cache_storage":       {true, false, true},
 		"get_performance_metrics": {true, false, true},
 		"get_coverage":            {true, false, true},
-		"get_dialog":              {true, false, true},
 
 		// Peek/drain buffer readers (must NOT claim ReadOnlyHint: true)
 		"get_console_logs":     {false, false, false},
@@ -95,13 +94,11 @@ func TestAllToolsHaveExplicitAnnotations(t *testing.T) {
 		"click":              {false, false, false},
 		"type":               {false, false, false},
 		"select_option":      {false, false, false},
-		"submit_form":        {false, false, false},
 		"scroll":             {false, false, false},
 		"hover":              {false, false, false},
-		"focus":              {false, false, false},
 		"press_key":          {false, false, false},
 		"upload_files":       {false, false, false},
-		"handle_dialog":      {false, false, false},
+		"dialog":             {false, false, false},
 		"drag_and_drop":      {false, false, false},
 
 		// Idempotent non-destructive writes
@@ -203,8 +200,10 @@ func TestAllEnumParametersExposedInInputSchema(t *testing.T) {
 		{"get_websocket_frames", "mode", false, []string{ModePeek, ModeDrain}},
 		{"get_websocket_frames", "direction", false, wsDirectionValues},
 		{"click", "button", false, clickButtonValues},
+		{"click", "modifiers", true, pressKeyModifierValues},
 		{"type", "mode", false, []string{TypeModeReplace, TypeModeAppend}},
 		{"press_key", "modifiers", true, pressKeyModifierValues},
+		{"dialog", "action", false, dialogActionValues},
 		{"set_cookie", "same_site", false, cookieSameSiteValues},
 		{"get_storage", "type", false, storageTypeValues},
 		{"set_storage", "type", false, storageTypeValues},
@@ -282,7 +281,7 @@ func TestSchemaWithEnumsPanicsOnProgrammerMistakes(t *testing.T) {
 		schemaWithEnums[ClickInput](map[string][]string{"click_count": {"1"}})
 	})
 	assertPanics("nullable *string property", func() {
-		schemaWithEnums[SelectOptionInput](map[string][]string{"value": {"a"}})
+		schemaWithEnums[DialogInput](map[string][]string{"text": {"a"}})
 	})
 }
 
@@ -432,7 +431,7 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		"upload_throughput":   -1.0,
 	})
 
-	// Negative SelectorInput.Timeout rejected across all 14 SelectorInput tools.
+	// Negative SelectorInput.Timeout rejected across SelectorInput tools.
 	timeoutTools := []struct {
 		name string
 		args map[string]any
@@ -444,12 +443,12 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		{"evaluate", map[string]any{"tab": tabID, "expression": "1", "timeout": -1}},
 		{"click", map[string]any{"tab": tabID, "selector": "h1", "timeout": -1}},
 		{"type", map[string]any{"tab": tabID, "selector": "h1", "text": "x", "mode": "replace", "timeout": -1}},
-		{"select_option", map[string]any{"tab": tabID, "selector": "select", "value": "a", "timeout": -1}},
-		{"submit_form", map[string]any{"tab": tabID, "selector": "form", "timeout": -1}},
+		{"select_option", map[string]any{"tab": tabID, "selector": "select", "values": []string{"a"}, "timeout": -1}},
 		{"scroll", map[string]any{"tab": tabID, "timeout": -1}},
 		{"hover", map[string]any{"tab": tabID, "selector": "h1", "timeout": -1}},
-		{"focus", map[string]any{"tab": tabID, "selector": "h1", "timeout": -1}},
-		{"upload_files", map[string]any{"tab": tabID, "selector": "input", "paths": []string{}, "timeout": -1}},
+		{"press_key", map[string]any{"tab": tabID, "key": "Enter", "timeout": -1}},
+		{"upload_files", map[string]any{"tab": tabID, "selector": "input", "paths": []string{"/tmp/a"}, "timeout": -1}},
+		{"drag_and_drop", map[string]any{"tab": tabID, "source_selector": "#a", "target_selector": "#b", "timeout": -1}},
 	}
 	for _, tc := range timeoutTools {
 		if err := callToolExpectErr(t, tc.name, tc.args); !strings.Contains(err, "timeout") {
@@ -457,18 +456,16 @@ func TestRuntimeValidationAcrossTools(t *testing.T) {
 		}
 	}
 
-	// Empty selector rejected upfront across all 7 selector-required interaction tools.
+	// Empty selector/ref rejected upfront across target-required interaction tools.
 	emptySelTools := []struct {
 		name string
 		args map[string]any
 	}{
 		{"click", map[string]any{"tab": tabID, "selector": ""}},
 		{"type", map[string]any{"tab": tabID, "selector": "", "text": "x", "mode": "replace"}},
-		{"select_option", map[string]any{"tab": tabID, "selector": "", "value": "a"}},
-		{"submit_form", map[string]any{"tab": tabID, "selector": ""}},
+		{"select_option", map[string]any{"tab": tabID, "selector": "", "values": []string{"a"}}},
 		{"hover", map[string]any{"tab": tabID, "selector": ""}},
-		{"focus", map[string]any{"tab": tabID, "selector": ""}},
-		{"upload_files", map[string]any{"tab": tabID, "selector": "", "paths": []string{}}},
+		{"upload_files", map[string]any{"tab": tabID, "selector": "", "paths": []string{"/tmp/a"}}},
 	}
 	for _, tc := range emptySelTools {
 		if err := callToolExpectErr(t, tc.name, tc.args); !strings.Contains(err, "selector") {
@@ -512,9 +509,21 @@ func TestValidationRunsBeforeTabResolution(t *testing.T) {
 		{"force_pseudo_state", map[string]any{"selector": "#a", "states": []string{"bogus"}}, "bogus"},
 		{"emulate_device", map[string]any{"device": "unknown"}, "unknown"},
 		{"emulate_device", map[string]any{"device": "reset", "landscape": true}, "landscape"},
-		{"drag_and_drop", map[string]any{"source": "", "target": "#b"}, "source"},
-		{"drag_and_drop", map[string]any{"source": "#a", "target": ""}, "target"},
-		{"drag_and_drop", map[string]any{"source": "#a", "target": "#b", "steps": -1}, "steps"},
+		{"drag_and_drop", map[string]any{"source_selector": "", "target_selector": "#b"}, "source"},
+		{"drag_and_drop", map[string]any{"source_selector": "#a", "target_selector": ""}, "target"},
+		{"drag_and_drop", map[string]any{"source_selector": "#a", "target_selector": "#b", "steps": -1}, "steps"},
+		{"drag_and_drop", map[string]any{"source_x": 10.0, "target_selector": "#b"}, "x and y"},
+		{"click", map[string]any{"x": 10.0}, "x and y"},
+		{"click", map[string]any{"x": 10.0, "y": 20.0, "selector": "#a"}, "mutually exclusive"},
+		{"click", map[string]any{"selector": "#a", "modifiers": []string{"bogus"}}, "bogus"},
+		{"click", map[string]any{"selector": "#a", "click_count": 11}, "click_count"},
+		{"press_key", map[string]any{"key": "Enter", "frame": "f1"}, "frame requires selector"},
+		{"upload_files", map[string]any{"selector": "#f", "paths": []string{}}, "paths must not be empty"},
+		{"upload_files", map[string]any{"selector": "#f", "paths": []string{""}}, "upload path must not be empty"},
+		{"dialog", map[string]any{"action": "bogus"}, "action"},
+		{"dialog", map[string]any{"action": "get", "text": "x"}, "accept"},
+		{"dialog", map[string]any{"action": "get", "observe_window_ms": 100}, "observe_window_ms"},
+		{"dialog", map[string]any{"action": "dismiss", "text": "x"}, "accept"},
 	}
 	for _, tc := range cases {
 		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})

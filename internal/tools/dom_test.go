@@ -261,7 +261,7 @@ func TestSnapshotStructureScopeDepthAndRefs(t *testing.T) {
 	})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		d := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID})
+		d := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"})
 		if d.Open {
 			break
 		}
@@ -274,7 +274,7 @@ func TestSnapshotStructureScopeDepthAndRefs(t *testing.T) {
 	if time.Since(dlgStart) > 2*time.Second {
 		t.Errorf("snapshot while dialog open did not fail fast (%v)", time.Since(dlgStart))
 	}
-	callTool[ActionOutput](t, "handle_dialog", map[string]any{"tab": tabID, "accept": true})
+	callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "accept"})
 }
 
 func TestShadowDOMPiercingAndSnapshotRefsEndToEnd(t *testing.T) {

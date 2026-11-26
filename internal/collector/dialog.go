@@ -27,6 +27,7 @@ type Dialog struct {
 	current *DialogState
 	frameID cdp.FrameID
 	seq     uint64
+	openCh  chan struct{}
 }
 
 // NewDialog creates an empty Dialog state tracker.
@@ -50,6 +51,10 @@ func (d *Dialog) HandleOpening(ev *page.EventJavascriptDialogOpening) {
 		OpenedAt:          time.Now(),
 	}
 	d.frameID = ev.FrameID
+	if d.openCh != nil {
+		close(d.openCh)
+		d.openCh = nil
+	}
 	d.mu.Unlock()
 }
 
@@ -137,6 +142,24 @@ func (d *Dialog) Open() bool {
 	open := d.current != nil
 	d.mu.Unlock()
 	return open
+}
+
+// OpeningNotify returns a channel that is closed when the next JS modal dialog
+// opens (or immediately if a dialog is already open). Because HandleOpening
+// publishes current before closing the channel, any receiver woken by it is
+// guaranteed to observe Open() == true.
+func (d *Dialog) OpeningNotify() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.current != nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	if d.openCh == nil {
+		d.openCh = make(chan struct{})
+	}
+	return d.openCh
 }
 
 // Clear resets the tracked dialog state.

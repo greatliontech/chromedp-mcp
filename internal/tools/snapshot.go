@@ -43,7 +43,7 @@ type SnapshotOutput struct {
 func registerSnapshotTools(s *mcp.Server, mgr *browser.Manager) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "snapshot",
-		Description: "Capture a compact accessibility snapshot of the page (or a same-origin frame/subtree) with short element refs ([ref=e1], [ref=e2], ...) usable in get_dom and evaluate. Each call replaces the tab's active ref table; refs pierce open Shadow DOM and automatically invalidate when their document navigates.",
+		Description: "Capture a compact accessibility snapshot of the page (or a same-origin frame/subtree) with short element refs ([ref=e1], [ref=e2], ...) usable in interaction tools, get_dom, and evaluate. Each call replaces the tab's active ref table; refs pierce open Shadow DOM and automatically invalidate when their document navigates.",
 		Annotations: readOnlyAnnotations(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input SnapshotInput) (*mcp.CallToolResult, SnapshotOutput, error) {
 		if err := validateSelectorTimeout(input.Timeout); err != nil {
@@ -74,7 +74,7 @@ func registerSnapshotTools(s *mcp.Server, mgr *browser.Manager) {
 		// stalls while a JS modal dialog is open; fail fast so callers can
 		// inspect/dismiss it.
 		if t.Dialog != nil && t.Dialog.Open() {
-			return nil, SnapshotOutput{}, fmt.Errorf("cannot capture snapshot while a JavaScript dialog is open — use get_dialog and handle_dialog first")
+			return nil, SnapshotOutput{}, fmt.Errorf("cannot capture snapshot while a JavaScript dialog is open — use dialog tool first")
 		}
 		if input.Frame != "" {
 			if _, err := resolveFrameContext(t, input.Frame, input.Selector != ""); err != nil {

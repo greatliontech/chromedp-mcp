@@ -188,3 +188,60 @@ func TestDialogConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestDialogOpeningNotify(t *testing.T) {
+	d := NewDialog()
+
+	// Closed initially: returned channel stays open until HandleOpening fires.
+	ch := d.OpeningNotify()
+	select {
+	case <-ch:
+		t.Fatal("OpeningNotify closed before any dialog opened")
+	default:
+	}
+	// Multiple waiters share the same channel and all wake on opening.
+	ch2 := d.OpeningNotify()
+	d.HandleOpening(&page.EventJavascriptDialogOpening{
+		Type:    page.DialogTypeAlert,
+		Message: "wake",
+	})
+	select {
+	case <-ch:
+	default:
+		t.Fatal("first OpeningNotify channel did not close on HandleOpening")
+	}
+	select {
+	case <-ch2:
+	default:
+		t.Fatal("second OpeningNotify channel did not close on HandleOpening")
+	}
+	if !d.Open() {
+		t.Fatal("Open() must be true after OpeningNotify wakes")
+	}
+
+	// While a dialog is already open, OpeningNotify returns a pre-closed channel.
+	already := d.OpeningNotify()
+	select {
+	case <-already:
+	default:
+		t.Fatal("OpeningNotify did not return closed channel while dialog is open")
+	}
+
+	// After closing, a new waiter blocks until the next dialog opens.
+	d.Clear()
+	nextCh := d.OpeningNotify()
+	select {
+	case <-nextCh:
+		t.Fatal("OpeningNotify closed immediately after Clear")
+	default:
+	}
+	d.HandleOpening(&page.EventJavascriptDialogOpening{
+		Type:    page.DialogTypeConfirm,
+		Message: "second",
+	})
+	select {
+	case <-nextCh:
+	default:
+		t.Fatal("next OpeningNotify channel did not close on second HandleOpening")
+	}
+}

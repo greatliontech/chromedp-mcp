@@ -382,14 +382,14 @@ func closeTab(t *testing.T, tabID string) {
 	callTool[struct{}](t, "tab_close", map[string]any{"tab": tabID})
 }
 
-// handleDialog retries handle_dialog until the dialog is showing or timeout.
-// Use this instead of time.Sleep before handle_dialog calls.
+// handleDialog retries the dialog tool until the dialog is showing or timeout.
+// Use this instead of time.Sleep before dialog calls.
 func handleDialog(t *testing.T, tabID string, args map[string]any) {
 	t.Helper()
 	args["tab"] = tabID
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		result := callToolRaw(t, "handle_dialog", args)
+		result := callToolRaw(t, "dialog", args)
 		if !result.IsError {
 			return
 		}

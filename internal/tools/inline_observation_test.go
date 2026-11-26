@@ -314,11 +314,10 @@ func TestClickObserveWindowWindowMsReportsElapsed(t *testing.T) {
 	}
 }
 
-// TestSubmitFormObserveWindow verifies submit_form's inline observation —
-// this is the highest-leverage case (a form submit short-circuited by
-// validation produces no network activity, and observed.has_any_effect
-// surfaces it immediately).
-func TestSubmitFormObserveWindow(t *testing.T) {
+// TestTypeSubmitObserveWindow verifies type(submit=true)'s inline observation —
+// this is the form-submission case (Enter submits the form and the submit
+// handler fires a fetch within the observation window).
+func TestTypeSubmitObserveWindow(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
@@ -329,7 +328,7 @@ func TestSubmitFormObserveWindow(t *testing.T) {
 		"tab": tabID,
 		"source": `(function() {
 			document.body.insertAdjacentHTML('beforeend',
-				'<form id="f"><input name="x"><button type="submit">go</button></form>');
+				'<form id="f"><input id="fx" name="x"><button type="submit">go</button></form>');
 			document.getElementById('f').addEventListener('submit', function(e) {
 				e.preventDefault();
 				fetch('/api/data?submitted=1');
@@ -338,9 +337,12 @@ func TestSubmitFormObserveWindow(t *testing.T) {
 		"evaluate_now": true,
 	})
 
-	out := callTool[ActionOutput](t, "submit_form", map[string]any{
+	out := callTool[ActionOutput](t, "type", map[string]any{
 		"tab":               tabID,
-		"selector":          "#f",
+		"selector":          "#fx",
+		"text":              "hello",
+		"mode":              "replace",
+		"submit":            true,
 		"observe_window_ms": 400,
 	})
 	if out.Observed == nil {
@@ -351,7 +353,7 @@ func TestSubmitFormObserveWindow(t *testing.T) {
 	}
 }
 
-// TestFocusObserveWindowExcludesElementWait pins the boundary that
+// TestPressKeyObserveWindowExcludesElementWait pins the boundary that
 // separates waiting for a target from acting on it.
 //
 // Every selector-based action tool waits (up to selectorContext's 5s)
@@ -362,10 +364,10 @@ func TestSubmitFormObserveWindow(t *testing.T) {
 // slow, real, async pages the feature exists for.
 //
 // #late-btn schedules a fetch at +100ms and only creates #late-input at
-// +500ms. focus() therefore spends ~500ms waiting, during which the
-// fetch lands. The window opens after the wait, so that fetch is not the
-// focus's doing and must not be counted.
-func TestFocusObserveWindowExcludesElementWait(t *testing.T) {
+// +500ms. press_key(selector="#late-input") therefore spends ~500ms waiting,
+// during which the fetch lands. The window opens after the wait, so that fetch
+// is not press_key's doing and must not be counted.
+func TestPressKeyObserveWindowExcludesElementWait(t *testing.T) {
 	tabID := navigateToFixture(t, "observation.html")
 	defer closeTab(t, tabID)
 
@@ -374,20 +376,21 @@ func TestFocusObserveWindowExcludesElementWait(t *testing.T) {
 		"selector": "#late-btn",
 	})
 
-	out := callTool[ActionOutput](t, "focus", map[string]any{
+	out := callTool[ActionOutput](t, "press_key", map[string]any{
 		"tab":               tabID,
 		"selector":          "#late-input",
+		"key":               "Tab",
 		"observe_window_ms": 100,
 	})
 	if out.Observed == nil {
 		t.Fatal("Observed = nil")
 	}
 	if out.Observed.NetworkRequests != 0 {
-		t.Errorf("NetworkRequests = %d, want 0 — the fetch fired while focus was WAITING for #late-input to exist, before the focus was dispatched, so it is not the focus's effect; got %+v",
+		t.Errorf("NetworkRequests = %d, want 0 — the fetch fired while press_key was WAITING for #late-input to exist, before dispatch, so it is not press_key's effect; got %+v",
 			out.Observed.NetworkRequests, out.Observed)
 	}
 	if out.Observed.HasAnyEffect {
-		t.Errorf("HasAnyEffect = true — focusing an empty input has no observable effect; the window must not have swallowed the pre-dispatch wait. got %+v", out.Observed)
+		t.Errorf("HasAnyEffect = true — focusing an empty input and pressing Tab has no observable effect; the window must not have swallowed the pre-dispatch wait. got %+v", out.Observed)
 	}
 }
 
@@ -550,7 +553,7 @@ func TestSelectOptionObserveWindowCatchesSyncMutation(t *testing.T) {
 	out := callTool[ActionOutput](t, "select_option", map[string]any{
 		"tab":               tabID,
 		"selector":          "#sel",
-		"value":             "b",
+		"values":            []string{"b"},
 		"observe_window_ms": 400,
 	})
 	if out.Observed == nil {

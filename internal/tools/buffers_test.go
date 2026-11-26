@@ -187,7 +187,7 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 		"tab":        tabID,
 		"expression": `console.log('before-all'); setTimeout(function() { alert('still-open'); }, 10); true`,
 	})
-	defer handleDialog(t, tabID, map[string]any{"accept": true})
+	defer handleDialog(t, tabID, map[string]any{"action": "accept"})
 	b.Downloads.HandleDownloadWillBegin(&cdpbrowser.EventDownloadWillBegin{
 		GUID:              "dl-all-1",
 		URL:               "https://example.com/a.bin",
@@ -200,12 +200,12 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}).Open {
+		if callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if !callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}).Open {
+	if !callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}).Open {
 		t.Fatal("timed out waiting for alert dialog")
 	}
 
@@ -218,7 +218,7 @@ func TestClearBuffersAllDefaultAndPreservesLiveDialog(t *testing.T) {
 		t.Error("default clear_buffers did not clear console and downloads")
 	}
 	// Live dialog state MUST NOT be cleared by clear_buffers.
-	if d := callTool[GetDialogOutput](t, "get_dialog", map[string]any{"tab": tabID}); !d.Open {
+	if d := callTool[DialogOutput](t, "dialog", map[string]any{"tab": tabID, "action": "get"}); !d.Open {
 		t.Fatal("clear_buffers corrupted open live dialog state")
 	}
 
